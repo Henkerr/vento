@@ -1,0 +1,14 @@
+# User state - created at runtime, machine-specific
+settings.json
+error.log
+hata.log
+
+# Backups / scratch
+*.bak
+
+# Build artifacts (rebuilt via build\ scripts; shipped via Releases)
+/Vento.exe
+/dist/
+
+# Local Claude Code session data
+.claude/

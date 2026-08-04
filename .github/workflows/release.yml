@@ -1,0 +1,40 @@
+# Builds Vento.exe + the installer and attaches them to a GitHub Release.
+# Release checklist:
+#   1. Bump $script:AppVersion in app.ps1 and the assembly versions in
+#      build/launcher.cs (the installer version comes from the tag).
+#   2. Commit, then: git tag v1.2.0 && git push --tags
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build icon and launcher
+        shell: powershell
+        run: |
+          .\build\make-icon.ps1
+          .\build\build-exe.ps1
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        shell: powershell
+        run: |
+          $ver = '${{ github.ref_name }}'.TrimStart('v')
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" installer\vento.iss
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
