@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.1.0'
+$script:AppVersion = '1.2.0'
 
 # --- Admin & STA guards ----------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -84,6 +84,7 @@ function Get-DefaultSettings {
         updateRepo       = 'Henkerr/vento'
         gameBoost        = $true       # auto Performance while the GPU is under load
         gameOnLoad       = 80          # % GPU load that counts as gaming
+        gameCooldownSec  = 15          # extra full-speed seconds after a game ends (0 = off)
         curve40          = 25          # Curve mode: case fan % at 40/55/70/80 deg C
         curve55          = 40
         curve70          = 65
@@ -131,6 +132,7 @@ function Import-Settings {
         $s.updateRepo       = [string]$s.updateRepo
         $s.gameBoost        = [bool]$s.gameBoost
         $s.gameOnLoad       = [int](Limit $s.gameOnLoad 50 100)
+        $s.gameCooldownSec  = [int](Limit $s.gameCooldownSec 0 60)
         $s.curve40          = [int](Limit $s.curve40 20 100)
         $s.curve55          = [int](Limit $s.curve55 20 100)
         $s.curve70          = [int](Limit $s.curve70 20 100)
@@ -269,9 +271,18 @@ $worker = {
         $sync.Status = 'ready'
         $boostOn = $false
         $gameOn = $false; $gameHot = 0; $gameIdle = 0; $preGame = 'auto'
+        $coolMs = 0; $coolHot = 0
         $lastCurve = -100
         $sinceUpdate = 999999
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $lastLoopMs = [long]0
+        $lastPassMs = [long](-1)
         while (-not $sync.Exit) {
+            # real elapsed time this iteration - Start-Sleep overshoots, so
+            # fixed increments would drift
+            $nowMs = $clock.ElapsedMilliseconds
+            $tickMs = [int][math]::Max(0, [math]::Min(5000, $nowMs - $lastLoopMs))
+            $lastLoopMs = $nowMs
             $s = $sync.Settings
             $pending = $sync.PendingMode
             if ($pending) {
@@ -282,16 +293,44 @@ $worker = {
                 $sync.Data.BoostActive = $false
                 $gameOn = $false; $gameHot = 0
                 $sync.Data.GameBoost = $false
+                $coolMs = 0; $coolHot = 0
+                $sync.Data.CoolDown = $false
                 $lastCurve = -100
                 $sinceUpdate = 999999   # apply curve/read sensors promptly
                 $sync.Data.Warning = $null
             }
             if ($sync.SettingsChanged) {
                 $sync.SettingsChanged = $false
-                $boostOn = $false
-                $sync.Data.BoostActive = $false
                 $lastCurve = -100
                 Set-Mode $sync.Data.ActiveMode
+                # Keep an active Quiet boost alive across live tweaks from the
+                # mode panel - Set-Mode just dropped the case fans to quietCase.
+                if ($boostOn) {
+                    if ($sync.Data.ActiveMode -eq 'quiet' -and $s.boostEnabled) { Set-CaseSpeed $s.boostCase }
+                    else { $boostOn = $false; $sync.Data.BoostActive = $false }
+                }
+                $sinceUpdate = 999999   # re-evaluate curve/boost with the new values promptly
+            }
+            # Post-game cooldown countdown runs on the fast loop so the
+            # remaining time and the hand-back stay accurate even when the
+            # sensor interval is long.
+            if ($coolMs -gt 0) {
+                if ($sync.Data.ActiveMode -ne 'performance') {
+                    # user changed mode manually - drop the cooldown
+                    $coolMs = 0; $coolHot = 0
+                    $sync.Data.CoolDown = $false
+                } else {
+                    $coolMs -= $tickMs
+                    if ($coolMs -le 0) {
+                        $coolMs = 0; $coolHot = 0
+                        $sync.Data.CoolDown = $false
+                        Set-Mode $preGame
+                        $lastCurve = -100
+                        $sinceUpdate = 999999   # apply the returned mode's curve promptly
+                    } else {
+                        $sync.Data.CoolLeft = $coolMs
+                    }
+                }
             }
             if ($sinceUpdate -ge [int]$s.updateIntervalMs) {
                 $sinceUpdate = 0
@@ -339,14 +378,48 @@ $worker = {
                 # sustained idle switches back to the previous mode.
                 $load = if ($gpuLoad -and $null -ne $gpuLoad.Value) { [double]$gpuLoad.Value } else { $null }
                 $d.GpuLoad = $load
-                $iv = [int]$s.updateIntervalMs
+                # Real elapsed time since the previous sensor pass: forced
+                # prompt passes (SettingsChanged, cooldown expiry) must not
+                # inflate the game-boost / cooldown accumulators.
+                $passMs = if ($lastPassMs -lt 0) { [int]$s.updateIntervalMs } else { [int][math]::Min(60000, $nowMs - $lastPassMs) }
+                $lastPassMs = $nowMs
                 # Near the safety limits, never (re)arm game boost - otherwise
                 # the guard's forced Auto and the boost would fight in a loop.
                 $tooHot = ((($null -ne $d.CpuTemp) -and ($d.CpuTemp -gt ($s.cpuMaxTemp - 4))) -or
                            (($null -ne $d.GpuTemp) -and ($d.GpuTemp -gt ($s.gpuMaxTemp - 4))))
                 if ($s.gameBoost -and $null -ne $load) {
-                    if (-not $gameOn) {
-                        if (($load -ge $s.gameOnLoad) -and ($d.ActiveMode -ne 'performance') -and (-not $tooHot)) { $gameHot += $iv } else { $gameHot = 0 }
+                    if ($gameOn) {
+                        if ($d.ActiveMode -ne 'performance') {
+                            # user changed mode manually - stop tracking
+                            $gameOn = $false; $d.GameBoost = $false
+                        } else {
+                            if ($load -le 30) { $gameIdle += $passMs } else { $gameIdle = 0 }
+                            if ($gameIdle -ge 120000) {
+                                $gameOn = $false; $d.GameBoost = $false
+                                if ([int]$s.gameCooldownSec -gt 0) {
+                                    # post-game cooldown: hold Performance a little
+                                    # longer, then hand back to the pre-game mode
+                                    $coolMs = [int]$s.gameCooldownSec * 1000
+                                    $coolHot = 0
+                                    $d.CoolLeft = $coolMs; $d.CoolTo = $preGame
+                                    $d.CoolDown = $true
+                                } else {
+                                    Set-Mode $preGame
+                                    $lastCurve = -100
+                                }
+                            }
+                        }
+                    } elseif ($coolMs -gt 0) {
+                        # game came back mid-cooldown: a few sustained samples
+                        # resume the boost without the full 30s ramp (a single
+                        # spike - e.g. a video burst - should not re-arm it)
+                        if (($load -ge $s.gameOnLoad) -and (-not $tooHot)) { $coolHot += $passMs } else { $coolHot = 0 }
+                        if ($coolHot -ge 6000) {
+                            $coolMs = 0; $coolHot = 0; $d.CoolDown = $false
+                            $gameOn = $true; $d.GameBoost = $true; $gameIdle = 0
+                        }
+                    } else {
+                        if (($load -ge $s.gameOnLoad) -and ($d.ActiveMode -ne 'performance') -and (-not $tooHot)) { $gameHot += $passMs } else { $gameHot = 0 }
                         if ($gameHot -ge 30000) {
                             $preGame = $d.ActiveMode
                             Set-Mode 'performance'
@@ -354,23 +427,12 @@ $worker = {
                             $gameHot = 0; $gameIdle = 0
                             $boostOn = $false; $d.BoostActive = $false
                         }
-                    } else {
-                        if ($d.ActiveMode -ne 'performance') {
-                            # user changed mode manually - stop tracking
-                            $gameOn = $false; $d.GameBoost = $false
-                        } else {
-                            if ($load -le 30) { $gameIdle += $iv } else { $gameIdle = 0 }
-                            if ($gameIdle -ge 120000) {
-                                Set-Mode $preGame
-                                $gameOn = $false; $d.GameBoost = $false
-                                $lastCurve = -100
-                            }
-                        }
                     }
-                } elseif ($gameOn) {
+                } elseif ($gameOn -or $coolMs -gt 0) {
                     # tracking lost (sensor vanished or feature disabled) -
                     # don't strand the fans in Performance
                     $gameOn = $false; $d.GameBoost = $false
+                    $coolMs = 0; $coolHot = 0; $d.CoolDown = $false
                     if ($d.ActiveMode -eq 'performance') { Set-Mode $preGame; $lastCurve = -100 }
                 }
 
@@ -383,6 +445,7 @@ $worker = {
                         $d.BoostActive = $false
                         $gameOn = $false; $gameHot = 0; $gameIdle = 0
                         $d.GameBoost = $false
+                        $coolMs = 0; $coolHot = 0; $d.CoolDown = $false
                         $d.Warning = 'High temperature - fans switched back to Auto'
                     }
                 }
@@ -414,7 +477,7 @@ $script:psWorker.Runspace = $script:runspace
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Vento" Width="700" Height="640"
+        Title="Vento" Width="700" Height="724"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         WindowStartupLocation="CenterScreen" ResizeMode="CanMinimize"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
@@ -607,6 +670,7 @@ $xaml = @'
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
         <!-- Temperatures -->
@@ -692,6 +756,87 @@ $xaml = @'
             </UniformGrid>
           </Border>
         </StackPanel>
+
+        <!-- Mode panel: live settings for the active mode + fan activity -->
+        <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,10,0,2">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0">
+              <TextBlock x:Name="ModeSetTitle" Style="{StaticResource CardTitle}" Text="MODE" VerticalAlignment="Center"/>
+              <Button x:Name="BtnModeReset" Style="{StaticResource SegBtn}" Content="Reset" FontSize="11" Width="64"
+                      HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,-8,0,-8"
+                      ToolTip="Restore this mode's default settings"/>
+            </Grid>
+            <TextBlock Grid.Row="1" x:Name="ModeSetHint" Style="{StaticResource CardSub}" Text="" TextWrapping="Wrap" Visibility="Collapsed"/>
+            <Grid Grid.Row="2" x:Name="ModeSlots" Margin="0,10,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="22"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+              <Grid x:Name="Slot1" Grid.Row="0" Grid.Column="0" Margin="0,0,0,7" Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="84"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="ML1" Style="{StaticResource SetLabel}"/>
+                <Slider Grid.Column="1" x:Name="MS1" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                <TextBlock Grid.Column="2" x:Name="MV1" Style="{StaticResource SetValue}"/>
+              </Grid>
+              <Grid x:Name="Slot2" Grid.Row="0" Grid.Column="2" Margin="0,0,0,7" Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="84"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="ML2" Style="{StaticResource SetLabel}"/>
+                <Slider Grid.Column="1" x:Name="MS2" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                <TextBlock Grid.Column="2" x:Name="MV2" Style="{StaticResource SetValue}"/>
+              </Grid>
+              <Grid x:Name="Slot3" Grid.Row="1" Grid.Column="0" Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="84"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="ML3" Style="{StaticResource SetLabel}"/>
+                <Slider Grid.Column="1" x:Name="MS3" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                <TextBlock Grid.Column="2" x:Name="MV3" Style="{StaticResource SetValue}"/>
+              </Grid>
+              <Grid x:Name="Slot4" Grid.Row="1" Grid.Column="2" Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="84"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="ML4" Style="{StaticResource SetLabel}"/>
+                <Slider Grid.Column="1" x:Name="MS4" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                <TextBlock Grid.Column="2" x:Name="MV4" Style="{StaticResource SetValue}"/>
+              </Grid>
+            </Grid>
+            <Grid Grid.Row="3" Margin="0,10,0,0">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <Grid>
+                <TextBlock Style="{StaticResource CardTitle}" Text="FAN ACTIVITY"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                  <Ellipse x:Name="LegCpuDot" Width="7" Height="7" Fill="#4C8DFF" VerticalAlignment="Center"/>
+                  <TextBlock Text="CPU fan" Foreground="#566073" FontSize="10" Margin="5,0,10,0" VerticalAlignment="Center"/>
+                  <Ellipse x:Name="LegCaseDot" Width="7" Height="7" Fill="#3DD68C" VerticalAlignment="Center"/>
+                  <TextBlock Text="Case fans" Foreground="#566073" FontSize="10" Margin="5,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+              </Grid>
+              <Grid x:Name="FanSparkHost" Grid.Row="1" MinHeight="30" Margin="0,8,0,0" ClipToBounds="True">
+                <Polyline x:Name="CaseFanSpark" Stroke="#3DD68C" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
+                <Polyline x:Name="CpuFanSpark" Stroke="#4C8DFF" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
+              </Grid>
+            </Grid>
+          </Grid>
+        </Border>
       </Grid>
 
       <!-- Footer -->
@@ -837,6 +982,14 @@ $xaml = @'
                   <Slider Grid.Column="1" x:Name="S_GameLoad" Style="{StaticResource SetSlider}" Minimum="50" Maximum="100"/>
                   <TextBlock Grid.Column="2" x:Name="V_GameLoad" Style="{StaticResource SetValue}"/>
                 </Grid>
+                <Grid Margin="0,7,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Style="{StaticResource SetLabel}" Text="Post-game cooldown"/>
+                  <Slider Grid.Column="1" x:Name="S_GameCool" Style="{StaticResource SetSlider}" Minimum="0" Maximum="60"/>
+                  <TextBlock Grid.Column="2" x:Name="V_GameCool" Style="{StaticResource SetValue}"/>
+                </Grid>
 
                 <TextBlock Style="{StaticResource CardTitle}" Text="SAFETY" Foreground="#4C8DFF" x:Name="SecSafety" Margin="0,16,0,2"/>
                 <Grid Margin="0,6,0,0">
@@ -920,11 +1073,14 @@ foreach ($name in @(
     'SettingsOverlay','SecFans','SecBoost','SecCurve','SecGame','SecSafety','SecGeneral',
     'S_QuietCase','S_NormalCase','S_PerfCase','S_PerfCpu',
     'S_BoostEnabled','S_BoostHigh','S_BoostLow','S_BoostCase',
-    'S_C40','S_C55','S_C70','S_C80','S_Game','S_GameLoad',
+    'S_C40','S_C55','S_C70','S_C80','S_Game','S_GameLoad','S_GameCool',
     'S_CpuMax','S_GpuMax','S_Interval','S_StartMin','S_CloseTray','S_Updates','S_AutoStart',
     'V_QuietCase','V_NormalCase','V_PerfCase','V_PerfCpu',
-    'V_BoostHigh','V_BoostLow','V_BoostCase','V_C40','V_C55','V_C70','V_C80','V_GameLoad',
+    'V_BoostHigh','V_BoostLow','V_BoostCase','V_C40','V_C55','V_C70','V_C80','V_GameLoad','V_GameCool',
     'V_CpuMax','V_GpuMax','V_Interval',
+    'ModeSetTitle','ModeSetHint','ModeSlots','BtnModeReset',
+    'Slot1','Slot2','Slot3','Slot4','ML1','ML2','ML3','ML4','MS1','MS2','MS3','MS4','MV1','MV2','MV3','MV4',
+    'FanSparkHost','CpuFanSpark','CaseFanSpark','LegCpuDot','LegCaseDot',
     'Sw0','Sw1','Sw2','Sw3','Sw4','BtnSetSave','BtnSetCancel')) {
     $el[$name] = $window.FindName($name)
 }
@@ -963,7 +1119,7 @@ $script:deg = [char]176
 $script:modeNames    = @{ quiet = 'Quiet'; normal = 'Normal'; performance = 'Performance'; curve = 'Curve'; auto = 'Auto' }
 $script:swatchColors = @('#4C8DFF','#A78BFA','#3DD68C','#F5C359','#F26D78')
 $script:sliderNames  = @('S_QuietCase','S_NormalCase','S_PerfCase','S_PerfCpu','S_BoostHigh','S_BoostLow','S_BoostCase',
-                         'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_CpuMax','S_GpuMax','S_Interval')
+                         'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool','S_CpuMax','S_GpuMax','S_Interval')
 
 # All code-generated UI strings live here so a future language option is a
 # table swap (XAML labels move here in the same pass).
@@ -973,6 +1129,7 @@ $script:L = @{
     BoostActive   = 'Cooling boost active - case fans at {0}% until below {1}{2}C'
     CurveActive   = 'Curve mode - case fans at {0}%'
     GameActive    = 'Game detected - Performance until the GPU goes idle'
+    CoolDown      = 'Post-game cooldown - {0}s, then back to {1}'
     Downloading   = 'Downloading update...'
     UpdateBalloon = 'Version {0} is available. Use the tray menu to install it.'
     InstallItem   = 'Install Vento {0}'
@@ -1006,6 +1163,15 @@ function Set-Accent([string]$hex) {
     $el.LogoOuter.Fill = $script:brushAccent
     foreach ($sec in 'SecFans','SecBoost','SecCurve','SecGame','SecSafety','SecGeneral') { $el[$sec].Foreground = $script:brushAccent }
     foreach ($sn in $script:sliderNames) { $el[$sn].Foreground = $script:brushAccent }
+    foreach ($i in 1..4) { $el["MS$i"].Foreground = $script:brushAccent }
+    $el.CpuFanSpark.Stroke = $script:brushAccent
+    $el.LegCpuDot.Fill = $script:brushAccent
+    # keep the two fan-graph lines distinguishable when the accent IS the
+    # case-fan green
+    $caseHex = if ($hex -eq '#3DD68C') { '#4C8DFF' } else { '#3DD68C' }
+    $script:brushCaseFan = New-Brush $caseHex
+    $el.CaseFanSpark.Stroke = $script:brushCaseFan
+    $el.LegCaseDot.Fill = $script:brushCaseFan
     $el.BtnSetSave.Foreground = $script:brushAccent
     if ($script:notify) { $script:notify.Icon = New-TrayIcon $hex }
 }
@@ -1024,6 +1190,7 @@ $script:sliderMap = @(
     @('S_C70',        'V_C70',        'curve70',    '%'),
     @('S_C80',        'V_C80',        'curve80',    '%'),
     @('S_GameLoad',   'V_GameLoad',   'gameOnLoad', '%'),
+    @('S_GameCool',   'V_GameCool',   'gameCooldownSec', 's'),
     @('S_CpuMax',     'V_CpuMax',     'cpuMaxTemp', "$script:deg"),
     @('S_GpuMax',     'V_GpuMax',     'gpuMaxTemp', "$script:deg")
 )
@@ -1056,6 +1223,126 @@ function Update-SliderLabels {
     foreach ($row in $script:sliderMap) { $el[$row[1]].Text = '{0}{1}' -f [int]$el[$row[0]].Value, $row[3] }
     $el.V_Interval.Text = '{0}s' -f [int]$el.S_Interval.Value
 }
+
+# --- Mode panel: live per-mode settings under the mode selector ------
+# Slot rows: label, settings key, min, max, suffix. Changes apply to the
+# fans immediately; the disk write is debounced while a slider is dragged.
+$script:modePanelDef = @{
+    quiet       = @(@('Case fans','quietCase',20,100,'%'),
+                    @('Boost above','boostHigh',60,90,"$script:deg"),
+                    @('Resume below','boostLow',40,85,"$script:deg"),
+                    @('Boost fans','boostCase',30,100,'%'))
+    normal      = @(,@('Case fans','normalCase',20,100,'%'))
+    performance = @(@('Case fans','perfCase',20,100,'%'),
+                    @('CPU fan','perfCpu',30,100,'%'))
+    curve       = @(@("At 40$($script:deg)C",'curve40',20,100,'%'),
+                    @("At 55$($script:deg)C",'curve55',20,100,'%'),
+                    @("At 70$($script:deg)C",'curve70',20,100,'%'),
+                    @("At 80$($script:deg)C",'curve80',20,100,'%'))
+    auto        = @()
+}
+$script:panelMode = $null
+$script:panelLoading = $false
+
+$script:saveTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:saveTimer.Interval = [TimeSpan]::FromMilliseconds(800)
+$script:saveTimer.Add_Tick({
+    $script:saveTimer.Stop()
+    Export-Settings $script:settings
+})
+
+function Apply-ModeSetting([string]$key, [int]$v) {
+    $script:settings[$key] = $v
+    $sync.Settings[$key] = $v
+    $sync.SettingsChanged = $true
+    $script:saveTimer.Stop()
+    $script:saveTimer.Start()
+}
+
+function Update-ModePanel([string]$mode) {
+    if (-not $script:modePanelDef.ContainsKey($mode)) { return }
+    $script:panelMode = $mode
+    $script:panelLoading = $true
+    $def = @($script:modePanelDef[$mode])
+    $el.ModeSetTitle.Text = '{0} MODE' -f $script:modeNames[$mode].ToUpper()
+    for ($i = 1; $i -le 4; $i++) {
+        if ($i -le $def.Count) {
+            $row = $def[$i - 1]
+            $sl = $el["MS$i"]
+            $sl.Tag = $null      # mute the apply handler while reconfiguring
+            $sl.Minimum = [double]$row[2]
+            $sl.Maximum = [double]$row[3]
+            $sl.Value = [double]$script:settings[$row[1]]
+            $sl.Tag = $row
+            $el["ML$i"].Text = $row[0]
+            $el["MV$i"].Text = '{0}{1}' -f [int]$sl.Value, $row[4]
+            $el["Slot$i"].Visibility = 'Visible'
+        } else {
+            $el["MS$i"].Tag = $null
+            $el["Slot$i"].Visibility = 'Collapsed'
+        }
+    }
+    if ($mode -eq 'quiet') {
+        # keep 'Resume below' at least 3 degrees under 'Boost above'
+        foreach ($j in 1..4) {
+            $o = $el["MS$j"]
+            if ($o.Tag -and [string]$o.Tag[1] -eq 'boostLow') { $o.Maximum = [math]::Min(85, [double]$script:settings.boostHigh - 3) }
+        }
+    }
+    # Grey out the boost rows when the feature itself is off, so the panel
+    # never advertises sliders that have no effect.
+    $boostOff = ($mode -eq 'quiet' -and -not [bool]$script:settings.boostEnabled)
+    foreach ($j in 1..4) {
+        $o = $el["MS$j"]
+        $dim = $boostOff -and $o.Tag -and (@('boostHigh','boostLow','boostCase') -contains [string]$o.Tag[1])
+        $el["Slot$j"].IsEnabled = -not $dim
+        $el["Slot$j"].Opacity = $(if ($dim) { 0.45 } else { 1.0 })
+    }
+    if ($mode -eq 'auto') {
+        $el.ModeSetHint.Text = 'The motherboard is driving the fans in Auto mode. Pick another mode to set speeds yourself.'
+        $el.ModeSetHint.Visibility = 'Visible'
+        $el.ModeSlots.Visibility = 'Collapsed'
+        $el.BtnModeReset.Visibility = 'Collapsed'
+    } else {
+        if ($boostOff) {
+            $el.ModeSetHint.Text = 'Cooling boost is turned off in Settings - the greyed-out sliders have no effect.'
+            $el.ModeSetHint.Visibility = 'Visible'
+        } else {
+            $el.ModeSetHint.Visibility = 'Collapsed'
+        }
+        $el.ModeSlots.Visibility = 'Visible'
+        $el.BtnModeReset.Visibility = 'Visible'
+    }
+    $script:panelLoading = $false
+}
+
+foreach ($i in 1..4) {
+    # One shared handler; the slot's row definition rides on the slider's Tag
+    # (no GetNewClosure - see the swatch note above about $script: scope).
+    $el["MS$i"].Add_ValueChanged({ param($s, $e)
+        $row = $s.Tag
+        if ($null -eq $row) { return }
+        $el[($s.Name -replace '^MS', 'MV')].Text = '{0}{1}' -f [int]$s.Value, $row[4]
+        if ($script:panelLoading) { return }
+        Apply-ModeSetting ([string]$row[1]) ([int]$s.Value)
+        if ([string]$row[1] -eq 'boostHigh') {
+            # push 'Resume below' down with it; the clamp re-enters this
+            # handler for that slider and applies the new value
+            foreach ($j in 1..4) {
+                $o = $el["MS$j"]
+                if ($o.Tag -and [string]$o.Tag[1] -eq 'boostLow') { $o.Maximum = [math]::Min(85, [double]$s.Value - 3) }
+            }
+        }
+    })
+}
+
+$el.BtnModeReset.Add_Click({
+    $mode = $script:panelMode
+    if (-not $mode -or $mode -eq 'auto') { return }
+    $defaults = Get-DefaultSettings
+    foreach ($row in @($script:modePanelDef[$mode])) { Apply-ModeSetting ([string]$row[1]) ([int]$defaults[$row[1]]) }
+    Update-ModePanel $mode
+})
 
 # --- Autostart via scheduled task (RunLevel Highest = no UAC at logon).
 # ScheduledTasks cmdlets, not schtasks.exe: native stderr under
@@ -1117,6 +1404,7 @@ function Save-Settings {
     foreach ($k in $s.Keys) { $sync.Settings[$k] = $s[$k] }
     $sync.SettingsChanged = $true
     Set-Accent $s.accentColor
+    if ($script:panelMode) { Update-ModePanel $script:panelMode }
     $el.SettingsOverlay.Visibility = 'Collapsed'
 }
 
@@ -1237,6 +1525,7 @@ $script:notify.add_BalloonTipClicked({
 })
 
 Set-Accent $script:settings.accentColor
+Update-ModePanel ([string]$sync.Data.ActiveMode)
 
 # --- Update check (GitHub releases, once per launch) -----------------
 $script:psUpd = $null
@@ -1270,6 +1559,8 @@ if ($script:settings.checkUpdates -and $script:settings.updateRepo) {
 # --- UI refresh timer ------------------------------------------------
 $script:histCpu = New-Object 'System.Collections.Generic.List[double]'
 $script:histGpu = New-Object 'System.Collections.Generic.List[double]'
+$script:histFanCpu  = New-Object 'System.Collections.Generic.List[double]'
+$script:histFanCase = New-Object 'System.Collections.Generic.List[double]'
 $script:histTick = 0
 function Update-Spark($list, $poly, $box) {
     # maps 20..100 deg C onto the host box, newest sample at the right edge
@@ -1282,6 +1573,22 @@ function Update-Spark($list, $poly, $box) {
         $t = [math]::Min([math]::Max($list[$i], 20), 100)
         $x = $i * ($w / ($n - 1))
         $y = $h - (($t - 20) / 80 * $h)
+        $pc.Add((New-Object System.Windows.Point $x, $y))
+    }
+    $poly.Points = $pc
+}
+
+function Update-FanSpark($list, $poly, $box, [double]$maxV) {
+    # maps 0..maxV RPM onto the host box, newest sample at the right edge
+    if ($list.Count -lt 2) { return }
+    $w = $box.ActualWidth; $h = $box.ActualHeight
+    if ($w -lt 10 -or $h -lt 5) { return }
+    if ($maxV -lt 1) { $maxV = 1 }
+    $pc = New-Object System.Windows.Media.PointCollection
+    $n = $list.Count
+    for ($i = 0; $i -lt $n; $i++) {
+        $x = $i * ($w / ($n - 1))
+        $y = ($h - 1) - ([math]::Min($list[$i], $maxV) / $maxV * ($h - 2))
         $pc.Add((New-Object System.Windows.Point $x, $y))
     }
     $poly.Points = $pc
@@ -1349,6 +1656,9 @@ $script:timer.Add_Tick({
         else                    { $btn.Background = $script:brushClear;  $btn.Foreground = $script:brushDim }
     }
     foreach ($k in @($script:trayMode.Keys)) { $script:trayMode[$k].Checked = ($k -eq $mode) }
+    # defer panel rebuilds while a slider is held, so a worker-driven mode
+    # switch can't retarget the thumb the user is dragging
+    if ($mode -ne $script:panelMode -and -not $el.ModeSlots.IsMouseCaptureWithin) { Update-ModePanel $mode }
 
     if ($sync.Status -eq 'ready') {
         if ($sync.DlState -eq 'downloading') {
@@ -1357,6 +1667,9 @@ $script:timer.Add_Tick({
         } elseif ($d.GameBoost) {
             $el.StatusDot.Fill = $script:brushYellow
             $el.StatusText.Text = $script:L.GameActive
+        } elseif ($d.CoolDown) {
+            $el.StatusDot.Fill = $script:brushYellow
+            $el.StatusText.Text = $script:L.CoolDown -f [int][math]::Ceiling([double]$d.CoolLeft / 1000), $script:modeNames[[string]$d.CoolTo]
         } elseif ($d.BoostActive) {
             $el.StatusDot.Fill = $script:brushYellow
             $el.StatusText.Text = $script:L.BoostActive -f $script:settings.boostCase, $script:settings.boostLow, $script:deg
@@ -1397,6 +1710,22 @@ $script:timer.Add_Tick({
         Update-Spark $script:histGpu $el.GpuSpark $el.GpuSparkHost
         $el.CpuSpark.Stroke = $el.CpuTempVal.Foreground
         $el.GpuSpark.Stroke = $el.GpuTempVal.Foreground
+
+        # Fan activity graph (same cadence, shared 0..max RPM scale).
+        # Both lists advance in lockstep so the two lines share one time
+        # axis; a briefly-null channel repeats its last sample.
+        if (($null -ne $d.CpuFan) -or ($null -ne $d.CaseFan)) {
+            $vc = if ($null -ne $d.CpuFan)  { [double]$d.CpuFan }  elseif ($script:histFanCpu.Count)  { $script:histFanCpu[$script:histFanCpu.Count - 1] }   else { 0.0 }
+            $vk = if ($null -ne $d.CaseFan) { [double]$d.CaseFan } elseif ($script:histFanCase.Count) { $script:histFanCase[$script:histFanCase.Count - 1] } else { 0.0 }
+            [void]$script:histFanCpu.Add($vc);  if ($script:histFanCpu.Count  -gt 300) { $script:histFanCpu.RemoveAt(0) }
+            [void]$script:histFanCase.Add($vk); if ($script:histFanCase.Count -gt 300) { $script:histFanCase.RemoveAt(0) }
+        }
+        $fmax = 800.0
+        if ($script:histFanCpu.Count)  { $fmax = [math]::Max($fmax, ($script:histFanCpu  | Measure-Object -Maximum).Maximum) }
+        if ($script:histFanCase.Count) { $fmax = [math]::Max($fmax, ($script:histFanCase | Measure-Object -Maximum).Maximum) }
+        $fmax *= 1.08
+        Update-FanSpark $script:histFanCpu  $el.CpuFanSpark  $el.FanSparkHost $fmax
+        Update-FanSpark $script:histFanCase $el.CaseFanSpark $el.FanSparkHost $fmax
     }
 
     $tip = 'Vento'
@@ -1424,6 +1753,11 @@ catch {
     try { [void][System.Windows.MessageBox]::Show("Application error: $($_.Exception.Message)", 'Vento', 'OK', 'Error') } catch { }
 }
 finally {
+    # Flush a pending debounced mode-panel save - the dispatcher is gone, so
+    # its 800ms tick will never fire.
+    if ($script:saveTimer -and $script:saveTimer.IsEnabled) {
+        try { $script:saveTimer.Stop(); Export-Settings $script:settings } catch { }
+    }
     # Worker shutdown lives here, not after Run: even if the UI dies from an
     # unhandled exception, the worker's finally must hand fans back to the BIOS.
     if ($sync) {
