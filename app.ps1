@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.2.0'
+$script:AppVersion = '1.2.1'
 
 # --- Admin & STA guards ----------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -66,6 +66,7 @@ function Get-DefaultSettings {
     @{
         startMinimized   = $false      # start hidden in the tray
         closeToTray      = $true       # X button hides instead of exiting
+        lastMode         = 'auto'      # last user-chosen mode, restored at launch
         updateIntervalMs = 2000        # sensor poll interval
         accentColor      = '#4C8DFF'
         cpuFanChannel    = 'Fan #1'    # SuperIO channel driving the CPU cooler
@@ -140,6 +141,10 @@ function Import-Settings {
     } catch {
         $s = Get-DefaultSettings
     }
+    if (@('quiet','normal','performance','curve','auto') -notcontains [string]$s.lastMode) { $s.lastMode = 'auto' }
+    # Settings files written before the GitHub username was final point the
+    # updater at a repo that never existed - migrate them.
+    if ([string]$s.updateRepo -eq 'blakfy/vento') { $s.updateRepo = 'Henkerr/vento' }
     try { [void][System.Windows.Media.ColorConverter]::ConvertFromString([string]$s.accentColor) }
     catch { $s.accentColor = '#4C8DFF' }
     return $s
@@ -267,6 +272,10 @@ $worker = {
             foreach ($sp in $spares) { $sp.Control.SetDefault() }
             $sync.Data.ActiveMode = $mode
         }
+
+        # restore the last user-chosen mode ('auto' = BIOS control, nothing to apply)
+        $initMode = [string]$sync.Settings.lastMode
+        if (@('quiet','normal','performance','curve') -contains $initMode) { Set-Mode $initMode }
 
         $sync.Status = 'ready'
         $boostOn = $false
@@ -1259,6 +1268,17 @@ function Apply-ModeSetting([string]$key, [int]$v) {
     $script:saveTimer.Start()
 }
 
+function Set-UserMode([string]$m) {
+    # user-chosen mode: apply it and remember it across restarts
+    $sync.PendingMode = $m
+    if ([string]$script:settings.lastMode -ne $m) {
+        $script:settings.lastMode = $m
+        $sync.Settings.lastMode = $m
+        $script:saveTimer.Stop()
+        $script:saveTimer.Start()
+    }
+}
+
 function Update-ModePanel([string]$mode) {
     if (-not $script:modePanelDef.ContainsKey($mode)) { return }
     $script:panelMode = $mode
@@ -1466,11 +1486,11 @@ function Quit-App { $script:reallyExit = $true; $window.Close() }
 $el.TitleBar.Add_MouseLeftButtonDown({ try { $window.DragMove() } catch { } })
 $el.BtnMin.Add_Click({ Hide-ToTray })
 $el.BtnClose.Add_Click({ $window.Close() })
-$el.BtnQuiet.Add_Click({  $sync.PendingMode = 'quiet' })
-$el.BtnNormal.Add_Click({ $sync.PendingMode = 'normal' })
-$el.BtnPerf.Add_Click({   $sync.PendingMode = 'performance' })
-$el.BtnCurve.Add_Click({  $sync.PendingMode = 'curve' })
-$el.BtnAuto.Add_Click({   $sync.PendingMode = 'auto' })
+$el.BtnQuiet.Add_Click({  Set-UserMode 'quiet' })
+$el.BtnNormal.Add_Click({ Set-UserMode 'normal' })
+$el.BtnPerf.Add_Click({   Set-UserMode 'performance' })
+$el.BtnCurve.Add_Click({  Set-UserMode 'curve' })
+$el.BtnAuto.Add_Click({   Set-UserMode 'auto' })
 
 $window.Add_Closing({ param($s, $e)
     if (-not $script:reallyExit) {
@@ -1507,8 +1527,9 @@ $miOpen.add_Click({ Show-Main })
 $script:trayMode = @{}
 foreach ($m in 'quiet','normal','performance','curve','auto') {
     $mi = $menu.Items.Add($script:modeNames[$m])
+    $mi.Tag = $m   # carried on the item - see the swatch note about closures
     $script:trayMode[$m] = $mi
-    $mi.add_Click({ $sync.PendingMode = $m }.GetNewClosure())
+    $mi.add_Click({ param($s, $e) Set-UserMode ([string]$s.Tag) })
 }
 [void]$menu.Items.Add('-')
 $script:miUpdate = $menu.Items.Add('Install update')

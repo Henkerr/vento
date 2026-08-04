@@ -9,7 +9,7 @@ Vento reads CPU/GPU temperatures and fan speeds through [LibreHardwareMonitor](h
 ## Features
 
 - **Live dashboard** — CPU/GPU temperature with color-coded bars, 10-minute history sparklines, CPU / case / GPU fan RPM.
-- **Five fan modes** — Quiet, Normal, Performance, Curve (temperature-based fan curve over 40/55/70/80 °C points), Auto (BIOS curve). Switchable from the window or the tray menu.
+- **Five fan modes** — Quiet, Normal, Performance, Curve (temperature-based fan curve over 40/55/70/80 °C points), Auto (BIOS curve). Switchable from the window or the tray menu; the last chosen mode is restored at launch.
 - **Cooling boost (Quiet mode)** — when CPU or GPU passes a threshold (default 75 °C) the case fans ramp up; once temps fall below the resume threshold (default 65 °C) they return to Quiet speed. Hysteresis prevents oscillation.
 - **Game boost** — sustained GPU load (default >80 % for 30 s) switches to Performance automatically and returns to your previous mode after 2 minutes of idle, with a configurable post-game cooldown (default 15 s of extra full-speed cooling) before handing back. Forgetting to change modes before a game is no longer a problem.
 - **Mode panel** — the dashboard shows the active mode's settings right under the mode selector: fan percentages, boost temperatures, or curve points depending on the mode. Slider changes apply to the fans instantly, and a Reset button restores that mode's defaults. A live graph tracks CPU and case fan RPM over the last 10 minutes.
