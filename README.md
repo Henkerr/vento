@@ -14,8 +14,6 @@
 
 <sub>Windows 10/11 · needs administrator rights for the fan sensors · updates itself from then on</sub>
 
-<sub>Or use the [download page](https://henkerr.github.io/vento/) — one button, with the install steps.</sub>
-
 </div>
 
 A lightweight fan monitoring and control panel for Windows that lives in your system tray.

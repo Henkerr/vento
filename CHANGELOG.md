@@ -33,9 +33,9 @@ when it failed. This release makes it work by default.
 - The logon task waits **15 s** after sign-in before starting, so it no longer races the shell
   and the SuperIO driver, and it runs with the app folder as its working directory.
 - Task settings gained `StartWhenAvailable` and `MultipleInstances = IgnoreNew`.
-- The installer asset is now named `VentoSetup.exe` instead of `VentoSetup-x.y.z.exe`, so
-  `releases/latest/download/VentoSetup.exe` always resolves to the current build.
-- Project page at [henkerr.github.io/vento](https://henkerr.github.io/vento/).
+- The installer asset is now named `VentoSetup.exe` instead of `VentoSetup-x.y.z.exe`, so every
+  release carries the same asset name.
+- Added a project page under `docs/`, which points at the Releases page for downloads.
 
 ---
 

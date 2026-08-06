@@ -20,8 +20,8 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=..\dist
-; Version-less on purpose: the project page links straight at
-; releases/latest/download/VentoSetup.exe, which needs a stable asset name.
+; Version-less on purpose: the app's updater picks the .exe asset off the
+; latest release, so a stable asset name keeps every release consistent.
 OutputBaseFilename=VentoSetup
 SetupIconFile=..\assets\vento.ico
 WizardSmallImageFile=..\assets\wizard-small.bmp
