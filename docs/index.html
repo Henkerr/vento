@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vento — fan control for Windows</title>
+<meta name="description" content="Quiet when your PC is idle, loud only when it needs to be. Vento reads CPU and GPU temperatures and drives the motherboard's fan channels itself. Free and open source for Windows 10/11.">
+<meta property="og:title" content="Vento — fan control for Windows">
+<meta property="og:description" content="Quiet when your PC is idle, loud only when it needs to be. Five fan modes, in your system tray.">
+<meta property="og:image" content="https://raw.githubusercontent.com/Henkerr/vento/main/assets/social-preview.png">
+<link rel="icon" href="icon.png">
+<style>
+  :root{
+    --bg:#0a0b0d; --card:#141518; --border:#24262b;
+    --accent:#4c8dff; --fg:#f4f6f9; --fg2:#9499a6; --fg3:#6d7280;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    /* Per-script fallbacks so Japanese, Chinese and Devanagari render with a
+       real face instead of tofu on machines without a broad Unicode default. */
+    font:16px/1.65 "Segoe UI","Yu Gothic UI","Microsoft YaHei","Nirmala UI",
+         system-ui,-apple-system,sans-serif;
+    padding:60px 20px 48px;
+    background-image:radial-gradient(circle at 50% -12%, #1a2949 0%, transparent 55%);
+  }
+  .wrap{max-width:600px;margin:0 auto}
+
+  #lang{
+    position:fixed;top:16px;right:16px;z-index:10;
+    background:var(--card);color:var(--fg2);
+    border:1px solid var(--border);border-radius:8px;
+    padding:7px 10px;font-size:13.5px;font-family:inherit;cursor:pointer;
+  }
+  #lang:hover{color:var(--fg);border-color:#33363d}
+
+  .hero{text-align:center}
+  img.logo{width:128px;height:128px;filter:drop-shadow(0 8px 28px rgba(76,141,255,.30))}
+  h1{font-size:46px;margin:20px 0 4px;letter-spacing:-.8px}
+  .tag{color:var(--accent);font-weight:600;font-size:18px;margin:0 0 16px}
+  .lede{color:var(--fg2);margin:0 auto 34px;font-size:16.5px}
+  .dl{
+    display:inline-block;background:var(--accent);color:#fff;text-decoration:none;
+    font-size:19px;font-weight:700;padding:17px 48px;border-radius:11px;
+    box-shadow:0 8px 26px rgba(76,141,255,.32);transition:transform .12s,background .12s;
+  }
+  .dl:hover{background:#3f7cf0;transform:translateY(-2px)}
+  .meta{color:var(--fg3);font-size:13.5px;margin-top:13px}
+
+  .points{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:46px}
+  .pt{
+    background:var(--card);border:1px solid var(--border);border-radius:12px;
+    padding:18px 16px;text-align:center;
+  }
+  .pt b{display:block;font-size:14.5px;margin-bottom:5px}
+  .pt span{color:var(--fg3);font-size:13px;line-height:1.5;display:block}
+
+  section{
+    background:var(--card);border:1px solid var(--border);border-radius:14px;
+    padding:24px 28px;margin-top:16px;
+  }
+  h2{font-size:13px;margin:0 0 15px;color:var(--fg2);
+     text-transform:uppercase;letter-spacing:1px;font-weight:600}
+  ol{margin:0;padding-left:20px;color:var(--fg2)}
+  ol li{margin-bottom:10px}
+  ol li:last-child{margin-bottom:0}
+  b{color:var(--fg);font-weight:600}
+  .warn{background:#1a1508;border-color:#3d3115;color:#d5c7a3;font-size:14.5px}
+  .warn h2{color:#bda877}
+  .warn b{color:#f0dcae}
+  a{color:var(--accent)}
+  footer{margin-top:40px;color:var(--fg3);font-size:13px;text-align:center}
+  @media (max-width:520px){
+    .points{grid-template-columns:1fr}
+    h1{font-size:38px}
+    body{padding-top:52px}
+  }
+</style>
+</head>
+<body>
+
+<select id="lang" aria-label="Language"></select>
+
+<div class="wrap">
+
+  <div class="hero">
+    <img class="logo" src="icon.png" alt="Vento">
+    <h1>Vento</h1>
+    <p class="tag" data-t="tagline"></p>
+    <p class="lede" data-t="lede"></p>
+
+    <a class="dl" href="https://github.com/Henkerr/vento/releases/latest/download/VentoSetup.exe">
+      ⬇ &nbsp;<span data-t="download"></span>
+    </a>
+    <p class="meta" data-t="meta"></p>
+  </div>
+
+  <div class="points">
+    <div class="pt"><b data-t="p1h"></b><span data-t="p1b"></span></div>
+    <div class="pt"><b data-t="p2h"></b><span data-t="p2b"></span></div>
+    <div class="pt"><b data-t="p3h"></b><span data-t="p3b"></span></div>
+  </div>
+
+  <section>
+    <h2 data-t="installh"></h2>
+    <ol>
+      <li data-t="s1"></li>
+      <li data-t="s2"></li>
+      <li data-t="s3"></li>
+    </ol>
+  </section>
+
+  <section class="warn">
+    <h2 data-t="warnh"></h2>
+    <span data-t="warn"></span>
+  </section>
+
+  <footer>
+    <span data-t="license"></span> ·
+    <a href="https://github.com/Henkerr/vento" data-t="source"></a> ·
+    <a href="https://github.com/Henkerr/vento/releases" data-t="releases"></a>
+  </footer>
+
+</div>
+
+<script>
+const NAMES = {en:"English", tr:"Türkçe", de:"Deutsch", ru:"Русский",
+               ja:"日本語", zh:"中文", hi:"हिन्दी", da:"Dansk"};
+
+const T = {
+en:{
+ title:"Vento — fan control for Windows",
+ tagline:"Fan control for Windows",
+ lede:"Quiet when your PC is idle, loud only when it needs to be. Vento reads your CPU and GPU temperatures and drives the motherboard's fan channels itself — no trip into the BIOS, and no noise you didn't ask for.",
+ download:"Download",
+ meta:"Windows 10/11 · 3.5 MB · free and open source",
+ p1h:"Five modes", p1b:"Quiet, Normal, Performance, your own curve, or back to the BIOS.",
+ p2h:"Decides for itself", p2b:"Ramps up when things get hot, and when a game starts.",
+ p3h:"Out of the way", p3b:"Lives in the tray and remembers the mode you left it in.",
+ installh:"Install",
+ s1:"Download the installer and run it.",
+ s2:"Approve the Windows administrator prompt — the fan sensors need it.",
+ s3:"Pick a mode. Vento keeps it from then on, restarts included.",
+ warnh:"Worth knowing",
+ warn:"Vento is not code-signed, so SmartScreen may show <i>\"Windows protected your PC\"</i> the first time you run it. Choose <b>More info → Run anyway</b>. Administrator rights are required because the motherboard's fan sensors cannot be reached any other way. Vento also refuses to start next to <b>FanControl</b> — two programs writing the same chip is a bad idea. On exit every channel is handed back to the BIOS.",
+ license:"MIT licensed", source:"Source on GitHub", releases:"All releases"
+},
+tr:{
+ title:"Vento — Windows için fan kontrolü",
+ tagline:"Windows için fan kontrolü",
+ lede:"Bilgisayarın boştayken sessiz, sadece gerektiğinde sesli. Vento, işlemci ve ekran kartı sıcaklıklarını okuyup anakartın fan kanallarını kendisi sürer — BIOS'a girmeye gerek yok, istemediğin gürültü de yok.",
+ download:"İndir",
+ meta:"Windows 10/11 · 3,5 MB · ücretsiz ve açık kaynak",
+ p1h:"Beş mod", p1b:"Sessiz, Normal, Performans, kendi eğrin ya da BIOS'a geri dön.",
+ p2h:"Kendi karar verir", p2b:"Isınınca ve oyun başlayınca devirleri kendisi yükseltir.",
+ p3h:"Ayak altında değil", p3b:"Sistem tepsisinde durur, bıraktığın modu hatırlar.",
+ installh:"Kurulum",
+ s1:"Kurulum dosyasını indir ve çalıştır.",
+ s2:"Windows'un yönetici iznini onayla — fan sensörleri için gerekli.",
+ s3:"Bir mod seç. Vento bundan sonra onu korur, yeniden başlatsan bile.",
+ warnh:"Bilmen gerekenler",
+ warn:"Vento dijital olarak imzalanmadığı için SmartScreen ilk çalıştırmada <i>\"Windows bilgisayarınızı korudu\"</i> diyebilir. <b>Ek bilgi → Yine de çalıştır</b> seç. Yönetici hakkı istiyor çünkü anakart fan sensörlerine başka türlü erişilemiyor. <b>FanControl</b> açıkken de başlamayı reddeder — aynı yongaya iki programın yazması iyi bir fikir değil. Çıkışta bütün kanallar BIOS'a geri verilir.",
+ license:"MIT lisanslı", source:"GitHub'da kaynak kod", releases:"Tüm sürümler"
+},
+de:{
+ title:"Vento — Lüftersteuerung für Windows",
+ tagline:"Lüftersteuerung für Windows",
+ lede:"Leise, wenn der PC nichts tut, laut nur wenn es sein muss. Vento liest die Temperaturen von CPU und Grafikkarte und steuert die Lüfterkanäle des Mainboards selbst — kein Ausflug ins BIOS und kein Lärm, den du nicht bestellt hast.",
+ download:"Herunterladen",
+ meta:"Windows 10/11 · 3,5 MB · kostenlos und quelloffen",
+ p1h:"Fünf Modi", p1b:"Leise, Normal, Leistung, eigene Kurve oder zurück zum BIOS.",
+ p2h:"Entscheidet selbst", p2b:"Dreht auf, wenn es heiß wird — und wenn ein Spiel startet.",
+ p3h:"Bleibt im Hintergrund", p3b:"Sitzt im Infobereich und merkt sich deinen Modus.",
+ installh:"Installation",
+ s1:"Installationsprogramm herunterladen und ausführen.",
+ s2:"Die Administratorabfrage bestätigen — die Lüftersensoren brauchen das.",
+ s3:"Modus wählen. Vento behält ihn, auch nach einem Neustart.",
+ warnh:"Gut zu wissen",
+ warn:"Vento ist nicht signiert, daher zeigt SmartScreen beim ersten Start eventuell <i>„Der Computer wurde durch Windows geschützt“</i>. Wähle <b>Weitere Informationen → Trotzdem ausführen</b>. Administratorrechte sind nötig, weil die Lüftersensoren des Mainboards anders nicht erreichbar sind. Neben <b>FanControl</b> startet Vento nicht — zwei Programme auf demselben Chip sind keine gute Idee. Beim Beenden gehen alle Kanäle ans BIOS zurück.",
+ license:"MIT-Lizenz", source:"Quellcode auf GitHub", releases:"Alle Versionen"
+},
+ru:{
+ title:"Vento — управление вентиляторами для Windows",
+ tagline:"Управление вентиляторами для Windows",
+ lede:"Тихо, когда компьютер простаивает, и громко только когда это нужно. Vento считывает температуры процессора и видеокарты и сам управляет каналами вентиляторов на материнской плате — без похода в BIOS и без лишнего шума.",
+ download:"Скачать",
+ meta:"Windows 10/11 · 3,5 МБ · бесплатно, открытый код",
+ p1h:"Пять режимов", p1b:"Тихий, Обычный, Производительность, своя кривая или обратно в BIOS.",
+ p2h:"Решает сам", p2b:"Поднимает обороты при нагреве и при запуске игры.",
+ p3h:"Не мешает", p3b:"Живёт в трее и помнит выбранный режим.",
+ installh:"Установка",
+ s1:"Скачайте установщик и запустите его.",
+ s2:"Подтвердите запрос прав администратора — без них датчики недоступны.",
+ s3:"Выберите режим. Vento сохранит его, в том числе после перезагрузки.",
+ warnh:"Что стоит знать",
+ warn:"Vento не подписан цифровой подписью, поэтому при первом запуске SmartScreen может показать <i>«Система Windows защитила ваш компьютер»</i>. Выберите <b>Подробнее → Выполнить в любом случае</b>. Права администратора нужны потому, что иначе до датчиков вентиляторов не добраться. Рядом с <b>FanControl</b> программа не запустится — две программы, пишущие в один чип, до добра не доведут. При выходе все каналы возвращаются под управление BIOS.",
+ license:"Лицензия MIT", source:"Исходный код на GitHub", releases:"Все версии"
+},
+ja:{
+ title:"Vento — Windows 向けファンコントロール",
+ tagline:"Windows 向けファンコントロール",
+ lede:"アイドル時は静かに、必要なときだけしっかり回します。Vento は CPU と GPU の温度を読み取り、マザーボードのファンチャンネルを自ら制御します。BIOS を触る必要も、望まない騒音もありません。",
+ download:"ダウンロード",
+ meta:"Windows 10/11 · 3.5 MB · 無料・オープンソース",
+ p1h:"5 つのモード", p1b:"静音、標準、パフォーマンス、独自カーブ、BIOS 任せ。",
+ p2h:"自分で判断", p2b:"温度が上がったときとゲーム開始時に自動で回転数を上げます。",
+ p3h:"邪魔をしない", p3b:"通知領域に常駐し、最後に選んだモードを覚えています。",
+ installh:"インストール",
+ s1:"インストーラーをダウンロードして実行します。",
+ s2:"Windows の管理者確認を承認します（ファンセンサーに必要です）。",
+ s3:"モードを選びます。再起動後もその設定が保たれます。",
+ warnh:"知っておくこと",
+ warn:"Vento はコード署名されていないため、初回起動時に SmartScreen が <i>「Windows によって PC が保護されました」</i> と表示することがあります。<b>詳細情報 → 実行</b> を選んでください。マザーボードのファンセンサーは管理者権限がないと読めないため、その権限が必要です。<b>FanControl</b> と同時には起動しません — 同じチップに 2 つのプログラムが書き込むのは危険だからです。終了時にはすべてのチャンネルが BIOS に戻されます。",
+ license:"MIT ライセンス", source:"GitHub のソースコード", releases:"すべてのリリース"
+},
+zh:{
+ title:"Vento — Windows 风扇控制",
+ tagline:"Windows 风扇控制",
+ lede:"电脑闲置时安静，只在需要时才提速。Vento 读取 CPU 和显卡温度，直接驱动主板的风扇通道——不用进 BIOS，也没有多余的噪音。",
+ download:"下载",
+ meta:"Windows 10/11 · 3.5 MB · 免费开源",
+ p1h:"五种模式", p1b:"静音、标准、性能、自定义曲线，或交还 BIOS。",
+ p2h:"自己判断", p2b:"温度升高时和游戏启动时自动提速。",
+ p3h:"不打扰你", p3b:"常驻托盘，记住你上次选择的模式。",
+ installh:"安装",
+ s1:"下载安装程序并运行。",
+ s2:"在 Windows 管理员提示中点击允许——读取风扇传感器需要它。",
+ s3:"选择一种模式。Vento 会一直保持，重启后也是。",
+ warnh:"需要知道的",
+ warn:"Vento 未经代码签名，首次运行时 SmartScreen 可能显示 <i>“Windows 已保护你的电脑”</i>。请选择 <b>更多信息 → 仍要运行</b>。它需要管理员权限，因为主板的风扇传感器只有这样才能访问。它也拒绝与 <b>FanControl</b> 同时运行——两个程序写同一颗芯片并不安全。退出时所有通道都会交还给 BIOS。",
+ license:"MIT 许可证", source:"GitHub 源代码", releases:"全部版本"
+},
+hi:{
+ title:"Vento — Windows के लिए फैन कंट्रोल",
+ tagline:"Windows के लिए फैन कंट्रोल",
+ lede:"पीसी खाली हो तो शांत, और तेज़ सिर्फ़ तब जब ज़रूरत हो। Vento आपके CPU और GPU का तापमान पढ़कर मदरबोर्ड के फैन चैनल खुद चलाता है — न BIOS में जाना पड़ता है, न बेवजह का शोर।",
+ download:"डाउनलोड करें",
+ meta:"Windows 10/11 · 3.5 MB · मुफ़्त और ओपन सोर्स",
+ p1h:"पाँच मोड", p1b:"क्वाइट, नॉर्मल, परफ़ॉर्मेंस, अपनी कर्व, या वापस BIOS पर।",
+ p2h:"खुद तय करता है", p2b:"गरम होने पर और गेम शुरू होते ही रफ़्तार बढ़ा देता है।",
+ p3h:"रास्ते में नहीं आता", p3b:"ट्रे में रहता है और आपका चुना हुआ मोड याद रखता है।",
+ installh:"इंस्टॉल करें",
+ s1:"इंस्टॉलर डाउनलोड करें और चलाएँ।",
+ s2:"Windows की एडमिनिस्ट्रेटर अनुमति स्वीकार करें — फैन सेंसर के लिए ज़रूरी है।",
+ s3:"एक मोड चुनें। Vento उसे बनाए रखता है, रीस्टार्ट के बाद भी।",
+ warnh:"जानने लायक बातें",
+ warn:"Vento कोड-साइन नहीं है, इसलिए पहली बार चलाने पर SmartScreen <i>\"Windows protected your PC\"</i> दिखा सकता है। <b>More info → Run anyway</b> चुनें। एडमिनिस्ट्रेटर अधिकार इसलिए चाहिए क्योंकि मदरबोर्ड के फैन सेंसर सिर्फ़ इसी तरह पढ़े जा सकते हैं। <b>FanControl</b> के साथ यह शुरू नहीं होगा — एक ही चिप पर दो प्रोग्राम लिखें, यह ठीक नहीं। बंद करते समय सभी चैनल BIOS को लौटा दिए जाते हैं।",
+ license:"MIT लाइसेंस", source:"GitHub पर सोर्स कोड", releases:"सभी रिलीज़"
+},
+da:{
+ title:"Vento — blæserstyring til Windows",
+ tagline:"Blæserstyring til Windows",
+ lede:"Stille når maskinen ikke laver noget, og kun højlydt når det er nødvendigt. Vento aflæser temperaturen på CPU og grafikkort og styrer selv bundkortets blæserkanaler — ingen tur i BIOS og ingen støj, du ikke har bedt om.",
+ download:"Hent",
+ meta:"Windows 10/11 · 3,5 MB · gratis og open source",
+ p1h:"Fem tilstande", p1b:"Stille, Normal, Ydelse, din egen kurve eller tilbage til BIOS.",
+ p2h:"Beslutter selv", p2b:"Skruer op når det bliver varmt — og når et spil starter.",
+ p3h:"Er ikke i vejen", p3b:"Bor i proceslinjen og husker den tilstand, du valgte.",
+ installh:"Installation",
+ s1:"Hent installationsprogrammet, og kør det.",
+ s2:"Godkend Windows' administratorprompt — blæsersensorerne kræver det.",
+ s3:"Vælg en tilstand. Vento beholder den, også efter en genstart.",
+ warnh:"Værd at vide",
+ warn:"Vento er ikke kodesigneret, så SmartScreen kan vise <i>\"Windows protected your PC\"</i>, første gang du kører det. Vælg <b>More info → Run anyway</b>. Administratorrettigheder er nødvendige, fordi bundkortets blæsersensorer ikke kan nås på anden måde. Vento starter heller ikke ved siden af <b>FanControl</b> — to programmer, der skriver til samme chip, er en dårlig idé. Ved afslutning gives alle kanaler tilbage til BIOS.",
+ license:"MIT-licens", source:"Kildekode på GitHub", releases:"Alle udgivelser"
+}
+};
+
+const sel = document.getElementById("lang");
+for (const code in NAMES) {
+  const o = document.createElement("option");
+  o.value = code; o.textContent = NAMES[code];
+  sel.appendChild(o);
+}
+
+function apply(code){
+  const d = T[code] || T.en;
+  document.documentElement.lang = code;
+  document.title = d.title;
+  document.querySelectorAll("[data-t]").forEach(el => {
+    const v = d[el.dataset.t];
+    // Strings carry only our own markup (<b>, <i>), never user input.
+    if (v !== undefined) el.innerHTML = v;
+  });
+  sel.value = code;
+}
+
+function pick(){
+  const saved = localStorage.getItem("vento_lang");
+  if (saved && T[saved]) return saved;
+  for (const l of (navigator.languages || [navigator.language || "en"])) {
+    const base = String(l).toLowerCase().split("-")[0];
+    if (T[base]) return base;
+  }
+  return "en";
+}
+
+sel.addEventListener("change", () => {
+  localStorage.setItem("vento_lang", sel.value);
+  apply(sel.value);
+});
+
+apply(pick());
+</script>
+</body>
+</html>
