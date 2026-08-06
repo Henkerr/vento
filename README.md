@@ -10,7 +10,7 @@
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-### [⬇ Download Vento](https://github.com/Henkerr/vento/releases/latest/download/VentoSetup.exe)
+### [⬇ Download Vento](https://github.com/Henkerr/vento/releases/latest)
 
 <sub>Windows 10/11 · needs administrator rights for the fan sensors · updates itself from then on</sub>
 
@@ -44,7 +44,7 @@ Vento reads CPU/GPU temperatures and fan speeds through [LibreHardwareMonitor](h
 
 ## Getting started
 
-**Installer (recommended):** download [`VentoSetup.exe`](https://github.com/Henkerr/vento/releases/latest/download/VentoSetup.exe) and run it. You get Start Menu / desktop shortcuts, a run-at-startup task (checked by default, changeable later in Settings), and a clean uninstaller.
+**Installer (recommended):** download [`VentoSetup.exe`](https://github.com/Henkerr/vento/releases/latest) and run it. You get Start Menu / desktop shortcuts, a run-at-startup task (checked by default, changeable later in Settings), and a clean uninstaller.
 
 **From source:** clone the repository and double-click `Vento.vbs` (or build `Vento.exe`, see below), then accept the admin prompt.
 
