@@ -4,7 +4,7 @@
 #define AppName "Vento"
 ; CI can override with: ISCC /DAppVersion=x.y.z  (keep in sync with app.ps1)
 #ifndef AppVersion
-#define AppVersion "1.2.1"
+#define AppVersion "1.2.2"
 #endif
 #define AppPublisher "Blakfy"
 #define AppURL "https://github.com/Henkerr/vento"
@@ -20,7 +20,9 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=..\dist
-OutputBaseFilename=VentoSetup-{#AppVersion}
+; Version-less on purpose: the project page links straight at
+; releases/latest/download/VentoSetup.exe, which needs a stable asset name.
+OutputBaseFilename=VentoSetup
 SetupIconFile=..\assets\vento.ico
 WizardSmallImageFile=..\assets\wizard-small.bmp
 UninstallDisplayIcon={app}\Vento.exe
@@ -31,6 +33,7 @@ PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Tasks]
+Name: "startup"; Description: "&Start Vento automatically when Windows starts"
 Name: "desktopicon"; Description: "Create a &desktop icon"; Flags: unchecked
 
 [Files]
@@ -47,8 +50,12 @@ Name: "{group}\{#AppName}"; Filename: "{app}\Vento.exe"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\Vento.exe"; Tasks: desktopicon
 
 [Run]
-; Autostart is configured inside the app (Settings -> "Start with Windows"),
-; which registers a highest-privilege scheduled task so logon skips UAC.
+; Autostart is a highest-privilege scheduled task, so logon skips UAC.
+; app.ps1 owns that registration (same code path as Settings -> "Start with
+; Windows"), so the wizard checkbox just calls it. skipifsilent keeps the
+; app's own silent updater from re-enabling autostart a user switched off.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\app.ps1"" -RegisterAutostart"; StatusMsg: "Registering the startup task..."; Flags: runhidden skipifsilent; Tasks: startup
+
 ; shellexec is required: Vento.exe's manifest demands elevation and plain
 ; CreateProcess cannot elevate (error 740). No skipifsilent: silent updates
 ; relaunch the app when they finish.

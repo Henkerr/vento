@@ -4,9 +4,99 @@
 #  for SuperIO sensor access.
 # =====================================================================
 
+[CmdletBinding()]
+param(
+    # Register/remove the logon task and exit, without loading the UI or
+    # touching the hardware. Used by the installer's "start with Windows"
+    # task; also handy for scripting the setting by hand.
+    [switch]$RegisterAutostart,
+    [switch]$UnregisterAutostart
+)
+
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.2.1'
+$script:AppVersion = '1.2.2'
+
+# App folder ($PSScriptRoot can be empty in exotic hosts)
+$script:AppRoot = $PSScriptRoot
+if (-not $script:AppRoot) { $script:AppRoot = Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
+$script:icoPath = Join-Path $script:AppRoot 'assets\vento.ico'
+
+# --- Autostart via scheduled task (RunLevel Highest = no UAC at logon).
+# ScheduledTasks cmdlets, not schtasks.exe: native stderr under
+# ErrorActionPreference=Stop throws in PS 5.1, and /TR quoting mangles
+# paths with spaces (C:\Program Files\...).
+# Defined up here so -RegisterAutostart can run before the admin/STA
+# guards and the sensor library.
+$script:taskName = 'Vento'
+
+# What the task should launch out of this folder: the exe when it is next
+# to us (installed copy), otherwise powershell.exe on app.ps1 (source copy).
+function Get-AutoStartTarget {
+    $exe = Join-Path $script:AppRoot 'Vento.exe'
+    if (Test-Path $exe) { return @{ Execute = $exe; Argument = '' } }
+    return @{
+        Execute  = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+        Argument = ('-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "{0}"' -f (Join-Path $script:AppRoot 'app.ps1'))
+    }
+}
+function Get-AutoStartTask {
+    try { return Get-ScheduledTask -TaskName $script:taskName -ErrorAction Stop } catch { return $null }
+}
+function Test-AutoStart { return [bool](Get-AutoStartTask) }
+
+# Returns $null on success or the error text: a checkbox that silently
+# fails to stick is worse than no checkbox at all.
+function Set-AutoStart([bool]$on) {
+    try {
+        if ($on) {
+            $t = Get-AutoStartTarget
+            if ($t.Argument) {
+                $action = New-ScheduledTaskAction -Execute $t.Execute -Argument $t.Argument -WorkingDirectory $script:AppRoot
+            } else {
+                $action = New-ScheduledTaskAction -Execute $t.Execute -WorkingDirectory $script:AppRoot
+            }
+            $user      = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $user
+            $trigger.Delay = 'PT15S'   # let the shell and the SuperIO driver settle first
+            $principal = New-ScheduledTaskPrincipal -UserId $user -RunLevel Highest
+            $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+                            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                            -StartWhenAvailable -MultipleInstances IgnoreNew
+            Register-ScheduledTask -TaskName $script:taskName -Force `
+                -Description "Starts $script:AppName at logon so the fan curve is applied without signing in to the app." `
+                -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+        } else {
+            Unregister-ScheduledTask -TaskName $script:taskName -Confirm:$false -ErrorAction Stop
+        }
+        return $null
+    } catch { return $_.Exception.Message }
+}
+
+# A task registered from a folder that later moved or was deleted keeps
+# pointing at a path that is gone, so nothing comes up at logon. Repoint it
+# at whoever is running - but only then: another copy that still exists on
+# disk may well be the one the user meant to start with Windows.
+function Sync-AutoStartTarget {
+    $task = Get-AutoStartTask
+    if (-not $task) { return }
+    try {
+        $have = @($task.Actions)[0]
+        # For the powershell.exe fallback the path that can go missing is the
+        # script, not the host - powershell.exe is always there.
+        $path = [string]$have.Execute
+        $m = [regex]::Match([string]$have.Arguments, '-File\s+"([^"]+)"')
+        if ($m.Success) { $path = $m.Groups[1].Value }
+        if (-not $path -or (Test-Path -LiteralPath $path)) { return }
+        [void](Set-AutoStart $true)
+    } catch { }
+}
+
+if ($RegisterAutostart -or $UnregisterAutostart) {
+    $err = Set-AutoStart (-not $UnregisterAutostart)
+    if ($err) { Write-Error $err; exit 1 }
+    exit 0
+}
 
 # --- Admin & STA guards ----------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -27,11 +117,6 @@ try {
     Add-Type -Namespace VentoNative -Name Shell -MemberDefinition '[DllImport("shell32.dll", SetLastError=true)] public static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID);'
     [void][VentoNative.Shell]::SetCurrentProcessExplicitAppUserModelID('Blakfy.Vento')
 } catch { }
-
-# App folder ($PSScriptRoot can be empty in exotic hosts)
-$script:AppRoot = $PSScriptRoot
-if (-not $script:AppRoot) { $script:AppRoot = Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
-$script:icoPath = Join-Path $script:AppRoot 'assets\vento.ico'
 
 # --- Single instance -------------------------------------------------
 $created = $false
@@ -58,6 +143,9 @@ if (Get-Process -Name FanControl -ErrorAction SilentlyContinue) {
     $answer = [System.Windows.MessageBox]::Show("FanControl is currently running. Two programs cannot drive the fans at the same time.`n`nClose FanControl now?", 'Vento', 'YesNo', 'Warning')
     if ($answer -eq 'Yes') { Stop-Process -Name FanControl -Force; Start-Sleep -Seconds 1 } else { exit }
 }
+
+# Keep an existing logon task pointing at this copy (see Sync-AutoStartTarget).
+Sync-AutoStartTarget
 
 # --- Settings --------------------------------------------------------
 $script:settingsPath = Join-Path $script:AppRoot 'settings.json'
@@ -1364,33 +1452,6 @@ $el.BtnModeReset.Add_Click({
     Update-ModePanel $mode
 })
 
-# --- Autostart via scheduled task (RunLevel Highest = no UAC at logon).
-# ScheduledTasks cmdlets, not schtasks.exe: native stderr under
-# ErrorActionPreference=Stop throws in PS 5.1, and /TR quoting mangles
-# paths with spaces (C:\Program Files\...).
-$script:taskName = 'Vento'
-function Test-AutoStart {
-    try { return [bool](Get-ScheduledTask -TaskName $script:taskName -ErrorAction Stop) } catch { return $false }
-}
-function Set-AutoStart([bool]$on) {
-    try {
-        if ($on) {
-            $exe = Join-Path $script:AppRoot 'Vento.exe'
-            if (Test-Path $exe) {
-                $action = New-ScheduledTaskAction -Execute $exe
-            } else {
-                $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "{0}"' -f (Join-Path $script:AppRoot 'app.ps1'))
-            }
-            $trigger   = New-ScheduledTaskTrigger -AtLogOn
-            $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -RunLevel Highest
-            $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-            Register-ScheduledTask -TaskName $script:taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-        } else {
-            Unregister-ScheduledTask -TaskName $script:taskName -Confirm:$false -ErrorAction Stop
-        }
-    } catch { }
-}
-
 function Open-Settings {
     $s = $script:settings
     foreach ($row in $script:sliderMap) { $el[$row[0]].Value = [double]$s[$row[2]] }
@@ -1418,7 +1479,15 @@ function Save-Settings {
     $s.checkUpdates   = [bool]$el.S_Updates.IsChecked
     $s.gameBoost      = [bool]$el.S_Game.IsChecked
     $want = [bool]$el.S_AutoStart.IsChecked
-    if ($want -ne (Test-AutoStart)) { Set-AutoStart $want }
+    if ($want -ne (Test-AutoStart)) {
+        $err = Set-AutoStart $want
+        if ($err) {
+            $el.S_AutoStart.IsChecked = (Test-AutoStart)
+            [void][System.Windows.MessageBox]::Show(
+                ("Could not {0} the 'Start with Windows' task:`n`n{1}" -f $(if ($want) { 'register' } else { 'remove' }), $err),
+                'Vento', 'OK', 'Warning')
+        }
+    }
     $s.accentColor    = $script:pendingAccent
     Export-Settings $s
     foreach ($k in $s.Keys) { $sync.Settings[$k] = $s[$k] }
