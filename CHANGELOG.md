@@ -6,6 +6,28 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.3.0 — 2026-08-10
+
+The dashboard now covers the rest of the machine's temperatures: SSD and motherboard cards sit
+right under CPU and GPU, in the same style.
+
+### Added
+- **SSD TEMPERATURE card** — same design as the CPU/GPU cards: big color-coded value, bar and a
+  10-minute history sparkline, with the drive model underneath. When several drives are present
+  the hottest one is shown; NVMe drives are preferred, SATA SSDs are the fallback, and spinning
+  disks are excluded from the recurring poll so steady-state SMART reads can't keep a sleeping
+  HDD awake (drive detection at launch still touches each disk once). Colors shift at 60/70 °C.
+- **BOARD TEMPERATURE card** — motherboard temperature from the SuperIO chip in the same card
+  style, colored at 50/60 °C, with the motherboard model underneath. Sensor names vary per chip,
+  so Vento picks a plausible one automatically; a new file-only `"mbTempSensor"` key in
+  `settings.json` overrides the choice (`"auto"` by default).
+
+### Changed
+- The window is taller (724 → 890 px) to make room for the new row; the fan activity graph keeps
+  its size.
+
+---
+
 ## 1.2.2 — 2026-08-06
 
 Autostart was in the app since 1.1.0, but nothing told you it was there and nothing told you

@@ -18,11 +18,11 @@
 
 A lightweight fan monitoring and control panel for Windows that lives in your system tray.
 
-Vento reads CPU/GPU temperatures and fan speeds through [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) and drives the motherboard's fan channels with five modes — including a Quiet mode that temporarily boosts the fans when things get hot and drops back down once they cool.
+Vento reads CPU, GPU, SSD and motherboard temperatures plus fan speeds through [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) and drives the motherboard's fan channels with five modes — including a Quiet mode that temporarily boosts the fans when things get hot and drops back down once they cool.
 
 ## Features
 
-- **Live dashboard** — CPU/GPU temperature with color-coded bars, 10-minute history sparklines, CPU / case / GPU fan RPM.
+- **Live dashboard** — CPU, GPU, SSD (hottest drive) and motherboard temperatures with color-coded bars and 10-minute history sparklines, plus CPU / case / GPU fan RPM.
 - **Five fan modes** — Quiet, Normal, Performance, Curve (temperature-based fan curve over 40/55/70/80 °C points), Auto (BIOS curve). Switchable from the window or the tray menu; the last chosen mode is restored at launch.
 - **Cooling boost (Quiet mode)** — when CPU or GPU passes a threshold (default 75 °C) the case fans ramp up; once temps fall below the resume threshold (default 65 °C) they return to Quiet speed. Hysteresis prevents oscillation.
 - **Game boost** — sustained GPU load (default >80 % for 30 s) switches to Performance automatically and returns to your previous mode after 2 minutes of idle, with a configurable post-game cooldown (default 15 s of extra full-speed cooling) before handing back. Forgetting to change modes before a game is no longer a problem.
@@ -60,16 +60,17 @@ Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Configuration
 
-Everything editable in the UI is stored in `settings.json` (created on first save). Two extra keys are file-only, for remapping which SuperIO channels drive which fans on your board:
+Everything editable in the UI is stored in `settings.json` (created on first save). Three extra keys are file-only, for remapping which SuperIO channels drive which fans on your board and which temperature sensor feeds the BOARD card:
 
 ```json
 {
   "cpuFanChannel": "Fan #1",
-  "caseFanChannel": "Fan #2"
+  "caseFanChannel": "Fan #2",
+  "mbTempSensor": "auto"
 }
 ```
 
-If a named channel doesn't exist, Vento falls back to the first/second fan channel it finds. All remaining channels are left on the BIOS default curve.
+If a named channel doesn't exist, Vento falls back to the first/second fan channel it finds. All remaining channels are left on the BIOS default curve. `mbTempSensor` set to `"auto"` picks a plausible SuperIO temperature sensor by name; set it to an exact sensor name (e.g. `"Temperature #3"`) to override.
 
 ## Safety notes
 

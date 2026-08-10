@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.2.2'
+$script:AppVersion = '1.3.0'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -159,6 +159,7 @@ function Get-DefaultSettings {
         accentColor      = '#4C8DFF'
         cpuFanChannel    = 'Fan #1'    # SuperIO channel driving the CPU cooler
         caseFanChannel   = 'Fan #2'    # SuperIO channel driving the case fan hub
+        mbTempSensor     = 'auto'      # SuperIO temp sensor for the BOARD card ('auto' = best guess)
         quietCase        = 30          # case fan % per mode
         normalCase       = 50
         perfCase         = 100
@@ -217,6 +218,7 @@ function Import-Settings {
         $s.gpuMaxTemp       = [int](Limit $s.gpuMaxTemp 70 95)
         $s.cpuFanChannel    = [string]$s.cpuFanChannel
         $s.caseFanChannel   = [string]$s.caseFanChannel
+        $s.mbTempSensor     = [string]$s.mbTempSensor
         $s.checkUpdates     = [bool]$s.checkUpdates
         $s.updateRepo       = [string]$s.updateRepo
         $s.gameBoost        = [bool]$s.gameBoost
@@ -267,10 +269,14 @@ $worker = {
         $pc.IsMotherboardEnabled = $true
         $pc.IsCpuEnabled = $true
         $pc.IsGpuEnabled = $true
+        $pc.IsStorageEnabled = $true
         $pc.Open()
 
+        # Storage is skipped here: SSD units are updated per-pass anyway, and
+        # warming up every drive would SMART-poll HDDs at each launch.
         foreach ($round in 1..2) {
             foreach ($hw in $pc.Hardware) {
+                if ($hw.HardwareType.ToString() -eq 'Storage') { continue }
                 $hw.Update()
                 foreach ($sub in $hw.SubHardware) { $sub.Update() }
             }
@@ -285,7 +291,7 @@ $worker = {
 
         $mb  = $pc.Hardware | Where-Object { $_.HardwareType.ToString() -eq 'Motherboard' } | Select-Object -First 1
         $sio = $null
-        if ($mb) { $sio = $mb.SubHardware | Select-Object -First 1 }
+        if ($mb) { $sio = $mb.SubHardware | Select-Object -First 1; $sync.Data.MbName = $mb.Name }
 
         $fanCpu = $null; $fanCase = $null; $ctlCpu = $null; $ctlCase = $null
         $spares = @()
@@ -303,6 +309,18 @@ $worker = {
             $spares = @($allCtls | Where-Object { $_ -ne $ctlCpu -and $_ -ne $ctlCase })
         }
         $controls = @(@($ctlCpu, $ctlCase) + $spares | Where-Object { $_ })
+
+        # Board temp: SuperIO temp sensor names are chip-specific and often
+        # unlabeled, so settings override -> known names -> first plausible.
+        $mbTempSensor = $null
+        if ($sio) {
+            $allTemps = @($sio.Sensors | Where-Object { $_.SensorType.ToString() -eq 'Temperature' })
+            $sel = [string]$sync.Settings.mbTempSensor
+            if ($sel -and $sel -ne 'auto') { $mbTempSensor = $allTemps | Where-Object { $_.Name -eq $sel } | Select-Object -First 1 }
+            if (-not $mbTempSensor) { $mbTempSensor = $allTemps | Where-Object { $_.Name -match '^(System|Motherboard|System Temperature)$' } | Select-Object -First 1 }
+            if (-not $mbTempSensor) { $mbTempSensor = $allTemps | Where-Object { $_.Name -notmatch 'CPU|AUX|Peripheral' -and $null -ne $_.Value -and $_.Value -gt 0 -and $_.Value -lt 120 } | Select-Object -First 1 }
+            if (-not $mbTempSensor) { $mbTempSensor = $allTemps | Where-Object { $null -ne $_.Value -and $_.Value -gt 0 -and $_.Value -lt 120 } | Select-Object -First 1 }
+        }
 
         $cpuHw = $pc.Hardware | Where-Object { $_.HardwareType.ToString() -eq 'Cpu' } | Select-Object -First 1
         $cpuTemp = $null
@@ -325,6 +343,26 @@ $worker = {
             $gpuLoad = $gpuHw.Sensors | Where-Object { $_.SensorType.ToString() -eq 'Load' -and $_.Name -eq 'GPU Core' } | Select-Object -First 1
             if (-not $gpuLoad) { $gpuLoad = $gpuHw.Sensors | Where-Object { $_.SensorType.ToString() -eq 'Load' } | Select-Object -First 1 }
         }
+
+        # SSD card shows the hottest solid-state drive. HDDs are excluded from
+        # the recurring poll so steady-state SMART reads can't keep a sleeping
+        # disk awake (drive enumeration at Open() still touches each once).
+        # Every drive is a generic StorageDevice in this LHM build, so NVMe is
+        # detected by its 'Composite Temperature' sensor (NVMe health log;
+        # 'Temperature #n' are controller diodes that read 10-20 deg C hot),
+        # SATA SSDs by model name - 'SSD' plus the common families that omit
+        # it (Kingston SA400/SUV, WD Blue/Green WDS...).
+        $ssdUnits = @()
+        foreach ($st in @($pc.Hardware | Where-Object { $_.HardwareType.ToString() -eq 'Storage' })) {
+            $temps = @($st.Sensors | Where-Object { $_.SensorType.ToString() -eq 'Temperature' })
+            $ts = $temps | Where-Object { $_.Name -eq 'Composite Temperature' } | Select-Object -First 1
+            $isNvme = [bool]$ts
+            if (-not $isNvme -and $st.Name -notmatch 'SSD|WDS\d|SA400|SUV\d') { continue }
+            if (-not $ts) { $ts = $temps | Where-Object { $_.Name -eq 'Temperature' } | Select-Object -First 1 }
+            if (-not $ts) { $ts = $temps | Where-Object { $_.Name -notmatch 'Warning|Critical' } | Select-Object -First 1 }
+            if ($ts) { $ssdUnits += ,@{ Hw = $st; Sensor = $ts; Nvme = $isNvme; Dead = $false } }
+        }
+        if (@($ssdUnits | Where-Object { $_.Nvme }).Count -gt 0) { $ssdUnits = @($ssdUnits | Where-Object { $_.Nvme }) }
 
         function Get-CurveTarget([double]$t, $s) {
             # piecewise-linear case fan curve over 40/55/70/80 deg C
@@ -434,6 +472,13 @@ $worker = {
                 if ($sio)   { $sio.Update() }
                 if ($cpuHw) { $cpuHw.Update() }
                 if ($gpuHw) { $gpuHw.Update() }
+                # A drive whose Update() throws (USB enclosure unplugged) is
+                # retired: LHM never nulls Sensor.Value, so without this the
+                # card would keep showing the last reading as if it were live.
+                foreach ($u in $ssdUnits) {
+                    if ($u.Dead) { continue }
+                    try { $u.Hw.Update() } catch { $u.Dead = $true }
+                }
 
                 $d = $sync.Data
                 $d.CpuFan  = if ($fanCpu  -and $null -ne $fanCpu.Value)  { [int]$fanCpu.Value }  else { $null }
@@ -442,6 +487,18 @@ $worker = {
                 $d.GpuTemp = if ($gpuTemp -and $null -ne $gpuTemp.Value) { [math]::Round($gpuTemp.Value, 1) } else { $null }
                 $d.GpuFan1 = if ($gpuFans.Count -ge 1 -and $null -ne $gpuFans[0].Value) { [int]$gpuFans[0].Value } else { $null }
                 $d.GpuFan2 = if ($gpuFans.Count -ge 2 -and $null -ne $gpuFans[1].Value) { [int]$gpuFans[1].Value } else { $null }
+
+                # Plausibility re-checked every pass: SuperIO chips report
+                # -55 / 127 deg C on disconnected diodes.
+                $d.MbTemp = if ($mbTempSensor -and $null -ne $mbTempSensor.Value -and $mbTempSensor.Value -gt 0 -and $mbTempSensor.Value -lt 120) { [math]::Round($mbTempSensor.Value, 1) } else { $null }
+
+                $best = $null; $bestName = $null
+                foreach ($u in $ssdUnits) {
+                    if ($u.Dead) { continue }
+                    if ($null -ne $u.Sensor.Value -and (($null -eq $best) -or ($u.Sensor.Value -gt $best))) { $best = [double]$u.Sensor.Value; $bestName = $u.Hw.Name }
+                }
+                $d.SsdTemp = if ($null -ne $best) { [math]::Round($best, 1) } else { $null }
+                $d.SsdName = $bestName
 
                 # Quiet-mode cooling boost with hysteresis: raise the case
                 # fans above boostHigh, fall back to Quiet speed below boostLow.
@@ -574,7 +631,7 @@ $script:psWorker.Runspace = $script:runspace
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Vento" Width="700" Height="724"
+        Title="Vento" Width="700" Height="890"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         WindowStartupLocation="CenterScreen" ResizeMode="CanMinimize"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
@@ -767,6 +824,7 @@ $xaml = @'
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
           <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
@@ -810,8 +868,48 @@ $xaml = @'
           </Border>
         </Grid>
 
-        <!-- Fans -->
+        <!-- Storage / board temperatures -->
         <Grid Grid.Row="1" Margin="0,10,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,5,0">
+            <StackPanel>
+              <TextBlock Style="{StaticResource CardTitle}" Text="SSD TEMPERATURE"/>
+              <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="SsdTempVal" Style="{StaticResource BigValue}" Text="--"/>
+                <TextBlock Text="&#176;C" Foreground="#566073" FontSize="16" VerticalAlignment="Bottom" Margin="4,0,0,8"/>
+              </StackPanel>
+              <Border x:Name="SsdBarTrack" Height="5" CornerRadius="2.5" Background="#1C2230" Margin="0,4,0,0">
+                <Border x:Name="SsdBarFill" Height="5" CornerRadius="2.5" Background="#3DD68C" HorizontalAlignment="Left" Width="0"/>
+              </Border>
+              <Grid x:Name="SsdSparkHost" Height="26" Margin="0,8,0,0" ClipToBounds="True">
+                <Polyline x:Name="SsdSpark" Stroke="#3DD68C" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
+              </Grid>
+              <TextBlock x:Name="SsdNameText" Style="{StaticResource CardSub}" Text="Drive"/>
+            </StackPanel>
+          </Border>
+          <Border Grid.Column="1" Style="{StaticResource Card}" Margin="5,0,0,0">
+            <StackPanel>
+              <TextBlock Style="{StaticResource CardTitle}" Text="BOARD TEMPERATURE"/>
+              <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="MbTempVal" Style="{StaticResource BigValue}" Text="--"/>
+                <TextBlock Text="&#176;C" Foreground="#566073" FontSize="16" VerticalAlignment="Bottom" Margin="4,0,0,8"/>
+              </StackPanel>
+              <Border x:Name="MbBarTrack" Height="5" CornerRadius="2.5" Background="#1C2230" Margin="0,4,0,0">
+                <Border x:Name="MbBarFill" Height="5" CornerRadius="2.5" Background="#3DD68C" HorizontalAlignment="Left" Width="0"/>
+              </Border>
+              <Grid x:Name="MbSparkHost" Height="26" Margin="0,8,0,0" ClipToBounds="True">
+                <Polyline x:Name="MbSpark" Stroke="#3DD68C" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
+              </Grid>
+              <TextBlock x:Name="MbNameText" Style="{StaticResource CardSub}" Text="Motherboard"/>
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <!-- Fans -->
+        <Grid Grid.Row="2" Margin="0,10,0,0">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="*"/>
@@ -841,7 +939,7 @@ $xaml = @'
         </Grid>
 
         <!-- Mode selector -->
-        <StackPanel Grid.Row="2" Margin="0,14,0,0">
+        <StackPanel Grid.Row="3" Margin="0,14,0,0">
           <TextBlock Style="{StaticResource CardTitle}" Text="FAN MODE" Margin="2,0,0,6"/>
           <Border Background="#10141E" BorderBrush="#1E2430" BorderThickness="1" CornerRadius="12" Padding="3">
             <UniformGrid Columns="5">
@@ -855,7 +953,7 @@ $xaml = @'
         </StackPanel>
 
         <!-- Mode panel: live settings for the active mode + fan activity -->
-        <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,10,0,2">
+        <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,10,0,2">
           <Grid>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
@@ -1165,6 +1263,8 @@ foreach ($name in @(
     'CpuTempVal','GpuTempVal','CpuBarTrack','CpuBarFill','GpuBarTrack','GpuBarFill',
     'CpuSpark','GpuSpark','CpuSparkHost','GpuSparkHost',
     'CpuNameText','GpuNameText','CpuFanVal','CaseFanVal','GpuFanVal',
+    'SsdTempVal','SsdBarTrack','SsdBarFill','SsdSpark','SsdSparkHost','SsdNameText',
+    'MbTempVal','MbBarTrack','MbBarFill','MbSpark','MbSparkHost','MbNameText',
     'BtnQuiet','BtnNormal','BtnPerf','BtnCurve','BtnAuto',
     'StatusDot','StatusText','WarnText','TitleBar','BtnSettings','BtnMin','BtnClose','LogoOuter',
     'SettingsOverlay','SecFans','SecBoost','SecCurve','SecGame','SecSafety','SecGeneral',
@@ -1649,6 +1749,8 @@ if ($script:settings.checkUpdates -and $script:settings.updateRepo) {
 # --- UI refresh timer ------------------------------------------------
 $script:histCpu = New-Object 'System.Collections.Generic.List[double]'
 $script:histGpu = New-Object 'System.Collections.Generic.List[double]'
+$script:histSsd = New-Object 'System.Collections.Generic.List[double]'
+$script:histMb  = New-Object 'System.Collections.Generic.List[double]'
 $script:histFanCpu  = New-Object 'System.Collections.Generic.List[double]'
 $script:histFanCase = New-Object 'System.Collections.Generic.List[double]'
 $script:histTick = 0
@@ -1739,6 +1841,34 @@ $script:timer.Add_Tick({
         $el.GpuBarFill.Width = [math]::Max(0, $el.GpuBarTrack.ActualWidth * ([math]::Min($d.GpuTemp, 100) / 100))
     } else { $el.GpuTempVal.Text = '--' }
 
+    if ($null -ne $d.SsdName) { $el.SsdNameText.Text = $d.SsdName }
+    if ($null -ne $d.MbName)  { $el.MbNameText.Text  = $d.MbName }
+
+    # These two sensors can legitimately vanish mid-run (drive unplugged,
+    # SuperIO diode going implausible), so '--' also clears the value color
+    # and empties the bar instead of freezing them at the last reading.
+    if ($null -ne $d.SsdTemp) {
+        $el.SsdTempVal.Text = '{0}' -f [int]$d.SsdTemp
+        $b = Get-TempBrush $d.SsdTemp 60 70
+        $el.SsdTempVal.Foreground = $b
+        $el.SsdBarFill.Background = $b
+        $el.SsdBarFill.Width = [math]::Max(0, $el.SsdBarTrack.ActualWidth * ([math]::Min($d.SsdTemp, 100) / 100))
+    } else {
+        $el.SsdTempVal.Text = '--'; $el.SsdTempVal.Foreground = $script:brushText
+        $el.SsdBarFill.Width = 0
+    }
+
+    if ($null -ne $d.MbTemp) {
+        $el.MbTempVal.Text = '{0}' -f [int]$d.MbTemp
+        $b = Get-TempBrush $d.MbTemp 50 60
+        $el.MbTempVal.Foreground = $b
+        $el.MbBarFill.Background = $b
+        $el.MbBarFill.Width = [math]::Max(0, $el.MbBarTrack.ActualWidth * ([math]::Min($d.MbTemp, 100) / 100))
+    } else {
+        $el.MbTempVal.Text = '--'; $el.MbTempVal.Foreground = $script:brushText
+        $el.MbBarFill.Width = 0
+    }
+
     $mode = $d.ActiveMode
     foreach ($pair in @(@('quiet','BtnQuiet'), @('normal','BtnNormal'), @('performance','BtnPerf'), @('curve','BtnCurve'), @('auto','BtnAuto'))) {
         $btn = $el[$pair[1]]
@@ -1796,10 +1926,16 @@ $script:timer.Add_Tick({
     if ($script:histTick % 4 -eq 0) {
         if ($null -ne $d.CpuTemp) { [void]$script:histCpu.Add([double]$d.CpuTemp); if ($script:histCpu.Count -gt 300) { $script:histCpu.RemoveAt(0) } }
         if ($null -ne $d.GpuTemp) { [void]$script:histGpu.Add([double]$d.GpuTemp); if ($script:histGpu.Count -gt 300) { $script:histGpu.RemoveAt(0) } }
+        if ($null -ne $d.SsdTemp) { [void]$script:histSsd.Add([double]$d.SsdTemp); if ($script:histSsd.Count -gt 300) { $script:histSsd.RemoveAt(0) } }
+        if ($null -ne $d.MbTemp)  { [void]$script:histMb.Add([double]$d.MbTemp);   if ($script:histMb.Count  -gt 300) { $script:histMb.RemoveAt(0) } }
         Update-Spark $script:histCpu $el.CpuSpark $el.CpuSparkHost
         Update-Spark $script:histGpu $el.GpuSpark $el.GpuSparkHost
+        Update-Spark $script:histSsd $el.SsdSpark $el.SsdSparkHost
+        Update-Spark $script:histMb  $el.MbSpark  $el.MbSparkHost
         $el.CpuSpark.Stroke = $el.CpuTempVal.Foreground
         $el.GpuSpark.Stroke = $el.GpuTempVal.Foreground
+        $el.SsdSpark.Stroke = $el.SsdTempVal.Foreground
+        $el.MbSpark.Stroke  = $el.MbTempVal.Foreground
 
         # Fan activity graph (same cadence, shared 0..max RPM scale).
         # Both lists advance in lockstep so the two lines share one time
