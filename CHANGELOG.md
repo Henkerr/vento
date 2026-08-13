@@ -29,6 +29,9 @@ blended from a cool blue through warm coral to hot red.
   45–75 °C). Defaults: 65/65/60/62.
 - **Hardware model names are legible now** — larger, brighter, stripped of marketing prefixes
   ("NVIDIA GeForce RTX 2060 SUPER" → "RTX 2060 SUPER"), with the full name as a tooltip.
+- **In-window update pill.** When a newer release exists, a clickable "UPDATE x.y.z" badge
+  appears in the title bar; one click downloads and silently installs it. The tray balloon was
+  easy to miss and the tray menu item easy to never discover — this one is in your face, gently.
 
 ### Changed
 - The board card's default warning threshold moved from 50 °C to 62 °C — SuperIO board sensors

@@ -1157,6 +1157,18 @@ $xaml = @'
               <TextBlock Text="V&#x200A;E&#x200A;N&#x200A;T&#x200A;O" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource ThInkBrush}" Margin="9,0,0,0" VerticalAlignment="Center"/>
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0">
+              <!-- Update pill: shown when a newer release exists; click = download
+                   and silently install. The tray balloon is easy to miss - this is
+                   the in-window indicator. -->
+              <Border x:Name="UpdatePill" CornerRadius="8" BorderThickness="1" Padding="10,4" Margin="0,0,10,0" VerticalAlignment="Center"
+                      Background="#1A6FB1FF" BorderBrush="#406FB1FF" Cursor="Hand" Visibility="Collapsed"
+                      ToolTip="Download and install the new version">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Foreground="{DynamicResource AccentBrush}" FontFamily="Segoe MDL2 Assets" FontSize="10" Text="&#xE896;" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="UpdatePillText" Foreground="{DynamicResource AccentBrush}" FontSize="10" FontWeight="Bold"
+                             Margin="7,0,0,0" VerticalAlignment="Center" Text="UPDATE"/>
+                </StackPanel>
+              </Border>
               <Border x:Name="StateBadge" CornerRadius="8" BorderThickness="1" Padding="10,4" Margin="0,0,10,0" VerticalAlignment="Center"
                       Background="#1A6FB1FF" BorderBrush="#406FB1FF">
                 <StackPanel Orientation="Horizontal">
@@ -1885,7 +1897,7 @@ foreach ($name in @(
     'CpuHair','GpuHair','SsdHair','MbHair',
     'CpuWarnFlag','CpuWarnText','GpuWarnFlag','GpuWarnText',
     'SsdWarnFlag','SsdWarnText','MbWarnFlag','MbWarnText',
-    'WinBase','WinFrame','StateBadge','StateBadgeText',
+    'WinBase','WinFrame','StateBadge','StateBadgeText','UpdatePill','UpdatePillText',
     'OrbGlow','OrbCore','OrbVal','OrbLabel','HaloTrack','HaloFill','HaloDot',
     'HeroTitle','HeroSub','LabCool','LabWarm','LabHot','ModeShell',
     'SectLine1','SectLine2','FooterPill',
@@ -2167,6 +2179,8 @@ function Apply-Thermal($mix) {
     }
     $el.StateBadge.Background  = New-SolidBrushC (New-AlphaColor $acc 0x1A)
     $el.StateBadge.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0x42)
+    $el.UpdatePill.Background  = $el.StateBadge.Background
+    $el.UpdatePill.BorderBrush = $el.StateBadge.BorderBrush
     $el.StateBadgeText.Text = @('COOL', 'WARM', 'HOT')[$onIdx]
     $sectBrush = New-SolidBrushC (New-AlphaColor $acc 0x22)
     $el.SectLine1.Background = $sectBrush
@@ -2488,6 +2502,7 @@ function Save-Settings {
 
 $el.BtnSetSave.Add_Click({ Save-Settings })
 $el.BtnSetCancel.Add_Click({ $el.SettingsOverlay.Visibility = 'Collapsed' })
+$el.UpdatePill.Add_MouseLeftButtonUp({ Install-Update })
 $el.BtnSettings.Add_Click({
     if ($el.SettingsOverlay.Visibility -eq 'Visible') { $el.SettingsOverlay.Visibility = 'Collapsed' }
     else { Open-Settings }
@@ -2875,8 +2890,13 @@ $script:timer.Add_Tick({
         $script:updateNotified = $true
         $script:miUpdate.Text = $script:L.InstallItem -f $sync.Update.Version
         $script:miUpdate.Visible = $true
+        $el.UpdatePillText.Text = 'UPDATE {0}' -f $sync.Update.Version
+        $el.UpdatePill.Visibility = 'Visible'
         $script:lastBalloon = 'update'
         $script:notify.ShowBalloonTip(6000, 'Vento', ($script:L.UpdateBalloon -f $sync.Update.Version), [System.Windows.Forms.ToolTipIcon]::Info)
+    }
+    if ($sync.DlState -eq 'downloading' -and $el.UpdatePill.Visibility -eq 'Visible') {
+        $el.UpdatePillText.Text = 'DOWNLOADING...'
     }
 
     # Temperature history sparklines (one sample every 2s, 10 minutes kept)
