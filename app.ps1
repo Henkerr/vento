@@ -186,6 +186,10 @@ function Get-DefaultSettings {
         boostCase        = 80          # case fan % while boosting
         cpuMaxTemp       = 85          # safety guard: force Auto above these temps
         gpuMaxTemp       = 83
+        warnCpu          = 65          # comfort targets: per-sensor threshold that
+        warnGpu          = 65          # drives the thermal palette, the hero copy
+        warnSsd          = 60          # and the per-card warning chips
+        warnMb           = 62
         checkUpdates     = $true       # notify when a new GitHub release exists
         updateRepo       = 'Henkerr/vento'
         gameBoost        = $true       # auto Performance while the GPU is under load
@@ -232,6 +236,10 @@ function Import-Settings {
         $s.boostCase        = [int](Limit $s.boostCase  30 100)
         $s.cpuMaxTemp       = [int](Limit $s.cpuMaxTemp 70 95)
         $s.gpuMaxTemp       = [int](Limit $s.gpuMaxTemp 70 95)
+        $s.warnCpu          = [int](Limit $s.warnCpu 50 80)
+        $s.warnGpu          = [int](Limit $s.warnGpu 50 80)
+        $s.warnSsd          = [int](Limit $s.warnSsd 45 75)
+        $s.warnMb           = [int](Limit $s.warnMb  45 75)
         $s.cpuFanChannel    = [string]$s.cpuFanChannel
         $s.caseFanChannel   = [string]$s.caseFanChannel
         $s.mbTempSensor     = [string]$s.mbTempSensor
@@ -1604,31 +1612,6 @@ $xaml = @'
 
           <!-- Settings overlay -->
           <Border x:Name="SettingsOverlay" Grid.Row="1" Grid.RowSpan="2" Background="#E607090D" Visibility="Collapsed">
-            <Border.Resources>
-              <Style x:Key="Swatch" TargetType="Button">
-                <Setter Property="Width" Value="24"/>
-                <Setter Property="Height" Value="24"/>
-                <Setter Property="Margin" Value="0,0,10,0"/>
-                <Setter Property="Cursor" Value="Hand"/>
-                <Setter Property="BorderThickness" Value="0"/>
-                <Setter Property="Template">
-                  <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                      <Grid Background="Transparent">
-                        <Border x:Name="ring" CornerRadius="12" BorderBrush="#ECF0F7" BorderThickness="{TemplateBinding BorderThickness}"/>
-                        <Border x:Name="dot" Width="16" Height="16" CornerRadius="8" Background="{TemplateBinding Background}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                      </Grid>
-                      <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                          <Setter TargetName="dot" Property="Width" Value="18"/>
-                          <Setter TargetName="dot" Property="Height" Value="18"/>
-                        </Trigger>
-                      </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                  </Setter.Value>
-                </Setter>
-              </Style>
-            </Border.Resources>
             <Border Style="{StaticResource Card}" Margin="16,8,16,14">
               <Border Style="{StaticResource CardInner}" Padding="20,16">
                 <Grid>
@@ -1792,6 +1775,44 @@ $xaml = @'
 
                       <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
                         <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="COMFORT TARGETS" Foreground="#4C8DFF" x:Name="SecTargets" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <TextBlock Style="{StaticResource CardSub}" Text="Where the thermal palette and the per-card warnings consider each sensor warm." Margin="0,2,0,0" TextWrapping="Wrap"/>
+                      <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Comfort target - CPU"/>
+                        <Slider Grid.Column="1" x:Name="S_WarnCpu" Style="{StaticResource SetSlider}" Minimum="50" Maximum="80"/>
+                        <TextBlock Grid.Column="2" x:Name="V_WarnCpu" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Comfort target - GPU"/>
+                        <Slider Grid.Column="1" x:Name="S_WarnGpu" Style="{StaticResource SetSlider}" Minimum="50" Maximum="80"/>
+                        <TextBlock Grid.Column="2" x:Name="V_WarnGpu" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Comfort target - SSD"/>
+                        <Slider Grid.Column="1" x:Name="S_WarnSsd" Style="{StaticResource SetSlider}" Minimum="45" Maximum="75"/>
+                        <TextBlock Grid.Column="2" x:Name="V_WarnSsd" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Comfort target - board"/>
+                        <Slider Grid.Column="1" x:Name="S_WarnMb" Style="{StaticResource SetSlider}" Minimum="45" Maximum="75"/>
+                        <TextBlock Grid.Column="2" x:Name="V_WarnMb" Style="{StaticResource SetValue}"/>
+                      </Grid>
+
+                      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
                         <TextBlock Style="{StaticResource CardTitle}" Text="GENERAL" Foreground="#4C8DFF" x:Name="SecGeneral" Margin="7,0,0,0" VerticalAlignment="Center"/>
                       </StackPanel>
                       <Grid Margin="0,6,0,0">
@@ -1863,7 +1884,9 @@ foreach ($name in @(
     'AxR0','AxR1','AxR2',
     'BtnQuiet','BtnNormal','BtnPerf','BtnCurve','BtnAuto',
     'StatusDot','StatusText','WarnText','TitleBar','BtnSettings','BtnMin','BtnClose','LogoOuter',
-    'SettingsOverlay','SecFans','SecBoost','SecCurve','SecGame','SecSafety','SecGeneral',
+    'SettingsOverlay','SecFans','SecBoost','SecCurve','SecGame','SecSafety','SecTargets','SecGeneral',
+    'S_WarnCpu','S_WarnGpu','S_WarnSsd','S_WarnMb',
+    'V_WarnCpu','V_WarnGpu','V_WarnSsd','V_WarnMb',
     'S_QuietCase','S_NormalCase','S_PerfCase','S_PerfCpu',
     'S_BoostEnabled','S_BoostHigh','S_BoostLow','S_BoostCase',
     'S_C40','S_C55','S_C70','S_C80','S_Game','S_GameLoad','S_GameCool',
@@ -1964,7 +1987,8 @@ $script:deg = [char]176
 $script:thin = [char]0x2009   # thin space used to letter-space the orb label
 $script:modeNames    = @{ quiet = 'Quiet'; normal = 'Normal'; performance = 'Performance'; curve = 'Curve'; auto = 'Auto' }
 $script:sliderNames  = @('S_QuietCase','S_NormalCase','S_PerfCase','S_PerfCpu','S_BoostHigh','S_BoostLow','S_BoostCase',
-                         'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool','S_CpuMax','S_GpuMax','S_Interval')
+                         'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool','S_CpuMax','S_GpuMax',
+                         'S_WarnCpu','S_WarnGpu','S_WarnSsd','S_WarnMb','S_Interval')
 
 # All code-generated UI strings live here so a future language option is a
 # table swap (XAML labels move here in the same pass).
@@ -2168,7 +2192,7 @@ function Apply-Thermal($mix) {
     foreach ($sp in 'CpuSparkFill', 'GpuSparkFill', 'SsdSparkFill', 'MbSparkFill') { $el[$sp].Fill = $spFill }
 
     # settings + mode panel accents
-    foreach ($sec in 'SecFans', 'SecBoost', 'SecCurve', 'SecGame', 'SecSafety', 'SecGeneral') { $el[$sec].Foreground = $script:brushAccent }
+    foreach ($sec in 'SecFans', 'SecBoost', 'SecCurve', 'SecGame', 'SecSafety', 'SecTargets', 'SecGeneral') { $el[$sec].Foreground = $script:brushAccent }
     foreach ($sn in $script:sliderNames) { $el[$sn].Foreground = $script:brushAccent }
     foreach ($i in 1..4) { $el["MS$i"].Foreground = $script:brushAccent }
     $el.LogoOuter.Fill = $script:brushAccent
@@ -2188,10 +2212,13 @@ function Init-Sirocco {
     $hg.Freeze()
     $el.HaloFill.Stroke = $hg
 
-    # breathing hero glow - peak capped low so the hot state never flares
+    # breathing hero glow - peak capped low so the hot state never flares.
+    # Without a frame cap these forever-animations render at the display
+    # refresh rate and cost about half a core; 30fps is indistinguishable.
     $ba = New-Object System.Windows.Media.Animation.DoubleAnimation 0.34, 0.56, ([System.Windows.Duration][TimeSpan]::FromSeconds(1.6))
     $ba.AutoReverse = $true
     $ba.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+    [System.Windows.Media.Animation.Timeline]::SetDesiredFrameRate($ba, 30)
     $el.OrbGlow.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $ba)
 
     # fan rotor spinners: a controllable storyboard per rotor whose speed
@@ -2203,6 +2230,7 @@ function Init-Sirocco {
         $el[$r].RenderTransform = $rt
         $an = New-Object System.Windows.Media.Animation.DoubleAnimation 0, 360, ([System.Windows.Duration][TimeSpan]::FromSeconds(1))
         $an.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+        [System.Windows.Media.Animation.Timeline]::SetDesiredFrameRate($an, 30)
         [System.Windows.Media.Animation.Storyboard]::SetTarget($an, $el[$r])
         [System.Windows.Media.Animation.Storyboard]::SetTargetProperty($an, (New-Object System.Windows.PropertyPath '(UIElement.RenderTransform).(RotateTransform.Angle)'))
         $sb = New-Object System.Windows.Media.Animation.Storyboard
@@ -2247,7 +2275,11 @@ $script:sliderMap = @(
     @('S_GameLoad',   'V_GameLoad',   'gameOnLoad', '%'),
     @('S_GameCool',   'V_GameCool',   'gameCooldownSec', 's'),
     @('S_CpuMax',     'V_CpuMax',     'cpuMaxTemp', "$script:deg"),
-    @('S_GpuMax',     'V_GpuMax',     'gpuMaxTemp', "$script:deg")
+    @('S_GpuMax',     'V_GpuMax',     'gpuMaxTemp', "$script:deg"),
+    @('S_WarnCpu',    'V_WarnCpu',    'warnCpu',    "$script:deg"),
+    @('S_WarnGpu',    'V_WarnGpu',    'warnGpu',    "$script:deg"),
+    @('S_WarnSsd',    'V_WarnSsd',    'warnSsd',    "$script:deg"),
+    @('S_WarnMb',     'V_WarnMb',     'warnMb',     "$script:deg")
 )
 foreach ($row in $script:sliderMap) {
     $sName = $row[0]; $vName = $row[1]; $suffix = $row[3]
@@ -2731,12 +2763,12 @@ $script:timer.Add_Tick({
 
     if ($null -ne $d.CpuTemp) {
         $el.CpuTempVal.Text = '{0}' -f [int]$d.CpuTemp
-        Update-WarnFlag 'Cpu' ($d.CpuTemp - 65)
+        Update-WarnFlag 'Cpu' ($d.CpuTemp - $script:settings.warnCpu)
     } else { $el.CpuTempVal.Text = '--'; Update-WarnFlag 'Cpu' -99 }
 
     if ($null -ne $d.GpuTemp) {
         $el.GpuTempVal.Text = '{0}' -f [int]$d.GpuTemp
-        Update-WarnFlag 'Gpu' ($d.GpuTemp - 65)
+        Update-WarnFlag 'Gpu' ($d.GpuTemp - $script:settings.warnGpu)
     } else { $el.GpuTempVal.Text = '--'; Update-WarnFlag 'Gpu' -99 }
 
     if ($null -ne $d.SsdName) { Set-ModelLabel $el.SsdNameText $d.SsdName }
@@ -2747,22 +2779,20 @@ $script:timer.Add_Tick({
     # and empties the bar instead of freezing them at the last reading.
     if ($null -ne $d.SsdTemp) {
         $el.SsdTempVal.Text = '{0}' -f [int]$d.SsdTemp
-        Update-WarnFlag 'Ssd' ($d.SsdTemp - 60)
+        Update-WarnFlag 'Ssd' ($d.SsdTemp - $script:settings.warnSsd)
     } else { $el.SsdTempVal.Text = '--'; Update-WarnFlag 'Ssd' -99 }
 
     if ($null -ne $d.MbTemp) {
         $el.MbTempVal.Text = '{0}' -f [int]$d.MbTemp
-        Update-WarnFlag 'Mb' ($d.MbTemp - 62)
+        Update-WarnFlag 'Mb' ($d.MbTemp - $script:settings.warnMb)
     } else { $el.MbTempVal.Text = '--'; Update-WarnFlag 'Mb' -99 }
 
     # Sirocco: thermal position = the hottest sensor's distance to its own
     # warning threshold; it drives the palette, the halo and the hero copy
     $margin = -20.0; $hotName = $null; $hotVal = $null
     foreach ($probe in @(
-        @($d.CpuTemp, 65, 'CPU'), @($d.GpuTemp, 65, 'GPU'),
-        # Board sensors (VRM/chipset via SuperIO) idle in the high 50s on many
-        # boards - 62 keeps a healthy idle out of the warm/hot palette.
-        @($d.SsdTemp, 60, 'SSD'), @($d.MbTemp, 62, 'BOARD'))) {
+        @($d.CpuTemp, $script:settings.warnCpu, 'CPU'), @($d.GpuTemp, $script:settings.warnGpu, 'GPU'),
+        @($d.SsdTemp, $script:settings.warnSsd, 'SSD'), @($d.MbTemp, $script:settings.warnMb, 'BOARD'))) {
         if ($null -ne $probe[0]) {
             $m = [double]$probe[0] - $probe[1]
             if ($m -gt $margin) { $margin = $m; $hotName = $probe[2]; $hotVal = $probe[0] }
