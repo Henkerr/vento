@@ -6,6 +6,20 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.4.1 — 2026-08-14
+
+Tray and window reachability fixes, straight from the 1.4.0 field test.
+
+### Fixed
+- **Launching Vento while it is already running now brings the window forward** instead of
+  showing a dead "already running" box. If the tray icon is hidden or lost, the Start Menu is
+  always a way back to the window.
+- **The tray icon survives Explorer restarts.** Vento runs elevated, so Explorer's
+  `TaskbarCreated` broadcast never reached it and the icon stayed gone; the message is now let
+  through and the icon re-registers itself.
+
+---
+
 ## 1.4.0 — 2026-08-13
 
 The Sirocco release: the whole window is now lit by the machine's thermal state. One position —

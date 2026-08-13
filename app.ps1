@@ -1,4 +1,4 @@
-# =====================================================================
+﻿# =====================================================================
 #  Vento - lightweight fan monitoring & control for Windows
 #  PowerShell 5.1 + WPF + LibreHardwareMonitor. Admin rights required
 #  for SuperIO sensor access.
@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.4.0'
+$script:AppVersion = '1.4.1'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
