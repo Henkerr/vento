@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.4.1'
+$script:AppVersion = '1.4.2'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -2695,6 +2695,7 @@ $window.Add_KeyDown({ param($s, $e)
 
 # --- Tray menu -------------------------------------------------------
 $script:notify = New-Object System.Windows.Forms.NotifyIcon
+$script:notify.Icon = New-TrayIcon '#6FB1FF'
 $script:notify.Text = 'Vento'
 $script:notify.Visible = $true
 

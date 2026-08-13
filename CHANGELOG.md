@@ -6,6 +6,16 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.4.2 — 2026-08-14
+
+### Fixed
+- **The tray icon is back.** The Sirocco rewrite lost the single line that assigns the icon to
+  the NotifyIcon, and an icon-less NotifyIcon renders as nothing at all — Vento has been
+  invisible in the tray since 1.4.0. Every "where is the tray icon" symptom traced back to
+  this. Sorry.
+
+---
+
 ## 1.4.1 — 2026-08-14
 
 Tray and window reachability fixes, straight from the 1.4.0 field test.
