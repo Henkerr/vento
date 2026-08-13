@@ -1015,18 +1015,19 @@ $xaml = @'
                   </RepeatButton>
                 </Track.IncreaseRepeatButton>
                 <Track.Thumb>
-                  <Thumb Width="15" Height="15">
+                  <!-- fader-style pill handle instead of the stock ball -->
+                  <Thumb Width="10" Height="20">
                     <Thumb.Template>
                       <ControlTemplate TargetType="Thumb">
-                        <Ellipse x:Name="knob" Fill="#ECF0F7" StrokeThickness="2"
-                                 Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}">
-                          <Ellipse.Effect>
-                            <DropShadowEffect ShadowDepth="1" Direction="270" BlurRadius="4" Opacity="0.4" Color="#000000"/>
-                          </Ellipse.Effect>
-                        </Ellipse>
+                        <Border x:Name="knob" CornerRadius="5" Background="#ECF0F7"
+                                BorderBrush="#59000000" BorderThickness="1">
+                          <Border.Effect>
+                            <DropShadowEffect ShadowDepth="1.5" Direction="270" BlurRadius="5" Opacity="0.45" Color="#000000"/>
+                          </Border.Effect>
+                        </Border>
                         <ControlTemplate.Triggers>
                           <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="knob" Property="Fill" Value="#FFFFFF"/>
+                            <Setter TargetName="knob" Property="Background" Value="#FFFFFF"/>
                           </Trigger>
                         </ControlTemplate.Triggers>
                       </ControlTemplate>
@@ -1633,6 +1634,22 @@ $xaml = @'
           </Grid>
 
           <!-- Settings overlay -->
+          <!-- Update banner: drops in from the top when a newer release exists.
+               Later tucks it away; the title-bar pill remains as the anchor. -->
+          <Border x:Name="UpdateBanner" Grid.Row="1" Grid.RowSpan="2" VerticalAlignment="Top" HorizontalAlignment="Center"
+                  Margin="0,10,0,0" CornerRadius="12" BorderThickness="1" Padding="16,10" Visibility="Collapsed" Opacity="0"
+                  Background="{DynamicResource ThTileBrush}" BorderBrush="{DynamicResource AccentBrush}">
+            <Border.Effect>
+              <DropShadowEffect ShadowDepth="6" Direction="270" BlurRadius="18" Opacity="0.5" Color="#000000"/>
+            </Border.Effect>
+            <StackPanel Orientation="Horizontal">
+              <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource AccentBrush}" Text="&#xE896;" VerticalAlignment="Center"/>
+              <TextBlock x:Name="UpdateBannerText" Foreground="{DynamicResource ThInkBrush}" FontSize="13" FontWeight="SemiBold"
+                         Margin="10,0,16,0" VerticalAlignment="Center" Text="Update available"/>
+              <Button x:Name="BtnUpdateNow" Style="{StaticResource PrimaryBtn}" Content="Install now" Width="104" Height="30"/>
+              <Button x:Name="BtnUpdateLater" Style="{StaticResource GhostBtn}" Content="Later" Width="64" Height="30" Margin="6,0,0,0"/>
+            </StackPanel>
+          </Border>
           <Border x:Name="SettingsOverlay" Grid.Row="1" Grid.RowSpan="2" Background="#E607090D" Visibility="Collapsed">
             <Border Style="{StaticResource Card}" Margin="16,8,16,14">
               <Border Style="{StaticResource CardInner}" Padding="20,16">
@@ -1898,6 +1915,7 @@ foreach ($name in @(
     'CpuWarnFlag','CpuWarnText','GpuWarnFlag','GpuWarnText',
     'SsdWarnFlag','SsdWarnText','MbWarnFlag','MbWarnText',
     'WinBase','WinFrame','StateBadge','StateBadgeText','UpdatePill','UpdatePillText',
+    'UpdateBanner','UpdateBannerText','BtnUpdateNow','BtnUpdateLater',
     'OrbGlow','OrbCore','OrbVal','OrbLabel','HaloTrack','HaloFill','HaloDot',
     'HeroTitle','HeroSub','LabCool','LabWarm','LabHot','ModeShell',
     'SectLine1','SectLine2','FooterPill',
@@ -2181,6 +2199,7 @@ function Apply-Thermal($mix) {
     $el.StateBadge.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0x42)
     $el.UpdatePill.Background  = $el.StateBadge.Background
     $el.UpdatePill.BorderBrush = $el.StateBadge.BorderBrush
+    $el.UpdateBanner.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0x66)
     $el.StateBadgeText.Text = @('COOL', 'WARM', 'HOT')[$onIdx]
     $sectBrush = New-SolidBrushC (New-AlphaColor $acc 0x22)
     $el.SectLine1.Background = $sectBrush
@@ -2217,8 +2236,15 @@ function Apply-Thermal($mix) {
 
     # settings + mode panel accents
     foreach ($sec in 'SecFans', 'SecBoost', 'SecCurve', 'SecGame', 'SecSafety', 'SecTargets', 'SecGeneral') { $el[$sec].Foreground = $script:brushAccent }
-    foreach ($sn in $script:sliderNames) { $el[$sn].Foreground = $script:brushAccent }
-    foreach ($i in 1..4) { $el["MS$i"].Foreground = $script:brushAccent }
+    # slider fills: accent -> bright-accent gradient across the filled side
+    $sgb = New-Object System.Windows.Media.LinearGradientBrush
+    $sgb.StartPoint = New-Object System.Windows.Point 0, 0.5
+    $sgb.EndPoint   = New-Object System.Windows.Point 1, 0.5
+    $sgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop $acc, 0))
+    $sgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop $pal.accB, 1))
+    $sgb.Freeze()
+    foreach ($sn in $script:sliderNames) { $el[$sn].Foreground = $sgb }
+    foreach ($i in 1..4) { $el["MS$i"].Foreground = $sgb }
     $el.LogoOuter.Fill = $script:brushAccent
     $el.BtnSetSave.Foreground = $script:brushDark
 }
@@ -2503,6 +2529,43 @@ function Save-Settings {
 $el.BtnSetSave.Add_Click({ Save-Settings })
 $el.BtnSetCancel.Add_Click({ $el.SettingsOverlay.Visibility = 'Collapsed' })
 $el.UpdatePill.Add_MouseLeftButtonUp({ Install-Update })
+
+# --- Update banner ---------------------------------------------------
+# Drops in when the update is first detected and again whenever the window
+# is (re)opened while one is pending; Later dismisses it for the session.
+$script:bannerDismissed = $false
+$el.UpdateBanner.RenderTransform = New-Object System.Windows.Media.TranslateTransform 0, -70
+$script:bannerTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:bannerTimer.Interval = [TimeSpan]::FromSeconds(10)
+
+function Show-UpdateBanner {
+    if (-not $sync.Update -or $script:bannerDismissed -or $sync.DlState) { return }
+    $el.UpdateBannerText.Text = 'Vento {0} is available' -f $sync.Update.Version
+    $el.UpdateBanner.Visibility = 'Visible'
+    $ease = New-Object System.Windows.Media.Animation.CubicEase
+    $ease.EasingMode = [System.Windows.Media.Animation.EasingMode]::EaseOut
+    $ay = New-Object System.Windows.Media.Animation.DoubleAnimation -70, 0, ([System.Windows.Duration][TimeSpan]::FromMilliseconds(380))
+    $ay.EasingFunction = $ease
+    $el.UpdateBanner.RenderTransform.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $ay)
+    $ao = New-Object System.Windows.Media.Animation.DoubleAnimation 0, 1, ([System.Windows.Duration][TimeSpan]::FromMilliseconds(300))
+    $el.UpdateBanner.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $ao)
+    $script:bannerTimer.Stop(); $script:bannerTimer.Start()
+}
+function Hide-UpdateBanner {
+    $script:bannerTimer.Stop()
+    if ($el.UpdateBanner.Visibility -ne 'Visible') { return }
+    $ease = New-Object System.Windows.Media.Animation.CubicEase
+    $ease.EasingMode = [System.Windows.Media.Animation.EasingMode]::EaseIn
+    $ay = New-Object System.Windows.Media.Animation.DoubleAnimation 0, -70, ([System.Windows.Duration][TimeSpan]::FromMilliseconds(300))
+    $ay.EasingFunction = $ease
+    $el.UpdateBanner.RenderTransform.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $ay)
+    $ao = New-Object System.Windows.Media.Animation.DoubleAnimation 1, 0, ([System.Windows.Duration][TimeSpan]::FromMilliseconds(280))
+    $ao.Add_Completed({ $el.UpdateBanner.Visibility = 'Collapsed' })
+    $el.UpdateBanner.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $ao)
+}
+$script:bannerTimer.Add_Tick({ Hide-UpdateBanner })
+$el.BtnUpdateNow.Add_Click({ $script:bannerDismissed = $true; Hide-UpdateBanner; Install-Update })
+$el.BtnUpdateLater.Add_Click({ $script:bannerDismissed = $true; Hide-UpdateBanner })
 $el.BtnSettings.Add_Click({
     if ($el.SettingsOverlay.Visibility -eq 'Visible') { $el.SettingsOverlay.Visibility = 'Collapsed' }
     else { Open-Settings }
@@ -2545,6 +2608,7 @@ function Show-Main {
     $window.Show()
     $window.WindowState = [System.Windows.WindowState]::Normal
     [void]$window.Activate()
+    if ($script:updateNotified) { Show-UpdateBanner }
 }
 function Hide-ToTray {
     $window.Hide()
@@ -2892,6 +2956,7 @@ $script:timer.Add_Tick({
         $script:miUpdate.Visible = $true
         $el.UpdatePillText.Text = 'UPDATE {0}' -f $sync.Update.Version
         $el.UpdatePill.Visibility = 'Visible'
+        if ($window.IsVisible) { Show-UpdateBanner }
         $script:lastBalloon = 'update'
         $script:notify.ShowBalloonTip(6000, 'Vento', ($script:L.UpdateBalloon -f $sync.Update.Version), [System.Windows.Forms.ToolTipIcon]::Info)
     }

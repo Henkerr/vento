@@ -29,9 +29,12 @@ blended from a cool blue through warm coral to hot red.
   45–75 °C). Defaults: 65/65/60/62.
 - **Hardware model names are legible now** — larger, brighter, stripped of marketing prefixes
   ("NVIDIA GeForce RTX 2060 SUPER" → "RTX 2060 SUPER"), with the full name as a tooltip.
-- **In-window update pill.** When a newer release exists, a clickable "UPDATE x.y.z" badge
-  appears in the title bar; one click downloads and silently installs it. The tray balloon was
-  easy to miss and the tray menu item easy to never discover — this one is in your face, gently.
+- **In-window update notice.** When a newer release exists, a notification card drops in from
+  the top of the window ("Vento x.y.z is available — Install now / Later") and a clickable
+  "UPDATE x.y.z" pill stays in the title bar. One click downloads and silently installs. The
+  tray balloon was easy to miss and the tray menu item easy to never discover.
+- **Fader-style sliders.** The filled side is an accent gradient and the handle is a slim pill
+  instead of the stock ball, across the mode panel and the settings overlay.
 
 ### Changed
 - The board card's default warning threshold moved from 50 °C to 62 °C — SuperIO board sensors
