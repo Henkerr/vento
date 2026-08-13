@@ -11,3 +11,10 @@ Vento bundles the following third-party libraries in `lib/`. They are not covere
 | Microsoft .NET support packages (System.Text.Json, System.Memory, System.Buffers, System.IO.Pipelines, System.Numerics.Vectors, System.Threading.Tasks.Extensions, System.Collections.Immutable, System.Text.Encodings.Web, System.Runtime.CompilerServices.Unsafe, Microsoft.Bcl.AsyncInterfaces, Microsoft.Bcl.HashCode) | MIT |
 
 The source code for LibreHardwareMonitor (MPL-2.0) is available at the link above. The DLLs are redistributed unmodified.
+
+## Sora (font)
+
+Copyright 2018 The Sora Project Authors (https://github.com/sora-xor/sora-font)
+
+Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).
+Shipped with Vento as `fonts/Sora-*.ttf` and used for all UI text.

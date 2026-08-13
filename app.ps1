@@ -111,6 +111,22 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
 
+# Swaps a ResourceDictionary brush from pure CLR code. Doing the same through
+# the PowerShell indexer stores a PSObject wrapper that the WPF renderer later
+# fails to cast to Brush, and the XAML-declared resource brushes arrive frozen
+# so they cannot be mutated in place either.
+Add-Type -ReferencedAssemblies PresentationFramework, PresentationCore, WindowsBase, System.Xaml -TypeDefinition @'
+namespace VentoNative {
+    public static class Res {
+        public static void SetBrush(System.Windows.ResourceDictionary dict, string key, System.Windows.Media.Color color) {
+            var b = new System.Windows.Media.SolidColorBrush(color);
+            b.Freeze();
+            dict[key] = b;
+        }
+    }
+}
+'@
+
 # Own taskbar identity: without this the window is grouped under
 # powershell.exe and the taskbar shows the PowerShell icon.
 try {
@@ -631,14 +647,34 @@ $script:psWorker.Runspace = $script:runspace
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Vento" Width="700" Height="890"
+        Title="Vento" Width="720" Height="910"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         WindowStartupLocation="CenterScreen" ResizeMode="CanMinimize"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
-        FontFamily="Segoe UI Variable Display, Segoe UI">
+        FontFamily="__FONTS__#Sora, Segoe UI">
   <Window.Resources>
+    <!-- Sirocco thermal palette: every color below is rewritten each tick by
+         Apply-Thermal, lerped between the cool/warm/hot anchor palettes. -->
+    <SolidColorBrush x:Key="AccentBrush" Color="#6FB1FF"/>
+    <SolidColorBrush x:Key="AccentSoftBrush" Color="#266FB1FF"/>
+    <SolidColorBrush x:Key="ThInkBrush" Color="#EDF1F8"/>
+    <SolidColorBrush x:Key="ThDimBrush" Color="#8FA3BC"/>
+    <SolidColorBrush x:Key="ThFaintBrush" Color="#5A6B84"/>
+    <SolidColorBrush x:Key="ThTileBrush" Color="#10151D"/>
+    <SolidColorBrush x:Key="ThTrackBrush" Color="#16202E"/>
+    <SolidColorBrush x:Key="ThGridBrush" Color="#151D2A"/>
+    <SolidColorBrush x:Key="ThChartABrush" Color="#D8E4F2"/>
+    <DrawingBrush x:Key="BarSegmentBrush" TileMode="Tile" Viewport="0,0,9,6" ViewportUnits="Absolute" Viewbox="0,0,9,6" ViewboxUnits="Absolute" Stretch="None">
+      <DrawingBrush.Drawing>
+        <GeometryDrawing Brush="#0A0E16">
+          <GeometryDrawing.Geometry>
+            <RectangleGeometry Rect="7,0,2,6"/>
+          </GeometryDrawing.Geometry>
+        </GeometryDrawing>
+      </DrawingBrush.Drawing>
+    </DrawingBrush>
     <Style x:Key="TitleBtn" TargetType="Button">
-      <Setter Property="Width" Value="44"/>
+      <Setter Property="Width" Value="40"/>
       <Setter Property="Height" Value="30"/>
       <Setter Property="Foreground" Value="#8A93A6"/>
       <Setter Property="Background" Value="Transparent"/>
@@ -652,8 +688,11 @@ $xaml = @'
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bg" Property="Background" Value="#1B2130"/>
-                <Setter Property="Foreground" Value="#E6EAF2"/>
+                <Setter TargetName="bg" Property="Background" Value="#1A2233"/>
+                <Setter Property="Foreground" Value="#ECF0F7"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#233048"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -673,56 +712,197 @@ $xaml = @'
                 <Setter TargetName="bg" Property="Background" Value="#E5484D"/>
                 <Setter Property="Foreground" Value="#FFFFFF"/>
               </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#C13F45"/>
+              </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
         </Setter.Value>
       </Setter>
     </Style>
     <Style x:Key="Card" TargetType="Border">
-      <Setter Property="Background" Value="#12161F"/>
-      <Setter Property="BorderBrush" Value="#1E2430"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="CornerRadius" Value="14"/>
-      <Setter Property="Padding" Value="18,14"/>
+      <Setter Property="CornerRadius" Value="12"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Background" Value="{DynamicResource ThTileBrush}"/>
+    </Style>
+    <Style x:Key="CardInner" TargetType="Border">
+      <Setter Property="CornerRadius" Value="11"/>
+      <Setter Property="BorderThickness" Value="0,1,0,0"/>
+      <Setter Property="BorderBrush" Value="#0DFFFFFF"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Padding" Value="16,12"/>
     </Style>
     <Style x:Key="CardTitle" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#8A93A6"/>
-      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Foreground" Value="{DynamicResource ThDimBrush}"/>
+      <Setter Property="FontSize" Value="10"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
     </Style>
+    <Style x:Key="AccentTick" TargetType="Rectangle">
+      <Setter Property="Width" Value="3"/>
+      <Setter Property="Height" Value="10"/>
+      <Setter Property="RadiusX" Value="1.5"/>
+      <Setter Property="RadiusY" Value="1.5"/>
+      <Setter Property="Fill" Value="{DynamicResource AccentBrush}"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
     <Style x:Key="BigValue" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#E6EAF2"/>
-      <Setter Property="FontSize" Value="40"/>
+      <Setter Property="Foreground" Value="{DynamicResource ThInkBrush}"/>
+      <Setter Property="FontSize" Value="30"/>
       <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="MinWidth" Value="40"/>
+      <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
     </Style>
     <Style x:Key="MidValue" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#E6EAF2"/>
-      <Setter Property="FontSize" Value="22"/>
+      <Setter Property="Foreground" Value="{DynamicResource ThInkBrush}"/>
+      <Setter Property="FontSize" Value="24"/>
       <Setter Property="FontWeight" Value="Bold"/>
-      <Setter Property="Margin" Value="0,8,0,0"/>
+      <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
+      <Setter Property="Margin" Value="0,6,0,0"/>
+    </Style>
+    <Style x:Key="UnitLabel" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource ThFaintBrush}"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="VerticalAlignment" Value="Bottom"/>
+      <Setter Property="Margin" Value="5,0,0,4"/>
     </Style>
     <Style x:Key="CardSub" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#566073"/>
-      <Setter Property="FontSize" Value="11"/>
-      <Setter Property="Margin" Value="0,5,0,0"/>
+      <Setter Property="Foreground" Value="{DynamicResource ThFaintBrush}"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="Margin" Value="0,4,0,0"/>
       <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
     </Style>
-    <Style x:Key="SegBtn" TargetType="Button">
-      <Setter Property="Foreground" Value="#8A93A6"/>
-      <Setter Property="Background" Value="Transparent"/>
+    <Style x:Key="IconChip" TargetType="Border">
+      <Setter Property="Width" Value="24"/>
+      <Setter Property="Height" Value="24"/>
+      <Setter Property="CornerRadius" Value="7"/>
+      <Setter Property="Background" Value="#141B2A"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="VerticalAlignment" Value="Top"/>
+    </Style>
+    <Style x:Key="IconChipAccent" TargetType="Border" BasedOn="{StaticResource IconChip}">
+      <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+    </Style>
+    <Style x:Key="ChipGlyph" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
       <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Foreground" Value="#AAB6CC"/>
+      <Setter Property="HorizontalAlignment" Value="Center"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style x:Key="ChipGlyphAccent" TargetType="TextBlock" BasedOn="{StaticResource ChipGlyph}">
+      <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+    </Style>
+    <Style x:Key="SegBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="{DynamicResource ThDimBrush}"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="FontSize" Value="12"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Margin" Value="2"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="9" Padding="0,9">
+            <Grid>
+              <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="7"/>
+              <Border x:Name="hov" Background="#12FFFFFF" CornerRadius="7" Opacity="0"/>
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,10"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="hov" Property="Opacity" Value="1"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="hov" Property="Opacity" Value="1"/>
+                <Setter TargetName="hov" Property="Background" Value="#1CFFFFFF"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="PrimaryBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="#0B0E14"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Height" Value="34"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid>
+              <Border x:Name="bg" Background="{DynamicResource AccentBrush}" CornerRadius="9"/>
+              <Border x:Name="sheen" CornerRadius="9" Opacity="0.35" IsHitTestVisible="False">
+                <Border.Background>
+                  <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#40FFFFFF" Offset="0"/>
+                    <GradientStop Color="#00FFFFFF" Offset="0.55"/>
+                  </LinearGradientBrush>
+                </Border.Background>
+              </Border>
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              <Border x:Name="dim" CornerRadius="9" Background="#000000" Opacity="0" IsHitTestVisible="False"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="sheen" Property="Opacity" Value="0.55"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="dim" Property="Opacity" Value="0.18"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="GhostBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="#8A93A6"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Height" Value="34"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bg" Background="{TemplateBinding Background}" BorderBrush="#232C3E" BorderThickness="1" CornerRadius="9">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bg" Property="Background" Value="#1B2130"/>
+                <Setter TargetName="bg" Property="Background" Value="#151C2A"/>
+                <Setter TargetName="bg" Property="BorderBrush" Value="#303A50"/>
+                <Setter Property="Foreground" Value="#ECF0F7"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#1B2334"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="SubtleBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="#8A93A6"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Height" Value="26"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bg" Background="{TemplateBinding Background}" BorderBrush="#232C3E" BorderThickness="1" CornerRadius="7" Padding="12,0">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#1B2232"/>
+                <Setter TargetName="bg" Property="BorderBrush" Value="#303A50"/>
+                <Setter Property="Foreground" Value="#ECF0F7"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#151C2A"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -730,21 +910,48 @@ $xaml = @'
       </Setter>
     </Style>
     <Style x:Key="SetLabel" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#AEB6C6"/>
+      <Setter Property="Foreground" Value="#C9D2E2"/>
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
     <Style x:Key="SetValue" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#E6EAF2"/>
+      <Setter Property="Foreground" Value="#ECF0F7"/>
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
       <Setter Property="HorizontalAlignment" Value="Right"/>
     </Style>
     <Style x:Key="SetCheck" TargetType="CheckBox">
-      <Setter Property="Foreground" Value="#AEB6C6"/>
+      <Setter Property="Foreground" Value="#C9D2E2"/>
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="Margin" Value="0,10,0,0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <StackPanel Orientation="Horizontal" Background="Transparent">
+              <Grid Width="18" Height="18" VerticalAlignment="Center">
+                <Border x:Name="box" CornerRadius="5" Background="#0C1119" BorderBrush="#2B3447" BorderThickness="1.5"/>
+                <Border x:Name="fill" CornerRadius="5" Background="{DynamicResource AccentBrush}" Opacity="0"/>
+                <Path x:Name="check" Data="M 4.5 9.5 L 7.5 12.5 L 13.5 5.5" Stroke="#07090D" StrokeThickness="2"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Opacity="0"/>
+              </Grid>
+              <ContentPresenter Margin="9,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="fill" Property="Opacity" Value="1"/>
+                <Setter TargetName="check" Property="Opacity" Value="1"/>
+                <Setter TargetName="box" Property="BorderThickness" Value="0"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="box" Property="BorderBrush" Value="#41506C"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
     <Style x:Key="SetSlider" TargetType="Slider">
       <Setter Property="Foreground" Value="#4C8DFF"/>
@@ -755,7 +962,7 @@ $xaml = @'
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Slider">
-            <Grid VerticalAlignment="Center" Height="18">
+            <Grid VerticalAlignment="Center" Height="20">
               <Track x:Name="PART_Track">
                 <Track.DecreaseRepeatButton>
                   <RepeatButton IsTabStop="False" Command="Slider.DecreaseLarge">
@@ -771,17 +978,26 @@ $xaml = @'
                   <RepeatButton IsTabStop="False" Command="Slider.IncreaseLarge">
                     <RepeatButton.Template>
                       <ControlTemplate TargetType="RepeatButton">
-                        <Border Height="4" CornerRadius="2" Background="#242B3A"/>
+                        <Border Height="4" CornerRadius="2" Background="#1A2233"/>
                       </ControlTemplate>
                     </RepeatButton.Template>
                   </RepeatButton>
                 </Track.IncreaseRepeatButton>
                 <Track.Thumb>
-                  <Thumb Width="14" Height="14">
+                  <Thumb Width="15" Height="15">
                     <Thumb.Template>
                       <ControlTemplate TargetType="Thumb">
-                        <Ellipse Fill="#E6EAF2" StrokeThickness="2"
-                                 Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}"/>
+                        <Ellipse x:Name="knob" Fill="#ECF0F7" StrokeThickness="2"
+                                 Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}">
+                          <Ellipse.Effect>
+                            <DropShadowEffect ShadowDepth="1" Direction="270" BlurRadius="4" Opacity="0.4" Color="#000000"/>
+                          </Ellipse.Effect>
+                        </Ellipse>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="knob" Property="Fill" Value="#FFFFFF"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
                       </ControlTemplate>
                     </Thumb.Template>
                   </Thumb>
@@ -792,458 +1008,781 @@ $xaml = @'
         </Setter.Value>
       </Setter>
     </Style>
+    <Style TargetType="ScrollBar">
+      <Setter Property="OverridesDefaultStyle" Value="True"/>
+      <Setter Property="Width" Value="8"/>
+      <Setter Property="MinWidth" Value="8"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="Transparent">
+              <Border CornerRadius="4" Background="#0C1119" Opacity="0.6"/>
+              <Track x:Name="PART_Track" IsDirectionReversed="True">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageUpCommand" Focusable="False" IsTabStop="False">
+                    <RepeatButton.Template>
+                      <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                      </ControlTemplate>
+                    </RepeatButton.Template>
+                  </RepeatButton>
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageDownCommand" Focusable="False" IsTabStop="False">
+                    <RepeatButton.Template>
+                      <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                      </ControlTemplate>
+                    </RepeatButton.Template>
+                  </RepeatButton>
+                </Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Focusable="False">
+                    <Thumb.Template>
+                      <ControlTemplate TargetType="Thumb">
+                        <Border x:Name="tb" CornerRadius="4" Background="#2B3346" MinHeight="24" Margin="1,0"/>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="tb" Property="Background" Value="#3E4A66"/>
+                          </Trigger>
+                          <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="tb" Property="Background" Value="#4C5A7C"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="Orientation" Value="Horizontal">
+                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Width" Value="Auto"/>
+          <Setter Property="Height" Value="8"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+    <Style TargetType="ToolTip">
+      <Setter Property="OverridesDefaultStyle" Value="True"/>
+      <Setter Property="HasDropShadow" Value="False"/>
+      <Setter Property="Foreground" Value="#C9D2E2"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ToolTip">
+            <Border Background="#171E2D" BorderBrush="#2B3447" BorderThickness="1" CornerRadius="8" Padding="10,6">
+              <ContentPresenter/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </Window.Resources>
 
-  <Border CornerRadius="16" Background="#0B0E14" BorderBrush="#1E2430" BorderThickness="1">
-    <Grid>
-      <Grid.RowDefinitions>
-        <RowDefinition Height="46"/>
-        <RowDefinition Height="*"/>
-        <RowDefinition Height="Auto"/>
-      </Grid.RowDefinitions>
+  <Grid Margin="10">
+    <Border x:Name="WinBase" CornerRadius="18" Background="#0A0D13">
+      <Border.Effect>
+        <DropShadowEffect ShadowDepth="0" BlurRadius="18" Opacity="0.55" Color="#000000"/>
+      </Border.Effect>
+    </Border>
+    <Border x:Name="WinFrame" CornerRadius="18" BorderThickness="1">
+      <Border.BorderBrush>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+          <GradientStop Color="#2E3850" Offset="0"/>
+          <GradientStop Color="#161C2A" Offset="1"/>
+        </LinearGradientBrush>
+      </Border.BorderBrush>
+      <Border.Background>
+        <RadialGradientBrush Center="0.5,0" GradientOrigin="0.5,0" RadiusX="0.9" RadiusY="0.55">
+          <GradientStop Color="#14202E" Offset="0"/>
+          <GradientStop Color="#0A0D13" Offset="1"/>
+        </RadialGradientBrush>
+      </Border.Background>
+      <Border CornerRadius="17" BorderThickness="0,1,0,0" BorderBrush="#0FFFFFFF">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="48"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
 
-      <!-- Title bar -->
-      <Grid x:Name="TitleBar" Grid.Row="0" Background="Transparent">
-        <StackPanel Orientation="Horizontal" Margin="18,0,0,0" VerticalAlignment="Center">
-          <Grid Width="16" Height="16">
-            <Ellipse x:Name="LogoOuter" Fill="#4C8DFF"/>
-            <Ellipse Width="6" Height="6" Fill="#0B0E14"/>
+          <!-- Title bar -->
+          <Grid x:Name="TitleBar" Grid.Row="0" Background="Transparent">
+            <StackPanel Orientation="Horizontal" Margin="18,0,0,0" VerticalAlignment="Center">
+              <Grid Width="18" Height="18">
+                <Path x:Name="LogoOuter" Fill="#4C8DFF" Stretch="Uniform"
+                      Data="M12,12 C12,5.6 16.4,2.6 20.2,4.8 C17.6,9.2 14.6,11.2 12,12 Z M12,12 C17.54,15.2 17.94,20.51 14.14,22.7 C11.63,18.25 11.39,14.65 12,12 Z M12,12 C6.46,15.2 1.66,12.89 1.67,8.5 C6.78,8.55 10.01,10.15 12,12 Z"/>
+                <Ellipse Width="4" Height="4" Fill="#07090D"/>
+              </Grid>
+              <TextBlock Text="V&#x200A;E&#x200A;N&#x200A;T&#x200A;O" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource ThInkBrush}" Margin="9,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0">
+              <Border x:Name="StateBadge" CornerRadius="8" BorderThickness="1" Padding="10,4" Margin="0,0,10,0" VerticalAlignment="Center"
+                      Background="#1A6FB1FF" BorderBrush="#406FB1FF">
+                <StackPanel Orientation="Horizontal">
+                  <Ellipse Width="7" Height="7" Fill="{DynamicResource AccentBrush}" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="StateBadgeText" Foreground="{DynamicResource AccentBrush}" FontSize="10" FontWeight="Bold"
+                             Margin="7,0,0,0" VerticalAlignment="Center" Text="STARTING"/>
+                </StackPanel>
+              </Border>
+              <Button x:Name="BtnSettings" Style="{StaticResource TitleBtn}" Content="&#xE713;" ToolTip="Settings" Margin="0,0,4,0"/>
+              <Button x:Name="BtnMin" Style="{StaticResource TitleBtn}" Content="&#xE921;" ToolTip="Minimize to tray"/>
+              <Button x:Name="BtnClose" Style="{StaticResource TitleBtnClose}" Content="&#xE8BB;" ToolTip="Close"/>
+            </StackPanel>
+            <Border Height="1" VerticalAlignment="Bottom" Margin="18,0">
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                  <GradientStop Color="#001E2736" Offset="0"/>
+                  <GradientStop Color="#1E2736" Offset="0.5"/>
+                  <GradientStop Color="#001E2736" Offset="1"/>
+                </LinearGradientBrush>
+              </Border.Background>
+            </Border>
           </Grid>
-          <TextBlock Text="VENTO" FontSize="13" FontWeight="Bold" Foreground="#E6EAF2" Margin="9,0,0,0" VerticalAlignment="Center"/>
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0">
-          <Button x:Name="BtnSettings" Style="{StaticResource TitleBtn}" Content="&#xE713;" ToolTip="Settings"/>
-          <Button x:Name="BtnMin" Style="{StaticResource TitleBtn}" Content="&#xE921;" ToolTip="Minimize to tray"/>
-          <Button x:Name="BtnClose" Style="{StaticResource TitleBtnClose}" Content="&#xE8BB;" ToolTip="Close"/>
-        </StackPanel>
-      </Grid>
 
-      <!-- Main content -->
-      <Grid Grid.Row="1" Margin="16,2,16,0">
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-
-        <!-- Temperatures -->
-        <Grid Grid.Row="0">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="*"/>
-          </Grid.ColumnDefinitions>
-          <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,5,0">
-            <StackPanel>
-              <TextBlock Style="{StaticResource CardTitle}" Text="CPU TEMPERATURE"/>
-              <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="CpuTempVal" Style="{StaticResource BigValue}" Text="--"/>
-                <TextBlock Text="&#176;C" Foreground="#566073" FontSize="16" VerticalAlignment="Bottom" Margin="4,0,0,8"/>
-              </StackPanel>
-              <Border x:Name="CpuBarTrack" Height="5" CornerRadius="2.5" Background="#1C2230" Margin="0,4,0,0">
-                <Border x:Name="CpuBarFill" Height="5" CornerRadius="2.5" Background="#3DD68C" HorizontalAlignment="Left" Width="0"/>
-              </Border>
-              <Grid x:Name="CpuSparkHost" Height="26" Margin="0,8,0,0" ClipToBounds="True">
-                <Polyline x:Name="CpuSpark" Stroke="#3DD68C" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
-              </Grid>
-              <TextBlock x:Name="CpuNameText" Style="{StaticResource CardSub}" Text="Processor"/>
-            </StackPanel>
-          </Border>
-          <Border Grid.Column="1" Style="{StaticResource Card}" Margin="5,0,0,0">
-            <StackPanel>
-              <TextBlock Style="{StaticResource CardTitle}" Text="GPU TEMPERATURE"/>
-              <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="GpuTempVal" Style="{StaticResource BigValue}" Text="--"/>
-                <TextBlock Text="&#176;C" Foreground="#566073" FontSize="16" VerticalAlignment="Bottom" Margin="4,0,0,8"/>
-              </StackPanel>
-              <Border x:Name="GpuBarTrack" Height="5" CornerRadius="2.5" Background="#1C2230" Margin="0,4,0,0">
-                <Border x:Name="GpuBarFill" Height="5" CornerRadius="2.5" Background="#3DD68C" HorizontalAlignment="Left" Width="0"/>
-              </Border>
-              <Grid x:Name="GpuSparkHost" Height="26" Margin="0,8,0,0" ClipToBounds="True">
-                <Polyline x:Name="GpuSpark" Stroke="#3DD68C" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
-              </Grid>
-              <TextBlock x:Name="GpuNameText" Style="{StaticResource CardSub}" Text="Graphics card"/>
-            </StackPanel>
-          </Border>
-        </Grid>
-
-        <!-- Storage / board temperatures -->
-        <Grid Grid.Row="1" Margin="0,10,0,0">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="*"/>
-          </Grid.ColumnDefinitions>
-          <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,5,0">
-            <StackPanel>
-              <TextBlock Style="{StaticResource CardTitle}" Text="SSD TEMPERATURE"/>
-              <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="SsdTempVal" Style="{StaticResource BigValue}" Text="--"/>
-                <TextBlock Text="&#176;C" Foreground="#566073" FontSize="16" VerticalAlignment="Bottom" Margin="4,0,0,8"/>
-              </StackPanel>
-              <Border x:Name="SsdBarTrack" Height="5" CornerRadius="2.5" Background="#1C2230" Margin="0,4,0,0">
-                <Border x:Name="SsdBarFill" Height="5" CornerRadius="2.5" Background="#3DD68C" HorizontalAlignment="Left" Width="0"/>
-              </Border>
-              <Grid x:Name="SsdSparkHost" Height="26" Margin="0,8,0,0" ClipToBounds="True">
-                <Polyline x:Name="SsdSpark" Stroke="#3DD68C" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
-              </Grid>
-              <TextBlock x:Name="SsdNameText" Style="{StaticResource CardSub}" Text="Drive"/>
-            </StackPanel>
-          </Border>
-          <Border Grid.Column="1" Style="{StaticResource Card}" Margin="5,0,0,0">
-            <StackPanel>
-              <TextBlock Style="{StaticResource CardTitle}" Text="BOARD TEMPERATURE"/>
-              <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="MbTempVal" Style="{StaticResource BigValue}" Text="--"/>
-                <TextBlock Text="&#176;C" Foreground="#566073" FontSize="16" VerticalAlignment="Bottom" Margin="4,0,0,8"/>
-              </StackPanel>
-              <Border x:Name="MbBarTrack" Height="5" CornerRadius="2.5" Background="#1C2230" Margin="0,4,0,0">
-                <Border x:Name="MbBarFill" Height="5" CornerRadius="2.5" Background="#3DD68C" HorizontalAlignment="Left" Width="0"/>
-              </Border>
-              <Grid x:Name="MbSparkHost" Height="26" Margin="0,8,0,0" ClipToBounds="True">
-                <Polyline x:Name="MbSpark" Stroke="#3DD68C" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
-              </Grid>
-              <TextBlock x:Name="MbNameText" Style="{StaticResource CardSub}" Text="Motherboard"/>
-            </StackPanel>
-          </Border>
-        </Grid>
-
-        <!-- Fans -->
-        <Grid Grid.Row="2" Margin="0,10,0,0">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="*"/>
-          </Grid.ColumnDefinitions>
-          <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,5,0">
-            <StackPanel>
-              <TextBlock Style="{StaticResource CardTitle}" Text="CPU FAN"/>
-              <TextBlock x:Name="CpuFanVal" Style="{StaticResource MidValue}" Text="--"/>
-              <TextBlock Style="{StaticResource CardSub}" Text="Cooler speed"/>
-            </StackPanel>
-          </Border>
-          <Border Grid.Column="1" Style="{StaticResource Card}" Margin="5,0">
-            <StackPanel>
-              <TextBlock Style="{StaticResource CardTitle}" Text="CASE FANS"/>
-              <TextBlock x:Name="CaseFanVal" Style="{StaticResource MidValue}" Text="--"/>
-              <TextBlock Style="{StaticResource CardSub}" Text="Hub speed"/>
-            </StackPanel>
-          </Border>
-          <Border Grid.Column="2" Style="{StaticResource Card}" Margin="5,0,0,0">
-            <StackPanel>
-              <TextBlock Style="{StaticResource CardTitle}" Text="GPU FANS"/>
-              <TextBlock x:Name="GpuFanVal" Style="{StaticResource MidValue}" Text="--"/>
-              <TextBlock Style="{StaticResource CardSub}" Text="Graphics card"/>
-            </StackPanel>
-          </Border>
-        </Grid>
-
-        <!-- Mode selector -->
-        <StackPanel Grid.Row="3" Margin="0,14,0,0">
-          <TextBlock Style="{StaticResource CardTitle}" Text="FAN MODE" Margin="2,0,0,6"/>
-          <Border Background="#10141E" BorderBrush="#1E2430" BorderThickness="1" CornerRadius="12" Padding="3">
-            <UniformGrid Columns="5">
-              <Button x:Name="BtnQuiet"  Style="{StaticResource SegBtn}" Content="Quiet"/>
-              <Button x:Name="BtnNormal" Style="{StaticResource SegBtn}" Content="Normal"/>
-              <Button x:Name="BtnPerf"   Style="{StaticResource SegBtn}" Content="Performance"/>
-              <Button x:Name="BtnCurve"  Style="{StaticResource SegBtn}" Content="Curve"/>
-              <Button x:Name="BtnAuto"   Style="{StaticResource SegBtn}" Content="Auto"/>
-            </UniformGrid>
-          </Border>
-        </StackPanel>
-
-        <!-- Mode panel: live settings for the active mode + fan activity -->
-        <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,10,0,2">
-          <Grid>
+          <!-- Main content -->
+          <Grid Grid.Row="1" Margin="16,4,16,0">
             <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <Grid Grid.Row="0">
-              <TextBlock x:Name="ModeSetTitle" Style="{StaticResource CardTitle}" Text="MODE" VerticalAlignment="Center"/>
-              <Button x:Name="BtnModeReset" Style="{StaticResource SegBtn}" Content="Reset" FontSize="11" Width="64"
-                      HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,-8,0,-8"
-                      ToolTip="Restore this mode's default settings"/>
-            </Grid>
-            <TextBlock Grid.Row="1" x:Name="ModeSetHint" Style="{StaticResource CardSub}" Text="" TextWrapping="Wrap" Visibility="Collapsed"/>
-            <Grid Grid.Row="2" x:Name="ModeSlots" Margin="0,10,0,0">
+
+            <!-- Hero: thermal core + halo + mode selector -->
+            <Grid Grid.Row="0" Height="212" Margin="2,0,2,0">
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="22"/>
+                <ColumnDefinition Width="216"/>
                 <ColumnDefinition Width="*"/>
               </Grid.ColumnDefinitions>
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-              </Grid.RowDefinitions>
-              <Grid x:Name="Slot1" Grid.Row="0" Grid.Column="0" Margin="0,0,0,7" Visibility="Collapsed">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="84"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="ML1" Style="{StaticResource SetLabel}"/>
-                <Slider Grid.Column="1" x:Name="MS1" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                <TextBlock Grid.Column="2" x:Name="MV1" Style="{StaticResource SetValue}"/>
-              </Grid>
-              <Grid x:Name="Slot2" Grid.Row="0" Grid.Column="2" Margin="0,0,0,7" Visibility="Collapsed">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="84"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="ML2" Style="{StaticResource SetLabel}"/>
-                <Slider Grid.Column="1" x:Name="MS2" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                <TextBlock Grid.Column="2" x:Name="MV2" Style="{StaticResource SetValue}"/>
-              </Grid>
-              <Grid x:Name="Slot3" Grid.Row="1" Grid.Column="0" Visibility="Collapsed">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="84"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="ML3" Style="{StaticResource SetLabel}"/>
-                <Slider Grid.Column="1" x:Name="MS3" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                <TextBlock Grid.Column="2" x:Name="MV3" Style="{StaticResource SetValue}"/>
-              </Grid>
-              <Grid x:Name="Slot4" Grid.Row="1" Grid.Column="2" Visibility="Collapsed">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="84"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="ML4" Style="{StaticResource SetLabel}"/>
-                <Slider Grid.Column="1" x:Name="MS4" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                <TextBlock Grid.Column="2" x:Name="MV4" Style="{StaticResource SetValue}"/>
-              </Grid>
-            </Grid>
-            <Grid Grid.Row="3" Margin="0,10,0,0">
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-              </Grid.RowDefinitions>
-              <Grid>
-                <TextBlock Style="{StaticResource CardTitle}" Text="FAN ACTIVITY"/>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                  <Ellipse x:Name="LegCpuDot" Width="7" Height="7" Fill="#4C8DFF" VerticalAlignment="Center"/>
-                  <TextBlock Text="CPU fan" Foreground="#566073" FontSize="10" Margin="5,0,10,0" VerticalAlignment="Center"/>
-                  <Ellipse x:Name="LegCaseDot" Width="7" Height="7" Fill="#3DD68C" VerticalAlignment="Center"/>
-                  <TextBlock Text="Case fans" Foreground="#566073" FontSize="10" Margin="5,0,0,0" VerticalAlignment="Center"/>
+              <Grid Width="206" Height="206" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Ellipse x:Name="OrbGlow" Width="204" Height="204" Opacity="0.55"/>
+                <Canvas Width="206" Height="206">
+                  <Path x:Name="HaloTrack" Stroke="{DynamicResource ThTrackBrush}" StrokeThickness="7"
+                        StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                        Data="M 23.3,149 A 92,92 0 1 1 182.7,149"/>
+                  <Path x:Name="HaloFill" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                  <Ellipse x:Name="HaloDot" Width="9" Height="9" Fill="#FFFFFF" Visibility="Collapsed"/>
+                </Canvas>
+                <Ellipse x:Name="OrbCore" Width="150" Height="150" StrokeThickness="1.5"/>
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                  <TextBlock x:Name="OrbVal" FontSize="42" FontWeight="Bold" HorizontalAlignment="Center"
+                             Typography.NumeralAlignment="Tabular" Foreground="#0A1A33" Text="--"/>
+                  <TextBlock x:Name="OrbLabel" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center"
+                             Foreground="#9E0A1A33" Margin="0,1,0,0" Text=""/>
                 </StackPanel>
               </Grid>
-              <Grid x:Name="FanSparkHost" Grid.Row="1" MinHeight="30" Margin="0,8,0,0" ClipToBounds="True">
-                <Polyline x:Name="CaseFanSpark" Stroke="#3DD68C" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
-                <Polyline x:Name="CpuFanSpark" Stroke="#4C8DFF" StrokeThickness="1.5" StrokeLineJoin="Round" Opacity="0.8"/>
-              </Grid>
+              <StackPanel Grid.Column="1" Margin="22,0,0,0" VerticalAlignment="Center">
+                <TextBlock x:Name="HeroTitle" FontSize="23" FontWeight="Bold" Foreground="{DynamicResource ThInkBrush}" Text="Starting sensors"/>
+                <TextBlock x:Name="HeroSub" FontSize="12" Foreground="{DynamicResource ThDimBrush}" Margin="0,4,0,0" Text="waiting for the first readings"/>
+                <StackPanel Orientation="Horizontal" Margin="1,12,0,0">
+                  <TextBlock x:Name="LabCool" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource ThFaintBrush}" Text="C O O L"/>
+                  <TextBlock x:Name="LabWarm" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource ThFaintBrush}" Margin="18,0,0,0" Text="W A R M"/>
+                  <TextBlock x:Name="LabHot" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource ThFaintBrush}" Margin="18,0,0,0" Text="H O T"/>
+                </StackPanel>
+                <Border x:Name="ModeShell" Background="{DynamicResource ThTileBrush}" BorderThickness="1" BorderBrush="#246FB1FF" CornerRadius="12" Padding="3" Margin="0,14,0,0" HorizontalAlignment="Left">
+                  <UniformGrid Columns="5" Width="426">
+                    <Button x:Name="BtnQuiet"  Style="{StaticResource SegBtn}" Content="Quiet"/>
+                    <Button x:Name="BtnNormal" Style="{StaticResource SegBtn}" Content="Normal"/>
+                    <Button x:Name="BtnPerf"   Style="{StaticResource SegBtn}" Content="Perf"/>
+                    <Button x:Name="BtnCurve"  Style="{StaticResource SegBtn}" Content="Curve"/>
+                    <Button x:Name="BtnAuto"   Style="{StaticResource SegBtn}" Content="Auto"/>
+                  </UniformGrid>
+                </Border>
+              </StackPanel>
             </Grid>
+
+            <!-- section: temperatures -->
+            <Grid Grid.Row="1" Margin="2,10,2,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource CardTitle}" Foreground="{DynamicResource ThFaintBrush}" Text="T E M P E R A T U R E S"/>
+              <Border Grid.Column="1" x:Name="SectLine1" Height="1" Margin="10,0,0,0" VerticalAlignment="Center" Background="#226FB1FF"/>
+            </Grid>
+
+            <!-- Temperatures: four tiles -->
+            <Grid Grid.Row="2" Margin="0,6,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,8,0">
+                <Grid>
+                  <Border x:Name="CpuHair" Height="1.5" VerticalAlignment="Top" Margin="10,0" CornerRadius="1"/>
+                  <Border Style="{StaticResource CardInner}" Padding="12,10">
+                    <StackPanel>
+                      <StackPanel Orientation="Horizontal">
+                        <Border Style="{StaticResource IconChip}" Width="20" Height="20" CornerRadius="6" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
+                          <TextBlock Style="{StaticResource ChipGlyph}" FontSize="11" Foreground="{DynamicResource AccentBrush}" Text="&#xE950;"/>
+                        </Border>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="CPU" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                        <Border x:Name="CpuWarnFlag" CornerRadius="4" Padding="5,1" Margin="7,0,0,0" VerticalAlignment="Center"
+                                Background="{DynamicResource AccentSoftBrush}" Visibility="Collapsed">
+                          <TextBlock x:Name="CpuWarnText" FontSize="8" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Text=""/>
+                        </Border>
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                        <TextBlock x:Name="CpuTempVal" Style="{StaticResource BigValue}" Text="--"/>
+                        <TextBlock Text="&#176;" Foreground="{DynamicResource ThFaintBrush}" FontSize="15" FontWeight="SemiBold" Margin="2,2,0,0"/>
+                      </StackPanel>
+                      <TextBlock x:Name="CpuNameText" Style="{StaticResource CardSub}" Text="Processor" Margin="0,1,0,0"/>
+                      <Grid x:Name="CpuSparkHost" Height="18" Margin="0,7,0,0" ClipToBounds="True">
+                        <Polygon x:Name="CpuSparkFill"/>
+                        <Polyline x:Name="CpuSpark" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                      </Grid>
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Border>
+              <Border Grid.Column="1" Style="{StaticResource Card}" Margin="0,0,8,0">
+                <Grid>
+                  <Border x:Name="GpuHair" Height="1.5" VerticalAlignment="Top" Margin="10,0" CornerRadius="1"/>
+                  <Border Style="{StaticResource CardInner}" Padding="12,10">
+                    <StackPanel>
+                      <StackPanel Orientation="Horizontal">
+                        <Border Style="{StaticResource IconChip}" Width="20" Height="20" CornerRadius="6" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
+                          <TextBlock Style="{StaticResource ChipGlyph}" FontSize="11" Foreground="{DynamicResource AccentBrush}" Text="&#xE7F4;"/>
+                        </Border>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="GPU" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                        <Border x:Name="GpuWarnFlag" CornerRadius="4" Padding="5,1" Margin="7,0,0,0" VerticalAlignment="Center"
+                                Background="{DynamicResource AccentSoftBrush}" Visibility="Collapsed">
+                          <TextBlock x:Name="GpuWarnText" FontSize="8" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Text=""/>
+                        </Border>
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                        <TextBlock x:Name="GpuTempVal" Style="{StaticResource BigValue}" Text="--"/>
+                        <TextBlock Text="&#176;" Foreground="{DynamicResource ThFaintBrush}" FontSize="15" FontWeight="SemiBold" Margin="2,2,0,0"/>
+                      </StackPanel>
+                      <TextBlock x:Name="GpuNameText" Style="{StaticResource CardSub}" Text="Graphics card" Margin="0,1,0,0"/>
+                      <Grid x:Name="GpuSparkHost" Height="18" Margin="0,7,0,0" ClipToBounds="True">
+                        <Polygon x:Name="GpuSparkFill"/>
+                        <Polyline x:Name="GpuSpark" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                      </Grid>
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Border>
+              <Border Grid.Column="2" Style="{StaticResource Card}" Margin="0,0,8,0">
+                <Grid>
+                  <Border x:Name="SsdHair" Height="1.5" VerticalAlignment="Top" Margin="10,0" CornerRadius="1"/>
+                  <Border Style="{StaticResource CardInner}" Padding="12,10">
+                    <StackPanel>
+                      <StackPanel Orientation="Horizontal">
+                        <Border Style="{StaticResource IconChip}" Width="20" Height="20" CornerRadius="6" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
+                          <TextBlock Style="{StaticResource ChipGlyph}" FontSize="11" Foreground="{DynamicResource AccentBrush}" Text="&#xEDA2;"/>
+                        </Border>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="SSD" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                        <Border x:Name="SsdWarnFlag" CornerRadius="4" Padding="5,1" Margin="7,0,0,0" VerticalAlignment="Center"
+                                Background="{DynamicResource AccentSoftBrush}" Visibility="Collapsed">
+                          <TextBlock x:Name="SsdWarnText" FontSize="8" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Text=""/>
+                        </Border>
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                        <TextBlock x:Name="SsdTempVal" Style="{StaticResource BigValue}" Text="--"/>
+                        <TextBlock Text="&#176;" Foreground="{DynamicResource ThFaintBrush}" FontSize="15" FontWeight="SemiBold" Margin="2,2,0,0"/>
+                      </StackPanel>
+                      <TextBlock x:Name="SsdNameText" Style="{StaticResource CardSub}" Text="Drive" Margin="0,1,0,0"/>
+                      <Grid x:Name="SsdSparkHost" Height="18" Margin="0,7,0,0" ClipToBounds="True">
+                        <Polygon x:Name="SsdSparkFill"/>
+                        <Polyline x:Name="SsdSpark" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                      </Grid>
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Border>
+              <Border Grid.Column="3" Style="{StaticResource Card}">
+                <Grid>
+                  <Border x:Name="MbHair" Height="1.5" VerticalAlignment="Top" Margin="10,0" CornerRadius="1"/>
+                  <Border Style="{StaticResource CardInner}" Padding="12,10">
+                    <StackPanel>
+                      <StackPanel Orientation="Horizontal">
+                        <Border Style="{StaticResource IconChip}" Width="20" Height="20" CornerRadius="6" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
+                          <TextBlock Style="{StaticResource ChipGlyph}" FontSize="11" Foreground="{DynamicResource AccentBrush}" Text="&#xE977;"/>
+                        </Border>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="BOARD" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                        <Border x:Name="MbWarnFlag" CornerRadius="4" Padding="5,1" Margin="7,0,0,0" VerticalAlignment="Center"
+                                Background="{DynamicResource AccentSoftBrush}" Visibility="Collapsed">
+                          <TextBlock x:Name="MbWarnText" FontSize="8" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Text=""/>
+                        </Border>
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                        <TextBlock x:Name="MbTempVal" Style="{StaticResource BigValue}" Text="--"/>
+                        <TextBlock Text="&#176;" Foreground="{DynamicResource ThFaintBrush}" FontSize="15" FontWeight="SemiBold" Margin="2,2,0,0"/>
+                      </StackPanel>
+                      <TextBlock x:Name="MbNameText" Style="{StaticResource CardSub}" Text="Motherboard" Margin="0,1,0,0"/>
+                      <Grid x:Name="MbSparkHost" Height="18" Margin="0,7,0,0" ClipToBounds="True">
+                        <Polygon x:Name="MbSparkFill"/>
+                        <Polyline x:Name="MbSpark" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                      </Grid>
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Border>
+            </Grid>
+
+
+            <!-- section: fans -->
+            <Grid Grid.Row="3" Margin="2,10,2,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource CardTitle}" Foreground="{DynamicResource ThFaintBrush}" Text="F A N S"/>
+              <Border Grid.Column="1" x:Name="SectLine2" Height="1" Margin="10,0,0,0" VerticalAlignment="Center" Background="#226FB1FF"/>
+            </Grid>
+
+            <!-- Fans -->
+            <Grid Grid.Row="4" Margin="0,6,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,8,0">
+                <Border Style="{StaticResource CardInner}" Padding="12,10">
+                  <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                      <Border Style="{StaticResource IconChip}" Width="20" Height="20" CornerRadius="6" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
+                        <Grid Width="14" Height="14">
+                          <Ellipse Stroke="{DynamicResource AccentBrush}" StrokeThickness="1" Opacity="0.55"/>
+                          <Path x:Name="RotorCpu" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Margin="1.5" RenderTransformOrigin="0.5,0.5"
+                                Data="M 12,10.8 Q 14.4,5.6 17.6,8.6 Q 15,11 12,10.8 Z M 13.04,12.6 Q 16.34,17.28 12.14,18.55 Q 11.37,15.1 13.04,12.6 Z M 10.96,12.6 Q 5.26,13.12 6.26,8.85 Q 9.63,9.9 10.96,12.6 Z"/>
+                        </Grid>
+                      </Border>
+                      <TextBlock Style="{StaticResource CardTitle}" Text="CPU FAN" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock x:Name="CpuFanVal" Style="{StaticResource MidValue}" Text="--"/>
+                      <TextBlock Style="{StaticResource UnitLabel}" Text="RPM"/>
+                    </StackPanel>
+                    <Border x:Name="CpuFanRailTrack" Height="3" CornerRadius="2" Background="{DynamicResource ThTrackBrush}" Margin="0,8,0,2">
+                      <Border x:Name="CpuFanRail" Height="3" CornerRadius="2" HorizontalAlignment="Left" Width="0" Background="{DynamicResource AccentBrush}"/>
+                    </Border>
+                  </StackPanel>
+                </Border>
+              </Border>
+              <Border Grid.Column="1" Style="{StaticResource Card}" Margin="0,0,8,0">
+                <Border Style="{StaticResource CardInner}" Padding="12,10">
+                  <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                      <Border Style="{StaticResource IconChip}" Width="20" Height="20" CornerRadius="6" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
+                        <Grid Width="14" Height="14">
+                          <Ellipse Stroke="{DynamicResource AccentBrush}" StrokeThickness="1" Opacity="0.55"/>
+                          <Path x:Name="RotorCase" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Margin="1.5" RenderTransformOrigin="0.5,0.5"
+                                Data="M 12,10.8 Q 14.4,5.6 17.6,8.6 Q 15,11 12,10.8 Z M 13.04,12.6 Q 16.34,17.28 12.14,18.55 Q 11.37,15.1 13.04,12.6 Z M 10.96,12.6 Q 5.26,13.12 6.26,8.85 Q 9.63,9.9 10.96,12.6 Z"/>
+                        </Grid>
+                      </Border>
+                      <TextBlock Style="{StaticResource CardTitle}" Text="CASE FANS" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock x:Name="CaseFanVal" Style="{StaticResource MidValue}" Text="--"/>
+                      <TextBlock Style="{StaticResource UnitLabel}" Text="RPM"/>
+                    </StackPanel>
+                    <Border x:Name="CaseFanRailTrack" Height="3" CornerRadius="2" Background="{DynamicResource ThTrackBrush}" Margin="0,8,0,2">
+                      <Border x:Name="CaseFanRail" Height="3" CornerRadius="2" HorizontalAlignment="Left" Width="0" Background="{DynamicResource AccentBrush}"/>
+                    </Border>
+                  </StackPanel>
+                </Border>
+              </Border>
+              <Border Grid.Column="2" Style="{StaticResource Card}">
+                <Border Style="{StaticResource CardInner}" Padding="12,10">
+                  <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                      <Border Style="{StaticResource IconChip}" Width="20" Height="20" CornerRadius="6" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
+                        <Grid Width="14" Height="14">
+                          <Ellipse Stroke="{DynamicResource AccentBrush}" StrokeThickness="1" Opacity="0.55"/>
+                          <Path x:Name="RotorGpu" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Margin="1.5" RenderTransformOrigin="0.5,0.5"
+                                Data="M 12,10.8 Q 14.4,5.6 17.6,8.6 Q 15,11 12,10.8 Z M 13.04,12.6 Q 16.34,17.28 12.14,18.55 Q 11.37,15.1 13.04,12.6 Z M 10.96,12.6 Q 5.26,13.12 6.26,8.85 Q 9.63,9.9 10.96,12.6 Z"/>
+                        </Grid>
+                      </Border>
+                      <TextBlock Style="{StaticResource CardTitle}" Text="GPU FANS" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock x:Name="GpuFanVal" Style="{StaticResource MidValue}" Text="--"/>
+                      <TextBlock Style="{StaticResource UnitLabel}" Text="RPM"/>
+                    </StackPanel>
+                    <Border x:Name="GpuFanRailTrack" Height="3" CornerRadius="2" Background="{DynamicResource ThTrackBrush}" Margin="0,8,0,2">
+                      <Border x:Name="GpuFanRail" Height="3" CornerRadius="2" HorizontalAlignment="Left" Width="0" Background="{DynamicResource AccentBrush}"/>
+                    </Border>
+                  </StackPanel>
+                </Border>
+              </Border>
+            </Grid>
+
+            <!-- Mode panel: live settings for the active mode + fan activity -->
+            <Border Grid.Row="5" Style="{StaticResource Card}" Margin="0,10,0,2">
+              <Border Style="{StaticResource CardInner}">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                  </Grid.RowDefinitions>
+                  <Grid Grid.Row="0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                      <Rectangle Style="{StaticResource AccentTick}"/>
+                      <TextBlock x:Name="ModeSetTitle" Style="{StaticResource CardTitle}" Text="MODE" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button x:Name="BtnModeReset" Style="{StaticResource SubtleBtn}" Content="Reset" Width="64"
+                            HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,-8,0,-8"
+                            ToolTip="Restore this mode's default settings"/>
+                  </Grid>
+                  <TextBlock Grid.Row="1" x:Name="ModeSetHint" Style="{StaticResource CardSub}" Text="" TextWrapping="Wrap" Visibility="Collapsed"/>
+                  <Grid Grid.Row="2" x:Name="ModeSlots" Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="22"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid x:Name="Slot1" Grid.Row="0" Grid.Column="0" Margin="0,0,0,7" Visibility="Collapsed">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock x:Name="ML1" Style="{StaticResource SetLabel}"/>
+                      <Slider Grid.Column="1" x:Name="MS1" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                      <TextBlock Grid.Column="2" x:Name="MV1" Style="{StaticResource SetValue}"/>
+                    </Grid>
+                    <Grid x:Name="Slot2" Grid.Row="0" Grid.Column="2" Margin="0,0,0,7" Visibility="Collapsed">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock x:Name="ML2" Style="{StaticResource SetLabel}"/>
+                      <Slider Grid.Column="1" x:Name="MS2" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                      <TextBlock Grid.Column="2" x:Name="MV2" Style="{StaticResource SetValue}"/>
+                    </Grid>
+                    <Grid x:Name="Slot3" Grid.Row="1" Grid.Column="0" Visibility="Collapsed">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock x:Name="ML3" Style="{StaticResource SetLabel}"/>
+                      <Slider Grid.Column="1" x:Name="MS3" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                      <TextBlock Grid.Column="2" x:Name="MV3" Style="{StaticResource SetValue}"/>
+                    </Grid>
+                    <Grid x:Name="Slot4" Grid.Row="1" Grid.Column="2" Visibility="Collapsed">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock x:Name="ML4" Style="{StaticResource SetLabel}"/>
+                      <Slider Grid.Column="1" x:Name="MS4" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                      <TextBlock Grid.Column="2" x:Name="MV4" Style="{StaticResource SetValue}"/>
+                    </Grid>
+                  </Grid>
+                  <Grid Grid.Row="3" Margin="0,10,0,0">
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid>
+                      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="FAN ACTIVITY" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Ellipse x:Name="LegCpuDot" Width="7" Height="7" Fill="#D8E4F2" VerticalAlignment="Center"/>
+                        <TextBlock Text="CPU fan" Foreground="{DynamicResource ThDimBrush}" FontSize="10" Margin="6,0,14,0" VerticalAlignment="Center"/>
+                        <Ellipse x:Name="LegCaseDot" Width="7" Height="7" Fill="#6FB1FF" VerticalAlignment="Center"/>
+                        <TextBlock Text="Case fans" Foreground="{DynamicResource ThDimBrush}" FontSize="10" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </Grid>
+                    <Grid Grid.Row="1" Margin="0,8,0,0">
+                      <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                      </Grid.RowDefinitions>
+                      <Grid MinHeight="36">
+                        <Grid>
+                          <Grid.RowDefinitions>
+                            <RowDefinition/>
+                            <RowDefinition/>
+                            <RowDefinition/>
+                            <RowDefinition/>
+                          </Grid.RowDefinitions>
+                          <Border Grid.Row="0" BorderBrush="{DynamicResource ThGridBrush}" BorderThickness="0,0,0,1"/>
+                          <Border Grid.Row="1" BorderBrush="{DynamicResource ThGridBrush}" BorderThickness="0,0,0,1"/>
+                          <Border Grid.Row="2" BorderBrush="{DynamicResource ThGridBrush}" BorderThickness="0,0,0,1"/>
+                          <Border Grid.Row="3" BorderBrush="{DynamicResource ThGridBrush}" BorderThickness="0,0,0,1"/>
+                          <TextBlock Grid.Row="0" x:Name="AxR0" FontSize="8" Foreground="{DynamicResource ThFaintBrush}" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,2,1" Typography.NumeralAlignment="Tabular" Text=""/>
+                          <TextBlock Grid.Row="1" x:Name="AxR1" FontSize="8" Foreground="{DynamicResource ThFaintBrush}" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,2,1" Typography.NumeralAlignment="Tabular" Text=""/>
+                          <TextBlock Grid.Row="2" x:Name="AxR2" FontSize="8" Foreground="{DynamicResource ThFaintBrush}" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,2,1" Typography.NumeralAlignment="Tabular" Text=""/>
+                        </Grid>
+                        <Grid x:Name="FanSparkHost" Background="Transparent" ClipToBounds="True" Margin="0,3,0,0">
+                          <Polygon x:Name="CpuFanSparkFill"/>
+                          <Polygon x:Name="CaseFanSparkFill"/>
+                          <Polyline x:Name="CaseFanSpark" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                          <Polyline x:Name="CpuFanSpark" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                        </Grid>
+                      </Grid>
+                      <Grid Grid.Row="1" Margin="0,4,0,0">
+                        <TextBlock FontSize="8" Foreground="{DynamicResource ThFaintBrush}" Text="10 min ago"/>
+                        <TextBlock FontSize="8" Foreground="{DynamicResource ThFaintBrush}" HorizontalAlignment="Right" Text="now"/>
+                      </Grid>
+                    </Grid>
+                  </Grid>
+                </Grid>
+              </Border>
+            </Border>
           </Grid>
-        </Border>
-      </Grid>
 
-      <!-- Footer -->
-      <Grid Grid.Row="2" Margin="18,12,18,14">
-        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-          <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="#566073" VerticalAlignment="Center"/>
-          <TextBlock x:Name="StatusText" Foreground="#566073" FontSize="11" Margin="7,0,0,0" Text="Starting sensors..."/>
-        </StackPanel>
-        <TextBlock x:Name="WarnText" Foreground="#F26D78" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" Text=""/>
-      </Grid>
+          <!-- Footer -->
+          <Grid Grid.Row="2" Margin="18,10,18,12">
+            <Border x:Name="FooterPill" Background="{DynamicResource ThTileBrush}" BorderBrush="#246FB1FF" BorderThickness="1" CornerRadius="999" Padding="11,5" HorizontalAlignment="Left" VerticalAlignment="Center">
+              <StackPanel Orientation="Horizontal">
+                <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="#566073" VerticalAlignment="Center"/>
+                <TextBlock x:Name="StatusText" Foreground="#8A93A6" FontSize="11" Margin="7,0,0,0" MinWidth="150"
+                           Typography.NumeralAlignment="Tabular" Text="Starting sensors..."/>
+              </StackPanel>
+            </Border>
+            <TextBlock x:Name="WarnText" Foreground="#F26D78" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" Text=""/>
+          </Grid>
 
-      <!-- Settings overlay -->
-      <Border x:Name="SettingsOverlay" Grid.Row="1" Grid.RowSpan="2" Background="#F00B0E14" Visibility="Collapsed">
-        <Border.Resources>
-          <Style x:Key="Swatch" TargetType="Button">
-            <Setter Property="Width" Value="22"/>
-            <Setter Property="Height" Value="22"/>
-            <Setter Property="Margin" Value="0,0,8,0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Template">
-              <Setter.Value>
-                <ControlTemplate TargetType="Button">
-                  <Border Background="{TemplateBinding Background}" CornerRadius="11"
-                          BorderBrush="#E6EAF2" BorderThickness="{TemplateBinding BorderThickness}"/>
-                </ControlTemplate>
-              </Setter.Value>
-            </Setter>
-          </Style>
-        </Border.Resources>
-        <Border Style="{StaticResource Card}" Margin="16,6,16,14">
-          <Grid>
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
-              <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <TextBlock Style="{StaticResource CardTitle}" Text="SETTINGS"/>
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,6,0,0">
-              <StackPanel Margin="0,0,6,0">
-                <TextBlock Style="{StaticResource CardTitle}" Text="FAN SPEEDS" Foreground="#4C8DFF" x:Name="SecFans" Margin="0,6,0,2"/>
-                <Grid Margin="0,6,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Quiet - case fans"/>
-                  <Slider Grid.Column="1" x:Name="S_QuietCase" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_QuietCase" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Normal - case fans"/>
-                  <Slider Grid.Column="1" x:Name="S_NormalCase" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_NormalCase" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Performance - case fans"/>
-                  <Slider Grid.Column="1" x:Name="S_PerfCase" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_PerfCase" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Performance - CPU fan"/>
-                  <Slider Grid.Column="1" x:Name="S_PerfCpu" Style="{StaticResource SetSlider}" Minimum="30" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_PerfCpu" Style="{StaticResource SetValue}"/>
-                </Grid>
+          <!-- Settings overlay -->
+          <Border x:Name="SettingsOverlay" Grid.Row="1" Grid.RowSpan="2" Background="#E607090D" Visibility="Collapsed">
+            <Border.Resources>
+              <Style x:Key="Swatch" TargetType="Button">
+                <Setter Property="Width" Value="24"/>
+                <Setter Property="Height" Value="24"/>
+                <Setter Property="Margin" Value="0,0,10,0"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Template">
+                  <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                      <Grid Background="Transparent">
+                        <Border x:Name="ring" CornerRadius="12" BorderBrush="#ECF0F7" BorderThickness="{TemplateBinding BorderThickness}"/>
+                        <Border x:Name="dot" Width="16" Height="16" CornerRadius="8" Background="{TemplateBinding Background}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Grid>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="dot" Property="Width" Value="18"/>
+                          <Setter TargetName="dot" Property="Height" Value="18"/>
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Setter.Value>
+                </Setter>
+              </Style>
+            </Border.Resources>
+            <Border Style="{StaticResource Card}" Margin="16,8,16,14">
+              <Border Style="{StaticResource CardInner}" Padding="20,16">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <StackPanel Orientation="Horizontal">
+                    <Rectangle Style="{StaticResource AccentTick}"/>
+                    <TextBlock Style="{StaticResource CardTitle}" Text="SETTINGS" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,6,0,0">
+                    <StackPanel Margin="0,0,6,0">
+                      <StackPanel Orientation="Horizontal" Margin="0,6,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="FAN SPEEDS" Foreground="#4C8DFF" x:Name="SecFans" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Quiet - case fans"/>
+                        <Slider Grid.Column="1" x:Name="S_QuietCase" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_QuietCase" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Normal - case fans"/>
+                        <Slider Grid.Column="1" x:Name="S_NormalCase" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_NormalCase" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Performance - case fans"/>
+                        <Slider Grid.Column="1" x:Name="S_PerfCase" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_PerfCase" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Performance - CPU fan"/>
+                        <Slider Grid.Column="1" x:Name="S_PerfCpu" Style="{StaticResource SetSlider}" Minimum="30" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_PerfCpu" Style="{StaticResource SetValue}"/>
+                      </Grid>
 
-                <TextBlock Style="{StaticResource CardTitle}" Text="COOLING BOOST" Foreground="#4C8DFF" x:Name="SecBoost" Margin="0,16,0,2"/>
-                <CheckBox x:Name="S_BoostEnabled" Style="{StaticResource SetCheck}" Content="In Quiet mode: raise fans when hot, return when cool"/>
-                <Grid Margin="0,9,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Boost above (CPU/GPU)"/>
-                  <Slider Grid.Column="1" x:Name="S_BoostHigh" Style="{StaticResource SetSlider}" Minimum="60" Maximum="90"/>
-                  <TextBlock Grid.Column="2" x:Name="V_BoostHigh" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Resume below"/>
-                  <Slider Grid.Column="1" x:Name="S_BoostLow" Style="{StaticResource SetSlider}" Minimum="40" Maximum="85"/>
-                  <TextBlock Grid.Column="2" x:Name="V_BoostLow" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Boost - case fans"/>
-                  <Slider Grid.Column="1" x:Name="S_BoostCase" Style="{StaticResource SetSlider}" Minimum="30" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_BoostCase" Style="{StaticResource SetValue}"/>
-                </Grid>
+                      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="COOLING BOOST" Foreground="#4C8DFF" x:Name="SecBoost" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <CheckBox x:Name="S_BoostEnabled" Style="{StaticResource SetCheck}" Content="In Quiet mode: raise fans when hot, return when cool"/>
+                      <Grid Margin="0,9,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Boost above (CPU/GPU)"/>
+                        <Slider Grid.Column="1" x:Name="S_BoostHigh" Style="{StaticResource SetSlider}" Minimum="60" Maximum="90"/>
+                        <TextBlock Grid.Column="2" x:Name="V_BoostHigh" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Resume below"/>
+                        <Slider Grid.Column="1" x:Name="S_BoostLow" Style="{StaticResource SetSlider}" Minimum="40" Maximum="85"/>
+                        <TextBlock Grid.Column="2" x:Name="V_BoostLow" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Boost - case fans"/>
+                        <Slider Grid.Column="1" x:Name="S_BoostCase" Style="{StaticResource SetSlider}" Minimum="30" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_BoostCase" Style="{StaticResource SetValue}"/>
+                      </Grid>
 
-                <TextBlock Style="{StaticResource CardTitle}" Text="CURVE MODE" Foreground="#4C8DFF" x:Name="SecCurve" Margin="0,16,0,2"/>
-                <Grid Margin="0,6,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Case fans at 40&#176;C"/>
-                  <Slider Grid.Column="1" x:Name="S_C40" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_C40" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Case fans at 55&#176;C"/>
-                  <Slider Grid.Column="1" x:Name="S_C55" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_C55" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Case fans at 70&#176;C"/>
-                  <Slider Grid.Column="1" x:Name="S_C70" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_C70" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Case fans at 80&#176;C"/>
-                  <Slider Grid.Column="1" x:Name="S_C80" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_C80" Style="{StaticResource SetValue}"/>
-                </Grid>
+                      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="CURVE MODE" Foreground="#4C8DFF" x:Name="SecCurve" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Case fans at 40&#176;C"/>
+                        <Slider Grid.Column="1" x:Name="S_C40" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_C40" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Case fans at 55&#176;C"/>
+                        <Slider Grid.Column="1" x:Name="S_C55" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_C55" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Case fans at 70&#176;C"/>
+                        <Slider Grid.Column="1" x:Name="S_C70" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_C70" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Case fans at 80&#176;C"/>
+                        <Slider Grid.Column="1" x:Name="S_C80" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_C80" Style="{StaticResource SetValue}"/>
+                      </Grid>
 
-                <TextBlock Style="{StaticResource CardTitle}" Text="GAME BOOST" Foreground="#4C8DFF" x:Name="SecGame" Margin="0,16,0,2"/>
-                <CheckBox x:Name="S_Game" Style="{StaticResource SetCheck}" Content="Switch to Performance during games (GPU load based)"/>
-                <Grid Margin="0,9,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Trigger - GPU load above"/>
-                  <Slider Grid.Column="1" x:Name="S_GameLoad" Style="{StaticResource SetSlider}" Minimum="50" Maximum="100"/>
-                  <TextBlock Grid.Column="2" x:Name="V_GameLoad" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Post-game cooldown"/>
-                  <Slider Grid.Column="1" x:Name="S_GameCool" Style="{StaticResource SetSlider}" Minimum="0" Maximum="60"/>
-                  <TextBlock Grid.Column="2" x:Name="V_GameCool" Style="{StaticResource SetValue}"/>
-                </Grid>
+                      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="GAME BOOST" Foreground="#4C8DFF" x:Name="SecGame" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <CheckBox x:Name="S_Game" Style="{StaticResource SetCheck}" Content="Switch to Performance during games (GPU load based)"/>
+                      <Grid Margin="0,9,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Trigger - GPU load above"/>
+                        <Slider Grid.Column="1" x:Name="S_GameLoad" Style="{StaticResource SetSlider}" Minimum="50" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_GameLoad" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Post-game cooldown"/>
+                        <Slider Grid.Column="1" x:Name="S_GameCool" Style="{StaticResource SetSlider}" Minimum="0" Maximum="60"/>
+                        <TextBlock Grid.Column="2" x:Name="V_GameCool" Style="{StaticResource SetValue}"/>
+                      </Grid>
 
-                <TextBlock Style="{StaticResource CardTitle}" Text="SAFETY" Foreground="#4C8DFF" x:Name="SecSafety" Margin="0,16,0,2"/>
-                <Grid Margin="0,6,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Force Auto above - CPU"/>
-                  <Slider Grid.Column="1" x:Name="S_CpuMax" Style="{StaticResource SetSlider}" Minimum="70" Maximum="95"/>
-                  <TextBlock Grid.Column="2" x:Name="V_CpuMax" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,7,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Force Auto above - GPU"/>
-                  <Slider Grid.Column="1" x:Name="S_GpuMax" Style="{StaticResource SetSlider}" Minimum="70" Maximum="95"/>
-                  <TextBlock Grid.Column="2" x:Name="V_GpuMax" Style="{StaticResource SetValue}"/>
-                </Grid>
+                      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="SAFETY" Foreground="#4C8DFF" x:Name="SecSafety" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Force Auto above - CPU"/>
+                        <Slider Grid.Column="1" x:Name="S_CpuMax" Style="{StaticResource SetSlider}" Minimum="70" Maximum="95"/>
+                        <TextBlock Grid.Column="2" x:Name="V_CpuMax" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Force Auto above - GPU"/>
+                        <Slider Grid.Column="1" x:Name="S_GpuMax" Style="{StaticResource SetSlider}" Minimum="70" Maximum="95"/>
+                        <TextBlock Grid.Column="2" x:Name="V_GpuMax" Style="{StaticResource SetValue}"/>
+                      </Grid>
 
-                <TextBlock Style="{StaticResource CardTitle}" Text="GENERAL" Foreground="#4C8DFF" x:Name="SecGeneral" Margin="0,16,0,2"/>
-                <Grid Margin="0,6,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Update interval"/>
-                  <Slider Grid.Column="1" x:Name="S_Interval" Style="{StaticResource SetSlider}" Minimum="1" Maximum="10"/>
-                  <TextBlock Grid.Column="2" x:Name="V_Interval" Style="{StaticResource SetValue}"/>
-                </Grid>
-                <Grid Margin="0,12,0,0">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Style="{StaticResource SetLabel}" Text="Accent color"/>
-                  <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="12,0">
-                    <Button x:Name="Sw0" Style="{StaticResource Swatch}" Background="#4C8DFF" ToolTip="Blue"/>
-                    <Button x:Name="Sw1" Style="{StaticResource Swatch}" Background="#A78BFA" ToolTip="Purple"/>
-                    <Button x:Name="Sw2" Style="{StaticResource Swatch}" Background="#3DD68C" ToolTip="Green"/>
-                    <Button x:Name="Sw3" Style="{StaticResource Swatch}" Background="#F5C359" ToolTip="Amber"/>
-                    <Button x:Name="Sw4" Style="{StaticResource Swatch}" Background="#F26D78" ToolTip="Red"/>
+                      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="GENERAL" Foreground="#4C8DFF" x:Name="SecGeneral" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Update interval"/>
+                        <Slider Grid.Column="1" x:Name="S_Interval" Style="{StaticResource SetSlider}" Minimum="1" Maximum="10"/>
+                        <TextBlock Grid.Column="2" x:Name="V_Interval" Style="{StaticResource SetValue}"/>
+                      </Grid>
+                      <CheckBox x:Name="S_StartMin" Style="{StaticResource SetCheck}" Content="Start minimized to tray"/>
+                      <CheckBox x:Name="S_CloseTray" Style="{StaticResource SetCheck}" Content="Close button hides to tray"/>
+                      <CheckBox x:Name="S_Updates" Style="{StaticResource SetCheck}" Content="Notify me when a new version is available"/>
+                      <CheckBox x:Name="S_AutoStart" Style="{StaticResource SetCheck}" Content="Start with Windows (scheduled task, no UAC prompt)"/>
+                    </StackPanel>
+                  </ScrollViewer>
+                  <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                    <Button x:Name="BtnSetCancel" Style="{StaticResource GhostBtn}" Content="Cancel" Width="96"/>
+                    <Button x:Name="BtnSetSave" Style="{StaticResource PrimaryBtn}" Content="Save" Width="96" Margin="8,0,0,0"/>
                   </StackPanel>
                 </Grid>
-                <CheckBox x:Name="S_StartMin" Style="{StaticResource SetCheck}" Content="Start minimized to tray"/>
-                <CheckBox x:Name="S_CloseTray" Style="{StaticResource SetCheck}" Content="Close button hides to tray"/>
-                <CheckBox x:Name="S_Updates" Style="{StaticResource SetCheck}" Content="Notify me when a new version is available"/>
-                <CheckBox x:Name="S_AutoStart" Style="{StaticResource SetCheck}" Content="Start with Windows (scheduled task, no UAC prompt)"/>
-              </StackPanel>
-            </ScrollViewer>
-            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-              <Button x:Name="BtnSetCancel" Style="{StaticResource SegBtn}" Content="Cancel" Padding="16,0" Width="90"/>
-              <Button x:Name="BtnSetSave" Style="{StaticResource SegBtn}" Content="Save" Width="90" Margin="8,2,2,2"/>
-            </StackPanel>
-          </Grid>
-        </Border>
+              </Border>
+            </Border>
+          </Border>
+        </Grid>
       </Border>
-    </Grid>
-  </Border>
+    </Border>
+  </Grid>
 </Window>
 '@
 
+# Resolve the bundled Sora font folder into the XAML font token. WPF's
+# composite-font syntax is "<folder uri>#<family>"; if the folder is missing
+# the family lookup fails silently and the Segoe UI fallback takes over.
+$fontDir = Join-Path $script:AppRoot 'fonts'
+$fontUri = 'file:///' + (($fontDir -replace '\\', '/').TrimEnd('/')) + '/'
+$fontUri = $fontUri -replace ' ', '%20'
+$xaml = $xaml.Replace('__FONTS__', $fontUri)
 $window = [System.Windows.Markup.XamlReader]::Parse($xaml)
 if (Test-Path $script:icoPath) {
     # pick the largest frame - BitmapFrame.Create alone grabs the 16px one
@@ -1260,11 +1799,21 @@ if (Test-Path $script:icoPath) {
 
 $el = @{}
 foreach ($name in @(
-    'CpuTempVal','GpuTempVal','CpuBarTrack','CpuBarFill','GpuBarTrack','GpuBarFill',
+    'CpuTempVal','GpuTempVal',
     'CpuSpark','GpuSpark','CpuSparkHost','GpuSparkHost',
     'CpuNameText','GpuNameText','CpuFanVal','CaseFanVal','GpuFanVal',
-    'SsdTempVal','SsdBarTrack','SsdBarFill','SsdSpark','SsdSparkHost','SsdNameText',
-    'MbTempVal','MbBarTrack','MbBarFill','MbSpark','MbSparkHost','MbNameText',
+    'SsdTempVal','SsdSpark','SsdSparkHost','SsdNameText',
+    'MbTempVal','MbSpark','MbSparkHost','MbNameText',
+    'CpuHair','GpuHair','SsdHair','MbHair',
+    'CpuWarnFlag','CpuWarnText','GpuWarnFlag','GpuWarnText',
+    'SsdWarnFlag','SsdWarnText','MbWarnFlag','MbWarnText',
+    'WinBase','WinFrame','StateBadge','StateBadgeText',
+    'OrbGlow','OrbCore','OrbVal','OrbLabel','HaloTrack','HaloFill','HaloDot',
+    'HeroTitle','HeroSub','LabCool','LabWarm','LabHot','ModeShell',
+    'SectLine1','SectLine2','FooterPill',
+    'RotorCpu','RotorCase','RotorGpu',
+    'CpuFanRail','CpuFanRailTrack','CaseFanRail','CaseFanRailTrack','GpuFanRail','GpuFanRailTrack',
+    'AxR0','AxR1','AxR2',
     'BtnQuiet','BtnNormal','BtnPerf','BtnCurve','BtnAuto',
     'StatusDot','StatusText','WarnText','TitleBar','BtnSettings','BtnMin','BtnClose','LogoOuter',
     'SettingsOverlay','SecFans','SecBoost','SecCurve','SecGame','SecSafety','SecGeneral',
@@ -1278,7 +1827,8 @@ foreach ($name in @(
     'ModeSetTitle','ModeSetHint','ModeSlots','BtnModeReset',
     'Slot1','Slot2','Slot3','Slot4','ML1','ML2','ML3','ML4','MS1','MS2','MS3','MS4','MV1','MV2','MV3','MV4',
     'FanSparkHost','CpuFanSpark','CaseFanSpark','LegCpuDot','LegCaseDot',
-    'Sw0','Sw1','Sw2','Sw3','Sw4','BtnSetSave','BtnSetCancel')) {
+    'CpuSparkFill','GpuSparkFill','SsdSparkFill','MbSparkFill','CpuFanSparkFill','CaseFanSparkFill',
+    'BtnSetSave','BtnSetCancel')) {
     $el[$name] = $window.FindName($name)
 }
 
@@ -1312,21 +1862,73 @@ $script:brushRed    = New-Brush '#F26D78'
 $script:brushDark   = New-Brush '#0B0E14'
 $script:brushClear  = New-Brush '#00000000'
 
+function New-VAreaBrush([string]$hex, [byte]$topAlpha) {
+    # vertical fade for sparkline area fills: hex at topAlpha -> transparent
+    $c = [System.Windows.Media.Color][System.Windows.Media.ColorConverter]::ConvertFromString($hex)
+    $top = [System.Windows.Media.Color]::FromArgb($topAlpha, $c.R, $c.G, $c.B)
+    $bot = [System.Windows.Media.Color]::FromArgb(0, $c.R, $c.G, $c.B)
+    $b = New-Object System.Windows.Media.LinearGradientBrush
+    $b.StartPoint = New-Object System.Windows.Point 0, 0
+    $b.EndPoint   = New-Object System.Windows.Point 0, 1
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop $top, 0))
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop $bot, 1))
+    $b.Freeze()
+    return $b
+}
+$script:fillGreen  = New-VAreaBrush '#3DD68C' 0x4D
+$script:fillYellow = New-VAreaBrush '#F5C359' 0x4D
+$script:fillRed    = New-VAreaBrush '#F26D78' 0x4D
+
+function New-TrailBrush([string]$hex) {
+    # sparkline stroke: history fades in from the left, "now" is fully lit -
+    # reads as a trace instead of a stray border line
+    $c = [System.Windows.Media.Color][System.Windows.Media.ColorConverter]::ConvertFromString($hex)
+    $b = New-Object System.Windows.Media.LinearGradientBrush
+    $b.StartPoint = New-Object System.Windows.Point 0, 0.5
+    $b.EndPoint   = New-Object System.Windows.Point 1, 0.5
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromArgb(0x00, $c.R, $c.G, $c.B)), 0))
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromArgb(0x80, $c.R, $c.G, $c.B)), 0.45))
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromArgb(0xFF, $c.R, $c.G, $c.B)), 1))
+    $b.Freeze()
+    return $b
+}
+$script:trailGreen  = New-TrailBrush '#3DD68C'
+$script:trailYellow = New-TrailBrush '#F5C359'
+$script:trailRed    = New-TrailBrush '#F26D78'
+
+function New-PillBrush([string]$hex) {
+    # active-mode pill: accent lightened 16% at the top -> accent, so the
+    # selected button reads dimensional instead of flat
+    $c = [System.Windows.Media.Color][System.Windows.Media.ColorConverter]::ConvertFromString($hex)
+    $top = [System.Windows.Media.Color]::FromRgb(
+        [byte][math]::Min(255, $c.R + (255 - $c.R) * 0.16),
+        [byte][math]::Min(255, $c.G + (255 - $c.G) * 0.16),
+        [byte][math]::Min(255, $c.B + (255 - $c.B) * 0.16))
+    $b = New-Object System.Windows.Media.LinearGradientBrush
+    $b.StartPoint = New-Object System.Windows.Point 0, 0
+    $b.EndPoint   = New-Object System.Windows.Point 0, 1
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop $top, 0))
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop $c, 1))
+    $b.Freeze()
+    return $b
+}
+
 $script:deg = [char]176
+$script:thin = [char]0x2009   # thin space used to letter-space the orb label
 $script:modeNames    = @{ quiet = 'Quiet'; normal = 'Normal'; performance = 'Performance'; curve = 'Curve'; auto = 'Auto' }
-$script:swatchColors = @('#4C8DFF','#A78BFA','#3DD68C','#F5C359','#F26D78')
 $script:sliderNames  = @('S_QuietCase','S_NormalCase','S_PerfCase','S_PerfCpu','S_BoostHigh','S_BoostLow','S_BoostCase',
                          'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool','S_CpuMax','S_GpuMax','S_Interval')
 
 # All code-generated UI strings live here so a future language option is a
 # table swap (XAML labels move here in the same pass).
+$script:mid = [char]183   # middot separator; kept out of literals so the file stays ASCII
 $script:L = @{
     Starting      = 'Starting sensors...'
-    Connected     = 'Connected - updating every {0:0.#}s'
-    BoostActive   = 'Cooling boost active - case fans at {0}% until below {1}{2}C'
-    CurveActive   = 'Curve mode - case fans at {0}%'
-    GameActive    = 'Game detected - Performance until the GPU goes idle'
-    CoolDown      = 'Post-game cooldown - {0}s, then back to {1}'
+    Connected     = "Connected $script:mid updating every {0:0.#}s"
+    BoostActive   = "Cooling boost active $script:mid case fans at {0}% until below {1}{2}C"
+    CurveActive   = "Curve mode $script:mid case fans at {0}%"
+    GameActive    = "Game detected $script:mid Performance until the GPU goes idle"
+    CoolDown      = "Post-game cooldown $script:mid {0}s, then back to {1}"
     Downloading   = 'Downloading update...'
     UpdateBalloon = 'Version {0} is available. Use the tray menu to install it.'
     InstallItem   = 'Install Vento {0}'
@@ -1355,22 +1957,229 @@ function New-TrayIcon([string]$hex) {
     return $icon
 }
 
-function Set-Accent([string]$hex) {
-    $script:brushAccent = New-Brush $hex
-    $el.LogoOuter.Fill = $script:brushAccent
-    foreach ($sec in 'SecFans','SecBoost','SecCurve','SecGame','SecSafety','SecGeneral') { $el[$sec].Foreground = $script:brushAccent }
+# --- Sirocco thermal palette -----------------------------------------
+# Every UI color derives from one thermal position: the hottest sensor's
+# distance to its own warning threshold. 8 degC or more under the threshold
+# is the cool (blue) anchor, the threshold itself sits near the coral
+# anchor, 4 degC over is fully hot (red); everything between is a smooth
+# per-channel lerp, so the window's light shifts with the temperature.
+$script:thAnchorHex = @{
+    cool = @{ acc='#6FB1FF'; accB='#9CCBFF'; ink='#EDF1F8'; dim='#8FA3BC'; faint='#5A6B84'; base='#0A0D13'; tile='#10151D'; track='#16202E'; grid='#151D2A'; chartA='#D8E4F2'; core1='#8FC0FF'; core2='#3D77D6'; coreInk='#0A1A33' }
+    warm = @{ acc='#FF8A5C'; accB='#FFA478'; ink='#F5EFE9'; dim='#A89584'; faint='#6E6154'; base='#0D0B0A'; tile='#171210'; track='#241B14'; grid='#241B14'; chartA='#E8D9CC'; core1='#FFA478'; core2='#E06E3C'; coreInk='#2A1206' }
+    hot  = @{ acc='#E85B52'; accB='#F0867A'; ink='#F5EDEA'; dim='#B09090'; faint='#755A57'; base='#100B0B'; tile='#181010'; track='#271515'; grid='#241313'; chartA='#EBD8D4'; core1='#EE7E70'; core2='#BC3B34'; coreInk='#2A0A08' }
+}
+$script:thAnchor = @{}
+foreach ($k in @($script:thAnchorHex.Keys)) {
+    $p = @{}
+    foreach ($n in @($script:thAnchorHex[$k].Keys)) { $p[$n] = [System.Windows.Media.Color][System.Windows.Media.ColorConverter]::ConvertFromString($script:thAnchorHex[$k][$n]) }
+    $script:thAnchor[$k] = $p
+}
+function Mix-Color($a, $b, [double]$u) {
+    [System.Windows.Media.Color]::FromRgb(
+        [byte]($a.R + ($b.R - $a.R) * $u),
+        [byte]($a.G + ($b.G - $a.G) * $u),
+        [byte]($a.B + ($b.B - $a.B) * $u))
+}
+function Get-ThermalMix([double]$margin) {
+    if ($margin -le -8)    { $a = 'cool'; $b = 'cool'; $u = 0.0; $pos = 0.02 }
+    elseif ($margin -lt 0) { $a = 'cool'; $b = 'warm'; $u = ($margin + 8) / 8.0; $pos = 0.55 * $u }
+    elseif ($margin -lt 4) { $a = 'warm'; $b = 'hot';  $u = $margin / 4.0; $pos = 0.55 + 0.45 * $u }
+    else                   { $a = 'hot';  $b = 'hot';  $u = 0.0; $pos = 1.0 }
+    $pal = @{}
+    $pa = $script:thAnchor[$a]; $pb = $script:thAnchor[$b]
+    foreach ($n in @($pa.Keys)) { $pal[$n] = Mix-Color $pa[$n] $pb[$n] $u }
+    return @{ pal = $pal; pos = [math]::Max(0.02, [math]::Min(1.0, $pos)) }
+}
+function New-SolidBrushC($c) { $b = New-Object System.Windows.Media.SolidColorBrush $c; $b.Freeze(); return $b }
+function New-AlphaColor($c, [byte]$a) { return [System.Windows.Media.Color]::FromArgb($a, $c.R, $c.G, $c.B) }
+function Get-HexOf($c) { return ('#{0:X2}{1:X2}{2:X2}' -f $c.R, $c.G, $c.B) }
+
+$script:thLastAcc = $null
+$script:thLastPos = -1.0
+function Apply-Thermal($mix) {
+    $pal = $mix.pal; $pos = $mix.pos
+    $acc = $pal.acc
+    if ($script:thLastAcc) {
+        $delta = [math]::Abs($acc.R - $script:thLastAcc.R) + [math]::Abs($acc.G - $script:thLastAcc.G) + [math]::Abs($acc.B - $script:thLastAcc.B)
+        if ($delta -lt 3 -and [math]::Abs($pos - $script:thLastPos) -lt 0.004) { return }
+    }
+    $script:thLastAcc = $acc; $script:thLastPos = $pos
+
+    foreach ($pair in @(
+        @('AccentBrush', $acc),
+        @('AccentSoftBrush', (New-AlphaColor $acc 0x26)),
+        @('ThInkBrush', $pal.ink), @('ThDimBrush', $pal.dim), @('ThFaintBrush', $pal.faint),
+        @('ThTileBrush', $pal.tile), @('ThTrackBrush', $pal.track), @('ThGridBrush', $pal.grid),
+        @('ThChartABrush', $pal.chartA))) {
+        [VentoNative.Res]::SetBrush($window.Resources, $pair[0], $pair[1])
+    }
+
+    $script:brushAccent     = New-SolidBrushC $acc
+    $script:brushAccentB    = New-SolidBrushC $pal.accB
+    $script:brushInk        = New-SolidBrushC $pal.ink
+    $script:brushChartA     = New-SolidBrushC $pal.chartA
+    $script:brushAccentPill = New-PillBrush (Get-HexOf $acc)
+
+    # window chrome ambience: base coat + accent-tinted top light
+    $el.WinBase.Background = New-SolidBrushC $pal.base
+    $rb = New-Object System.Windows.Media.RadialGradientBrush
+    $rb.Center = New-Object System.Windows.Point 0.5, 0
+    $rb.GradientOrigin = New-Object System.Windows.Point 0.5, 0
+    $rb.RadiusX = 0.9; $rb.RadiusY = 0.55
+    $rb.GradientStops.Add((New-Object System.Windows.Media.GradientStop (New-AlphaColor $acc 0x20), 0))
+    $rb.GradientStops.Add((New-Object System.Windows.Media.GradientStop $pal.base, 1))
+    $rb.Freeze()
+    $el.WinFrame.Background = $rb
+    $fb = New-Object System.Windows.Media.LinearGradientBrush
+    $fb.StartPoint = New-Object System.Windows.Point 0, 0
+    $fb.EndPoint   = New-Object System.Windows.Point 0, 1
+    $fb.GradientStops.Add((New-Object System.Windows.Media.GradientStop (New-AlphaColor $acc 0x38), 0))
+    $fb.GradientStops.Add((New-Object System.Windows.Media.GradientStop $pal.track, 1))
+    $fb.Freeze()
+    $el.WinFrame.BorderBrush = $fb
+
+    # hero orb: breathing glow + sun core carrying the hottest sensor
+    $og = New-Object System.Windows.Media.RadialGradientBrush
+    $og.GradientStops.Add((New-Object System.Windows.Media.GradientStop (New-AlphaColor $acc 0x3C), 0))
+    $og.GradientStops.Add((New-Object System.Windows.Media.GradientStop (New-AlphaColor $acc 0x00), 1))
+    $og.Freeze()
+    $el.OrbGlow.Fill = $og
+    $cg = New-Object System.Windows.Media.RadialGradientBrush
+    $cg.Center = New-Object System.Windows.Point 0.5, 0.38
+    $cg.GradientOrigin = New-Object System.Windows.Point 0.5, 0.38
+    $cg.RadiusX = 0.75; $cg.RadiusY = 0.75
+    $cg.GradientStops.Add((New-Object System.Windows.Media.GradientStop $pal.core1, 0))
+    $cg.GradientStops.Add((New-Object System.Windows.Media.GradientStop $pal.core2, 1))
+    $cg.Freeze()
+    $el.OrbCore.Fill = $cg
+    $el.OrbCore.Stroke = New-SolidBrushC (New-AlphaColor $pal.accB 0x8C)
+    $el.OrbVal.Foreground = New-SolidBrushC $pal.coreInk
+    $el.OrbLabel.Foreground = New-SolidBrushC (New-AlphaColor $pal.coreInk 0x9E)
+
+    # halo arc: 240 deg scale around the orb, filled up to the position
+    $sweep = 240.0 * $pos
+    $rad = (150.0 + $sweep) * [math]::PI / 180.0
+    $ex = 103.0 + 92.0 * [math]::Cos($rad)
+    $ey = 103.0 + 92.0 * [math]::Sin($rad)
+    $fig = New-Object System.Windows.Media.PathFigure
+    $fig.StartPoint = New-Object System.Windows.Point 23.3, 149.0
+    $arc = New-Object System.Windows.Media.ArcSegment
+    $arc.Point = New-Object System.Windows.Point $ex, $ey
+    $arc.Size = New-Object System.Windows.Size 92, 92
+    $arc.IsLargeArc = ($sweep -gt 180)
+    $arc.SweepDirection = [System.Windows.Media.SweepDirection]::Clockwise
+    $fig.Segments.Add($arc)
+    $geo = New-Object System.Windows.Media.PathGeometry
+    $geo.Figures.Add($fig)
+    $geo.Freeze()
+    $el.HaloFill.Data = $geo
+    [System.Windows.Controls.Canvas]::SetLeft($el.HaloDot, $ex - 4.5)
+    [System.Windows.Controls.Canvas]::SetTop($el.HaloDot, $ey - 4.5)
+    $el.HaloDot.Visibility = 'Visible'
+
+    # state labels, badge, section lines, shells
+    $onIdx = if ($pos -lt 0.35) { 0 } elseif ($pos -le 0.8) { 1 } else { 2 }
+    $labs = @($el.LabCool, $el.LabWarm, $el.LabHot)
+    $faintBrush = New-SolidBrushC $pal.faint
+    for ($i = 0; $i -lt 3; $i++) {
+        $labs[$i].Foreground = if ($i -eq $onIdx) { $script:brushAccentB } else { $faintBrush }
+    }
+    $el.StateBadge.Background  = New-SolidBrushC (New-AlphaColor $acc 0x1A)
+    $el.StateBadge.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0x42)
+    $el.StateBadgeText.Text = @('COOL', 'WARM', 'HOT')[$onIdx]
+    $sectBrush = New-SolidBrushC (New-AlphaColor $acc 0x22)
+    $el.SectLine1.Background = $sectBrush
+    $el.SectLine2.Background = $sectBrush
+    $el.ModeShell.BorderBrush  = New-SolidBrushC (New-AlphaColor $acc 0x24)
+    $el.FooterPill.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0x26)
+
+    # tile top hairlines
+    $hair = New-Object System.Windows.Media.LinearGradientBrush
+    $hair.StartPoint = New-Object System.Windows.Point 0, 0.5
+    $hair.EndPoint   = New-Object System.Windows.Point 1, 0.5
+    $hair.GradientStops.Add((New-Object System.Windows.Media.GradientStop (New-AlphaColor $acc 0x5C), 0))
+    $hair.GradientStops.Add((New-Object System.Windows.Media.GradientStop (New-AlphaColor $acc 0x0D), 1))
+    $hair.Freeze()
+    foreach ($h in 'CpuHair', 'GpuHair', 'SsdHair', 'MbHair') { $el[$h].Background = $hair }
+
+    # activity chart: CPU fan = light neutral, case fans = thermal accent
+    $accHex = Get-HexOf $acc
+    $chartAHex = Get-HexOf $pal.chartA
+    $el.CpuFanSpark.Stroke = New-TrailBrush $chartAHex
+    $el.CpuFanSparkFill.Fill = New-VAreaBrush $chartAHex 0x1F
+    $el.CaseFanSpark.Stroke = New-TrailBrush $accHex
+    $el.CaseFanSparkFill.Fill = New-VAreaBrush $accHex 0x30
+    $el.LegCpuDot.Fill = $script:brushChartA
+    $el.LegCaseDot.Fill = $script:brushAccent
+
+    # temp sparklines: quiet dim traces with a soft accent area
+    $spTrail = New-TrailBrush (Get-HexOf $pal.dim)
+    $spFill = New-VAreaBrush $accHex 0x12
+    foreach ($sp in 'CpuSpark', 'GpuSpark', 'SsdSpark', 'MbSpark') { $el[$sp].Stroke = $spTrail }
+    foreach ($sp in 'CpuSparkFill', 'GpuSparkFill', 'SsdSparkFill', 'MbSparkFill') { $el[$sp].Fill = $spFill }
+
+    # settings + mode panel accents
+    foreach ($sec in 'SecFans', 'SecBoost', 'SecCurve', 'SecGame', 'SecSafety', 'SecGeneral') { $el[$sec].Foreground = $script:brushAccent }
     foreach ($sn in $script:sliderNames) { $el[$sn].Foreground = $script:brushAccent }
     foreach ($i in 1..4) { $el["MS$i"].Foreground = $script:brushAccent }
-    $el.CpuFanSpark.Stroke = $script:brushAccent
-    $el.LegCpuDot.Fill = $script:brushAccent
-    # keep the two fan-graph lines distinguishable when the accent IS the
-    # case-fan green
-    $caseHex = if ($hex -eq '#3DD68C') { '#4C8DFF' } else { '#3DD68C' }
-    $script:brushCaseFan = New-Brush $caseHex
-    $el.CaseFanSpark.Stroke = $script:brushCaseFan
-    $el.LegCaseDot.Fill = $script:brushCaseFan
-    $el.BtnSetSave.Foreground = $script:brushAccent
-    if ($script:notify) { $script:notify.Icon = New-TrayIcon $hex }
+    $el.LogoOuter.Fill = $script:brushAccent
+    $el.BtnSetSave.Foreground = $script:brushDark
+}
+
+function Init-Sirocco {
+    # halo track fill: the full cool->warm->hot scale as an absolute-mapped
+    # gradient, so the growing arc reveals it instead of stretching it
+    $hg = New-Object System.Windows.Media.LinearGradientBrush
+    $hg.MappingMode = [System.Windows.Media.BrushMappingMode]::Absolute
+    $hg.StartPoint = New-Object System.Windows.Point 0, 0
+    $hg.EndPoint   = New-Object System.Windows.Point 206, 0
+    $hg.GradientStops.Add((New-Object System.Windows.Media.GradientStop $script:thAnchor.cool.acc, 0))
+    $hg.GradientStops.Add((New-Object System.Windows.Media.GradientStop $script:thAnchor.warm.accB, 0.55))
+    $hg.GradientStops.Add((New-Object System.Windows.Media.GradientStop $script:thAnchor.hot.acc, 1))
+    $hg.Freeze()
+    $el.HaloFill.Stroke = $hg
+
+    # breathing hero glow - peak capped low so the hot state never flares
+    $ba = New-Object System.Windows.Media.Animation.DoubleAnimation 0.34, 0.56, ([System.Windows.Duration][TimeSpan]::FromSeconds(1.6))
+    $ba.AutoReverse = $true
+    $ba.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+    $el.OrbGlow.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $ba)
+
+    # fan rotor spinners: a controllable storyboard per rotor whose speed
+    # ratio follows the real RPM; paused entirely at 0
+    $script:rotorSb = @{}
+    $script:rotorRatio = @{}
+    foreach ($r in 'RotorCpu', 'RotorCase', 'RotorGpu') {
+        $rt = New-Object System.Windows.Media.RotateTransform 0
+        $el[$r].RenderTransform = $rt
+        $an = New-Object System.Windows.Media.Animation.DoubleAnimation 0, 360, ([System.Windows.Duration][TimeSpan]::FromSeconds(1))
+        $an.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+        [System.Windows.Media.Animation.Storyboard]::SetTarget($an, $el[$r])
+        [System.Windows.Media.Animation.Storyboard]::SetTargetProperty($an, (New-Object System.Windows.PropertyPath '(UIElement.RenderTransform).(RotateTransform.Angle)'))
+        $sb = New-Object System.Windows.Media.Animation.Storyboard
+        [void]$sb.Children.Add($an)
+        $sb.Begin($el[$r], $true)
+        $sb.Pause($el[$r])
+        $script:rotorSb[$r] = $sb
+        $script:rotorRatio[$r] = 0.0
+    }
+    Apply-Thermal (Get-ThermalMix -20)
+}
+
+function Set-RotorSpeed([string]$name, $rpm) {
+    $sb = $script:rotorSb[$name]
+    if (-not $sb) { return }
+    if ($null -eq $rpm -or $rpm -lt 60) {
+        if ($script:rotorRatio[$name] -ne 0) { $sb.Pause($el[$name]); $script:rotorRatio[$name] = 0 }
+        return
+    }
+    $ratio = [math]::Min(3.0, [math]::Max(0.25, $rpm / 900.0))
+    $last = $script:rotorRatio[$name]
+    if ($last -eq 0) { $sb.Resume($el[$name]) }
+    if ($last -eq 0 -or [math]::Abs($ratio - $last) / [math]::Max($last, 0.01) -gt 0.12) {
+        $sb.SetSpeedRatio($el[$name], $ratio)
+        $script:rotorRatio[$name] = $ratio
+    }
 }
 
 # --- Settings panel --------------------------------------------------
@@ -1398,22 +2207,6 @@ foreach ($row in $script:sliderMap) {
     }.GetNewClosure())
 }
 $el.S_Interval.Add_ValueChanged({ $el.V_Interval.Text = '{0}s' -f [int]$el.S_Interval.Value })
-
-function Update-SwatchRing {
-    for ($i = 0; $i -lt 5; $i++) {
-        if ($script:swatchColors[$i] -eq $script:pendingAccent) {
-            $el["Sw$i"].BorderThickness = New-Object System.Windows.Thickness 2
-        } else {
-            $el["Sw$i"].BorderThickness = New-Object System.Windows.Thickness 0
-        }
-    }
-}
-for ($i = 0; $i -lt 5; $i++) {
-    # No GetNewClosure here: a closure's $script: scope is the dynamic module,
-    # not this script, so the color is carried on the button's Tag instead.
-    $el["Sw$i"].Tag = $script:swatchColors[$i]
-    $el["Sw$i"].Add_Click({ param($s, $e) $script:pendingAccent = [string]$s.Tag; Update-SwatchRing })
-}
 
 function Update-SliderLabels {
     # Explicit refresh: assigning Value == Minimum raises no ValueChanged event
@@ -1472,7 +2265,7 @@ function Update-ModePanel([string]$mode) {
     $script:panelMode = $mode
     $script:panelLoading = $true
     $def = @($script:modePanelDef[$mode])
-    $el.ModeSetTitle.Text = '{0} MODE' -f $script:modeNames[$mode].ToUpper()
+    $el.ModeSetTitle.Text = '{0} MODE' -f $script:modeNames[$mode].ToUpperInvariant()
     for ($i = 1; $i -le 4; $i++) {
         if ($i -le $def.Count) {
             $row = $def[$i - 1]
@@ -1563,8 +2356,6 @@ function Open-Settings {
     $el.S_CloseTray.IsChecked    = [bool]$s.closeToTray
     $el.S_Updates.IsChecked      = [bool]$s.checkUpdates
     $el.S_AutoStart.IsChecked    = Test-AutoStart
-    $script:pendingAccent = $s.accentColor
-    Update-SwatchRing
     $el.SettingsOverlay.Visibility = 'Visible'
 }
 
@@ -1588,11 +2379,9 @@ function Save-Settings {
                 'Vento', 'OK', 'Warning')
         }
     }
-    $s.accentColor    = $script:pendingAccent
     Export-Settings $s
     foreach ($k in $s.Keys) { $sync.Settings[$k] = $s[$k] }
     $sync.SettingsChanged = $true
-    Set-Accent $s.accentColor
     if ($script:panelMode) { Update-ModePanel $script:panelMode }
     $el.SettingsOverlay.Visibility = 'Collapsed'
 }
@@ -1714,7 +2503,7 @@ $script:notify.add_BalloonTipClicked({
     if ($script:lastBalloon -eq 'update' -and $sync.Update) { Start-Process $sync.Update.Url }
 })
 
-Set-Accent $script:settings.accentColor
+Init-Sirocco
 Update-ModePanel ([string]$sync.Data.ActiveMode)
 
 # --- Update check (GitHub releases, once per launch) -----------------
@@ -1754,7 +2543,8 @@ $script:histMb  = New-Object 'System.Collections.Generic.List[double]'
 $script:histFanCpu  = New-Object 'System.Collections.Generic.List[double]'
 $script:histFanCase = New-Object 'System.Collections.Generic.List[double]'
 $script:histTick = 0
-function Update-Spark($list, $poly, $box) {
+$script:fanMax = 864.0
+function Update-Spark($list, $poly, $box, $fillPoly = $null) {
     # maps 20..100 deg C onto the host box, newest sample at the right edge
     if ($list.Count -lt 2) { return }
     $w = $box.ActualWidth; $h = $box.ActualHeight
@@ -1765,31 +2555,58 @@ function Update-Spark($list, $poly, $box) {
         $t = [math]::Min([math]::Max($list[$i], 20), 100)
         $x = $i * ($w / ($n - 1))
         $y = $h - (($t - 20) / 80 * $h)
-        $pc.Add((New-Object System.Windows.Point $x, $y))
+        $pc.Add([System.Windows.Point]::new($x, $y))
     }
     $poly.Points = $pc
+    if ($fillPoly) {
+        # same trace closed down to the bottom edge = gradient area fill
+        $fpc = New-Object System.Windows.Media.PointCollection
+        foreach ($p in $pc) { $fpc.Add($p) }
+        $fpc.Add([System.Windows.Point]::new($w, $h))
+        $fpc.Add([System.Windows.Point]::new(0, $h))
+        $fillPoly.Points = $fpc
+    }
 }
 
-function Update-FanSpark($list, $poly, $box, [double]$maxV) {
-    # maps 0..maxV RPM onto the host box, newest sample at the right edge
+function Update-FanSpark($list, $poly, $box, [double]$maxV, $fillPoly = $null) {
+    # maps 0..maxV RPM onto the host box, newest sample at the right edge.
+    # Long histories are decimated to ~400 drawn points; the newest sample
+    # is always drawn so the right edge stays live.
     if ($list.Count -lt 2) { return }
     $w = $box.ActualWidth; $h = $box.ActualHeight
     if ($w -lt 10 -or $h -lt 5) { return }
     if ($maxV -lt 1) { $maxV = 1 }
     $pc = New-Object System.Windows.Media.PointCollection
     $n = $list.Count
-    for ($i = 0; $i -lt $n; $i++) {
-        $x = $i * ($w / ($n - 1))
+    $step = [int][math]::Ceiling($n / 400.0)
+    $xs = $w / ($n - 1)
+    for ($i = 0; $i -lt $n; $i += $step) {
         $y = ($h - 1) - ([math]::Min($list[$i], $maxV) / $maxV * ($h - 2))
-        $pc.Add((New-Object System.Windows.Point $x, $y))
+        $pc.Add([System.Windows.Point]::new($i * $xs, $y))
     }
+    $yLast = ($h - 1) - ([math]::Min($list[$n - 1], $maxV) / $maxV * ($h - 2))
+    $pc.Add([System.Windows.Point]::new($w, $yLast))
     $poly.Points = $pc
+    if ($fillPoly) {
+        $fpc = New-Object System.Windows.Media.PointCollection
+        foreach ($p in $pc) { $fpc.Add($p) }
+        $fpc.Add([System.Windows.Point]::new($w, $h))
+        $fpc.Add([System.Windows.Point]::new(0, $h))
+        $fillPoly.Points = $fpc
+    }
 }
 
-function Get-TempBrush([double]$t, [int]$warn, [int]$hot) {
-    if ($t -ge $hot)  { return $script:brushRed }
-    if ($t -ge $warn) { return $script:brushYellow }
-    return $script:brushGreen
+function Update-WarnFlag([string]$p, [double]$m) {
+    # over its threshold: show the "+N deg" chip and let the value wear the
+    # thermal accent; otherwise plain ink and no chip
+    if ($m -gt 0) {
+        $el["${p}WarnText"].Text = '+{0:0.#}{1}' -f $m, $script:deg
+        $el["${p}WarnFlag"].Visibility = 'Visible'
+        $el["${p}TempVal"].Foreground = $script:brushAccentB
+    } else {
+        $el["${p}WarnFlag"].Visibility = 'Collapsed'
+        $el["${p}TempVal"].Foreground = $script:brushInk
+    }
 }
 
 $script:lastWarn = $null
@@ -1815,31 +2632,39 @@ $script:timer.Add_Tick({
     if ($null -ne $d.CpuName) { $el.CpuNameText.Text = $d.CpuName }
     if ($null -ne $d.GpuName) { $el.GpuNameText.Text = $d.GpuName }
 
-    $el.CpuFanVal.Text  = if ($null -ne $d.CpuFan)  { '{0} RPM' -f $d.CpuFan }  else { '--' }
-    $el.CaseFanVal.Text = if ($null -ne $d.CaseFan) { '{0} RPM' -f $d.CaseFan } else { '--' }
+    # unit is a separate small RPM label in the XAML now
+    $el.CpuFanVal.Text  = if ($null -ne $d.CpuFan)  { '{0}' -f $d.CpuFan }  else { '--' }
+    $el.CaseFanVal.Text = if ($null -ne $d.CaseFan) { '{0}' -f $d.CaseFan } else { '--' }
     if (($null -ne $d.GpuFan1) -and ($null -ne $d.GpuFan2)) {
         $el.GpuFanVal.Text = '{0} / {1}' -f $d.GpuFan1, $d.GpuFan2
     } elseif ($null -ne $d.GpuFan1) {
-        $el.GpuFanVal.Text = '{0} RPM' -f $d.GpuFan1
+        $el.GpuFanVal.Text = '{0}' -f $d.GpuFan1
     } else {
         $el.GpuFanVal.Text = '--'
     }
 
+    # rotor icons spin at the real fan speed; rails show RPM headroom
+    Set-RotorSpeed 'RotorCpu' $d.CpuFan
+    Set-RotorSpeed 'RotorCase' $d.CaseFan
+    Set-RotorSpeed 'RotorGpu' $d.GpuFan1
+    if ($el.CpuFanRailTrack.ActualWidth -gt 0) {
+        $cw = if ($null -ne $d.CpuFan)  { [math]::Min(1.0, $d.CpuFan / 2000.0) }  else { 0 }
+        $kw = if ($null -ne $d.CaseFan) { [math]::Min(1.0, $d.CaseFan / 2000.0) } else { 0 }
+        $gw = if ($null -ne $d.GpuFan1) { [math]::Min(1.0, $d.GpuFan1 / 3200.0) } else { 0 }
+        $el.CpuFanRail.Width  = $el.CpuFanRailTrack.ActualWidth * $cw
+        $el.CaseFanRail.Width = $el.CaseFanRailTrack.ActualWidth * $kw
+        $el.GpuFanRail.Width  = $el.GpuFanRailTrack.ActualWidth * $gw
+    }
+
     if ($null -ne $d.CpuTemp) {
         $el.CpuTempVal.Text = '{0}' -f [int]$d.CpuTemp
-        $b = Get-TempBrush $d.CpuTemp 65 80
-        $el.CpuTempVal.Foreground = $b
-        $el.CpuBarFill.Background = $b
-        $el.CpuBarFill.Width = [math]::Max(0, $el.CpuBarTrack.ActualWidth * ([math]::Min($d.CpuTemp, 100) / 100))
-    } else { $el.CpuTempVal.Text = '--' }
+        Update-WarnFlag 'Cpu' ($d.CpuTemp - 65)
+    } else { $el.CpuTempVal.Text = '--'; Update-WarnFlag 'Cpu' -99 }
 
     if ($null -ne $d.GpuTemp) {
         $el.GpuTempVal.Text = '{0}' -f [int]$d.GpuTemp
-        $b = Get-TempBrush $d.GpuTemp 65 78
-        $el.GpuTempVal.Foreground = $b
-        $el.GpuBarFill.Background = $b
-        $el.GpuBarFill.Width = [math]::Max(0, $el.GpuBarTrack.ActualWidth * ([math]::Min($d.GpuTemp, 100) / 100))
-    } else { $el.GpuTempVal.Text = '--' }
+        Update-WarnFlag 'Gpu' ($d.GpuTemp - 65)
+    } else { $el.GpuTempVal.Text = '--'; Update-WarnFlag 'Gpu' -99 }
 
     if ($null -ne $d.SsdName) { $el.SsdNameText.Text = $d.SsdName }
     if ($null -ne $d.MbName)  { $el.MbNameText.Text  = $d.MbName }
@@ -1849,31 +2674,49 @@ $script:timer.Add_Tick({
     # and empties the bar instead of freezing them at the last reading.
     if ($null -ne $d.SsdTemp) {
         $el.SsdTempVal.Text = '{0}' -f [int]$d.SsdTemp
-        $b = Get-TempBrush $d.SsdTemp 60 70
-        $el.SsdTempVal.Foreground = $b
-        $el.SsdBarFill.Background = $b
-        $el.SsdBarFill.Width = [math]::Max(0, $el.SsdBarTrack.ActualWidth * ([math]::Min($d.SsdTemp, 100) / 100))
-    } else {
-        $el.SsdTempVal.Text = '--'; $el.SsdTempVal.Foreground = $script:brushText
-        $el.SsdBarFill.Width = 0
-    }
+        Update-WarnFlag 'Ssd' ($d.SsdTemp - 60)
+    } else { $el.SsdTempVal.Text = '--'; Update-WarnFlag 'Ssd' -99 }
 
     if ($null -ne $d.MbTemp) {
         $el.MbTempVal.Text = '{0}' -f [int]$d.MbTemp
-        $b = Get-TempBrush $d.MbTemp 50 60
-        $el.MbTempVal.Foreground = $b
-        $el.MbBarFill.Background = $b
-        $el.MbBarFill.Width = [math]::Max(0, $el.MbBarTrack.ActualWidth * ([math]::Min($d.MbTemp, 100) / 100))
-    } else {
-        $el.MbTempVal.Text = '--'; $el.MbTempVal.Foreground = $script:brushText
-        $el.MbBarFill.Width = 0
+        Update-WarnFlag 'Mb' ($d.MbTemp - 50)
+    } else { $el.MbTempVal.Text = '--'; Update-WarnFlag 'Mb' -99 }
+
+    # Sirocco: thermal position = the hottest sensor's distance to its own
+    # warning threshold; it drives the palette, the halo and the hero copy
+    $margin = -20.0; $hotName = $null; $hotVal = $null
+    foreach ($probe in @(
+        @($d.CpuTemp, 65, 'CPU'), @($d.GpuTemp, 65, 'GPU'),
+        @($d.SsdTemp, 60, 'SSD'), @($d.MbTemp, 50, 'BOARD'))) {
+        if ($null -ne $probe[0]) {
+            $m = [double]$probe[0] - $probe[1]
+            if ($m -gt $margin) { $margin = $m; $hotName = $probe[2]; $hotVal = $probe[0] }
+        }
+    }
+    if ($null -ne $hotName) {
+        Apply-Thermal (Get-ThermalMix $margin)
+        $el.OrbVal.Text = '{0}{1}' -f [int]$hotVal, $script:deg
+        $el.OrbLabel.Text = ($hotName.ToCharArray() -join $script:thin)
+        if ($margin -le -4) {
+            $el.HeroTitle.Text = 'System cool'
+            $el.HeroSub.Text = 'all sensors comfortably under target'
+        } elseif ($margin -le 0) {
+            $el.HeroTitle.Text = '{0} nearing target' -f $hotName
+            $el.HeroSub.Text = '{0:0.#}{1} below its comfort target' -f (-$margin), $script:deg
+        } elseif ($margin -le 4) {
+            $el.HeroTitle.Text = '{0} running warm' -f $hotName
+            $el.HeroSub.Text = '{0:0.#}{1} over its comfort target {2} fans compensating' -f $margin, $script:deg, $script:mid
+        } else {
+            $el.HeroTitle.Text = 'Running hot'
+            $el.HeroSub.Text = '{0} at {1}{2} {3} fans working hard' -f $hotName, [int]$hotVal, $script:deg, $script:mid
+        }
     }
 
     $mode = $d.ActiveMode
     foreach ($pair in @(@('quiet','BtnQuiet'), @('normal','BtnNormal'), @('performance','BtnPerf'), @('curve','BtnCurve'), @('auto','BtnAuto'))) {
         $btn = $el[$pair[1]]
-        if ($pair[0] -eq $mode) { $btn.Background = $script:brushAccent; $btn.Foreground = $script:brushDark }
-        else                    { $btn.Background = $script:brushClear;  $btn.Foreground = $script:brushDim }
+        if ($pair[0] -eq $mode) { $btn.Background = $script:brushAccentPill; $btn.Foreground = $script:brushDark }
+        else                    { $btn.Background = $script:brushClear;      $btn.Foreground = $script:brushDim }
     }
     foreach ($k in @($script:trayMode.Keys)) { $script:trayMode[$k].Checked = ($k -eq $mode) }
     # defer panel rebuilds while a slider is held, so a worker-driven mode
@@ -1928,30 +2771,36 @@ $script:timer.Add_Tick({
         if ($null -ne $d.GpuTemp) { [void]$script:histGpu.Add([double]$d.GpuTemp); if ($script:histGpu.Count -gt 300) { $script:histGpu.RemoveAt(0) } }
         if ($null -ne $d.SsdTemp) { [void]$script:histSsd.Add([double]$d.SsdTemp); if ($script:histSsd.Count -gt 300) { $script:histSsd.RemoveAt(0) } }
         if ($null -ne $d.MbTemp)  { [void]$script:histMb.Add([double]$d.MbTemp);   if ($script:histMb.Count  -gt 300) { $script:histMb.RemoveAt(0) } }
-        Update-Spark $script:histCpu $el.CpuSpark $el.CpuSparkHost
-        Update-Spark $script:histGpu $el.GpuSpark $el.GpuSparkHost
-        Update-Spark $script:histSsd $el.SsdSpark $el.SsdSparkHost
-        Update-Spark $script:histMb  $el.MbSpark  $el.MbSparkHost
-        $el.CpuSpark.Stroke = $el.CpuTempVal.Foreground
-        $el.GpuSpark.Stroke = $el.GpuTempVal.Foreground
-        $el.SsdSpark.Stroke = $el.SsdTempVal.Foreground
-        $el.MbSpark.Stroke  = $el.MbTempVal.Foreground
+        Update-Spark $script:histCpu $el.CpuSpark $el.CpuSparkHost $el.CpuSparkFill
+        Update-Spark $script:histGpu $el.GpuSpark $el.GpuSparkHost $el.GpuSparkFill
+        Update-Spark $script:histSsd $el.SsdSpark $el.SsdSparkHost $el.SsdSparkFill
+        Update-Spark $script:histMb  $el.MbSpark  $el.MbSparkHost  $el.MbSparkFill
+    }
 
-        # Fan activity graph (same cadence, shared 0..max RPM scale).
-        # Both lists advance in lockstep so the two lines share one time
-        # axis; a briefly-null channel repeats its last sample.
-        if (($null -ne $d.CpuFan) -or ($null -ne $d.CaseFan)) {
-            $vc = if ($null -ne $d.CpuFan)  { [double]$d.CpuFan }  elseif ($script:histFanCpu.Count)  { $script:histFanCpu[$script:histFanCpu.Count - 1] }   else { 0.0 }
-            $vk = if ($null -ne $d.CaseFan) { [double]$d.CaseFan } elseif ($script:histFanCase.Count) { $script:histFanCase[$script:histFanCase.Count - 1] } else { 0.0 }
-            [void]$script:histFanCpu.Add($vc);  if ($script:histFanCpu.Count  -gt 300) { $script:histFanCpu.RemoveAt(0) }
-            [void]$script:histFanCase.Add($vk); if ($script:histFanCase.Count -gt 300) { $script:histFanCase.RemoveAt(0) }
+    # Fan activity graph: sampled every tick (500ms) through a light
+    # exponential smoothing so the traces flow instead of stepping.
+    # 1200 samples = 10 minutes; both lists advance in lockstep and a
+    # briefly-null channel repeats its last sample.
+    if (($null -ne $d.CpuFan) -or ($null -ne $d.CaseFan)) {
+        $lastC = if ($script:histFanCpu.Count)  { $script:histFanCpu[$script:histFanCpu.Count - 1] }   else { $null }
+        $lastK = if ($script:histFanCase.Count) { $script:histFanCase[$script:histFanCase.Count - 1] } else { $null }
+        $vc = if ($null -ne $d.CpuFan)  { [double]$d.CpuFan }  elseif ($null -ne $lastC) { [double]$lastC } else { 0.0 }
+        $vk = if ($null -ne $d.CaseFan) { [double]$d.CaseFan } elseif ($null -ne $lastK) { [double]$lastK } else { 0.0 }
+        if ($null -ne $lastC) { $vc = $lastC * 0.72 + $vc * 0.28 }
+        if ($null -ne $lastK) { $vk = $lastK * 0.72 + $vk * 0.28 }
+        [void]$script:histFanCpu.Add($vc);  if ($script:histFanCpu.Count  -gt 1200) { $script:histFanCpu.RemoveAt(0) }
+        [void]$script:histFanCase.Add($vk); if ($script:histFanCase.Count -gt 1200) { $script:histFanCase.RemoveAt(0) }
+        if ($script:histTick % 4 -eq 0 -or ($vc * 1.08) -gt $script:fanMax -or ($vk * 1.08) -gt $script:fanMax) {
+            $fmax = 800.0
+            if ($script:histFanCpu.Count)  { $fmax = [math]::Max($fmax, ($script:histFanCpu  | Measure-Object -Maximum).Maximum) }
+            if ($script:histFanCase.Count) { $fmax = [math]::Max($fmax, ($script:histFanCase | Measure-Object -Maximum).Maximum) }
+            $script:fanMax = $fmax * 1.08
+            $el.AxR0.Text = '{0}' -f [int]($script:fanMax * 0.75)
+            $el.AxR1.Text = '{0}' -f [int]($script:fanMax * 0.5)
+            $el.AxR2.Text = '{0}' -f [int]($script:fanMax * 0.25)
         }
-        $fmax = 800.0
-        if ($script:histFanCpu.Count)  { $fmax = [math]::Max($fmax, ($script:histFanCpu  | Measure-Object -Maximum).Maximum) }
-        if ($script:histFanCase.Count) { $fmax = [math]::Max($fmax, ($script:histFanCase | Measure-Object -Maximum).Maximum) }
-        $fmax *= 1.08
-        Update-FanSpark $script:histFanCpu  $el.CpuFanSpark  $el.FanSparkHost $fmax
-        Update-FanSpark $script:histFanCase $el.CaseFanSpark $el.FanSparkHost $fmax
+        Update-FanSpark $script:histFanCpu  $el.CpuFanSpark  $el.FanSparkHost $script:fanMax $el.CpuFanSparkFill
+        Update-FanSpark $script:histFanCase $el.CaseFanSpark $el.FanSparkHost $script:fanMax $el.CaseFanSparkFill
     }
 
     $tip = 'Vento'

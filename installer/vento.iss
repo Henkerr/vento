@@ -41,6 +41,7 @@ Source: "..\Vento.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\vento.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "..\lib\*.dll"; DestDir: "{app}\lib"; Flags: ignoreversion
+Source: "..\fonts\*.ttf"; DestDir: "{app}\fonts"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
