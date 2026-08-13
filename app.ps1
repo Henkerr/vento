@@ -647,7 +647,7 @@ $script:psWorker.Runspace = $script:runspace
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Vento" Width="720" Height="910"
+        Title="Vento" Width="720" Height="966"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         WindowStartupLocation="CenterScreen" ResizeMode="CanMinimize"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
@@ -767,8 +767,8 @@ $xaml = @'
       <Setter Property="Margin" Value="5,0,0,4"/>
     </Style>
     <Style x:Key="CardSub" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource ThFaintBrush}"/>
-      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="Foreground" Value="{DynamicResource ThDimBrush}"/>
+      <Setter Property="FontSize" Value="11"/>
       <Setter Property="Margin" Value="0,4,0,0"/>
       <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
     </Style>
@@ -910,17 +910,38 @@ $xaml = @'
       </Setter>
     </Style>
     <Style x:Key="SetLabel" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#C9D2E2"/>
+      <Setter Property="Foreground" Value="{DynamicResource ThDimBrush}"/>
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
     <Style x:Key="SetValue" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#ECF0F7"/>
+      <Setter Property="Foreground" Value="{DynamicResource ThInkBrush}"/>
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
       <Setter Property="HorizontalAlignment" Value="Right"/>
+    </Style>
+    <!-- Mode-panel slider tiles: setting name + big value up top, the
+         slider full-width beneath, on its own inset surface. -->
+    <Style x:Key="TileLabel" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource ThDimBrush}"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style x:Key="TileValue" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource ThInkBrush}"/>
+      <Setter Property="FontSize" Value="16"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
+    </Style>
+    <Style x:Key="TileUnit" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource ThDimBrush}"/>
+      <Setter Property="FontSize" Value="9"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="2,0,0,2"/>
+      <Setter Property="VerticalAlignment" Value="Bottom"/>
     </Style>
     <Style x:Key="SetCheck" TargetType="CheckBox">
       <Setter Property="Foreground" Value="#C9D2E2"/>
@@ -968,7 +989,7 @@ $xaml = @'
                   <RepeatButton IsTabStop="False" Command="Slider.DecreaseLarge">
                     <RepeatButton.Template>
                       <ControlTemplate TargetType="RepeatButton">
-                        <Border Height="4" CornerRadius="2"
+                        <Border Height="5" CornerRadius="2.5"
                                 Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}"/>
                       </ControlTemplate>
                     </RepeatButton.Template>
@@ -978,7 +999,9 @@ $xaml = @'
                   <RepeatButton IsTabStop="False" Command="Slider.IncreaseLarge">
                     <RepeatButton.Template>
                       <ControlTemplate TargetType="RepeatButton">
-                        <Border Height="4" CornerRadius="2" Background="#1A2233"/>
+                        <!-- constant-alpha black so the empty track reads on any
+                             thermal tile tone -->
+                        <Border Height="5" CornerRadius="2.5" Background="#3D000000"/>
                       </ControlTemplate>
                     </RepeatButton.Template>
                   </RepeatButton>
@@ -1447,45 +1470,69 @@ $xaml = @'
                   <Grid Grid.Row="2" x:Name="ModeSlots" Margin="0,10,0,0">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*"/>
-                      <ColumnDefinition Width="22"/>
+                      <ColumnDefinition Width="8"/>
                       <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                       <RowDefinition Height="Auto"/>
                       <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <Grid x:Name="Slot1" Grid.Row="0" Grid.Column="0" Margin="0,0,0,7" Visibility="Collapsed">
-                      <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
-                      </Grid.ColumnDefinitions>
-                      <TextBlock x:Name="ML1" Style="{StaticResource SetLabel}"/>
-                      <Slider Grid.Column="1" x:Name="MS1" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                      <TextBlock Grid.Column="2" x:Name="MV1" Style="{StaticResource SetValue}"/>
-                    </Grid>
-                    <Grid x:Name="Slot2" Grid.Row="0" Grid.Column="2" Margin="0,0,0,7" Visibility="Collapsed">
-                      <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
-                      </Grid.ColumnDefinitions>
-                      <TextBlock x:Name="ML2" Style="{StaticResource SetLabel}"/>
-                      <Slider Grid.Column="1" x:Name="MS2" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                      <TextBlock Grid.Column="2" x:Name="MV2" Style="{StaticResource SetValue}"/>
-                    </Grid>
-                    <Grid x:Name="Slot3" Grid.Row="1" Grid.Column="0" Visibility="Collapsed">
-                      <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
-                      </Grid.ColumnDefinitions>
-                      <TextBlock x:Name="ML3" Style="{StaticResource SetLabel}"/>
-                      <Slider Grid.Column="1" x:Name="MS3" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                      <TextBlock Grid.Column="2" x:Name="MV3" Style="{StaticResource SetValue}"/>
-                    </Grid>
-                    <Grid x:Name="Slot4" Grid.Row="1" Grid.Column="2" Visibility="Collapsed">
-                      <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/>
-                      </Grid.ColumnDefinitions>
-                      <TextBlock x:Name="ML4" Style="{StaticResource SetLabel}"/>
-                      <Slider Grid.Column="1" x:Name="MS4" Style="{StaticResource SetSlider}" Minimum="20" Maximum="100"/>
-                      <TextBlock Grid.Column="2" x:Name="MV4" Style="{StaticResource SetValue}"/>
-                    </Grid>
+                    <Border x:Name="Slot1" Grid.Row="0" Grid.Column="0" CornerRadius="10" Padding="11,7,11,9"
+                            Background="{DynamicResource ThTrackBrush}" BorderThickness="1" Visibility="Collapsed">
+                      <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <Grid Grid.Row="0">
+                          <TextBlock x:Name="ML1" Style="{StaticResource TileLabel}"/>
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock x:Name="MV1" Style="{StaticResource TileValue}"/>
+                            <TextBlock x:Name="MU1" Style="{StaticResource TileUnit}"/>
+                          </StackPanel>
+                        </Grid>
+                        <Slider Grid.Row="1" x:Name="MS1" Style="{StaticResource SetSlider}" Margin="0,5,0,0" Minimum="20" Maximum="100"/>
+                      </Grid>
+                    </Border>
+                    <Border x:Name="Slot2" Grid.Row="0" Grid.Column="2" CornerRadius="10" Padding="11,7,11,9"
+                            Background="{DynamicResource ThTrackBrush}" BorderThickness="1" Visibility="Collapsed">
+                      <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <Grid Grid.Row="0">
+                          <TextBlock x:Name="ML2" Style="{StaticResource TileLabel}"/>
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock x:Name="MV2" Style="{StaticResource TileValue}"/>
+                            <TextBlock x:Name="MU2" Style="{StaticResource TileUnit}"/>
+                          </StackPanel>
+                        </Grid>
+                        <Slider Grid.Row="1" x:Name="MS2" Style="{StaticResource SetSlider}" Margin="0,5,0,0" Minimum="20" Maximum="100"/>
+                      </Grid>
+                    </Border>
+                    <Border x:Name="Slot3" Grid.Row="1" Grid.Column="0" CornerRadius="10" Padding="11,7,11,9" Margin="0,8,0,0"
+                            Background="{DynamicResource ThTrackBrush}" BorderThickness="1" Visibility="Collapsed">
+                      <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <Grid Grid.Row="0">
+                          <TextBlock x:Name="ML3" Style="{StaticResource TileLabel}"/>
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock x:Name="MV3" Style="{StaticResource TileValue}"/>
+                            <TextBlock x:Name="MU3" Style="{StaticResource TileUnit}"/>
+                          </StackPanel>
+                        </Grid>
+                        <Slider Grid.Row="1" x:Name="MS3" Style="{StaticResource SetSlider}" Margin="0,5,0,0" Minimum="20" Maximum="100"/>
+                      </Grid>
+                    </Border>
+                    <Border x:Name="Slot4" Grid.Row="1" Grid.Column="2" CornerRadius="10" Padding="11,7,11,9" Margin="0,8,0,0"
+                            Background="{DynamicResource ThTrackBrush}" BorderThickness="1" Visibility="Collapsed">
+                      <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <Grid Grid.Row="0">
+                          <TextBlock x:Name="ML4" Style="{StaticResource TileLabel}"/>
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock x:Name="MV4" Style="{StaticResource TileValue}"/>
+                            <TextBlock x:Name="MU4" Style="{StaticResource TileUnit}"/>
+                          </StackPanel>
+                        </Grid>
+                        <Slider Grid.Row="1" x:Name="MS4" Style="{StaticResource SetSlider}" Margin="0,5,0,0" Minimum="20" Maximum="100"/>
+                      </Grid>
+                    </Border>
                   </Grid>
                   <Grid Grid.Row="3" Margin="0,10,0,0">
                     <Grid.RowDefinitions>
@@ -1825,7 +1872,7 @@ foreach ($name in @(
     'V_BoostHigh','V_BoostLow','V_BoostCase','V_C40','V_C55','V_C70','V_C80','V_GameLoad','V_GameCool',
     'V_CpuMax','V_GpuMax','V_Interval',
     'ModeSetTitle','ModeSetHint','ModeSlots','BtnModeReset',
-    'Slot1','Slot2','Slot3','Slot4','ML1','ML2','ML3','ML4','MS1','MS2','MS3','MS4','MV1','MV2','MV3','MV4',
+    'Slot1','Slot2','Slot3','Slot4','ML1','ML2','ML3','ML4','MS1','MS2','MS3','MS4','MV1','MV2','MV3','MV4','MU1','MU2','MU3','MU4',
     'FanSparkHost','CpuFanSpark','CaseFanSpark','LegCpuDot','LegCaseDot',
     'CpuSparkFill','GpuSparkFill','SsdSparkFill','MbSparkFill','CpuFanSparkFill','CaseFanSparkFill',
     'BtnSetSave','BtnSetCancel')) {
@@ -2092,6 +2139,8 @@ function Apply-Thermal($mix) {
     $el.SectLine2.Background = $sectBrush
     $el.ModeShell.BorderBrush  = New-SolidBrushC (New-AlphaColor $acc 0x24)
     $el.FooterPill.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0x26)
+    $slotBorder = New-SolidBrushC (New-AlphaColor $acc 0x1C)
+    foreach ($sl in 'Slot1', 'Slot2', 'Slot3', 'Slot4') { $el[$sl].BorderBrush = $slotBorder }
 
     # tile top hairlines
     $hair = New-Object System.Windows.Media.LinearGradientBrush
@@ -2275,8 +2324,17 @@ function Update-ModePanel([string]$mode) {
             $sl.Maximum = [double]$row[3]
             $sl.Value = [double]$script:settings[$row[1]]
             $sl.Tag = $row
-            $el["ML$i"].Text = $row[0]
-            $el["MV$i"].Text = '{0}{1}' -f [int]$sl.Value, $row[4]
+            $el["ML$i"].Text = ([string]$row[0]).ToUpperInvariant()
+            $el["MV$i"].Text = '{0}' -f [int]$sl.Value
+            $el["MU$i"].Text = [string]$row[4]
+            # percent reads as a subscript unit, a degree sign belongs up top
+            if ([string]$row[4] -eq '%') {
+                $el["MU$i"].VerticalAlignment = 'Bottom'
+                $el["MU$i"].Margin = New-Object System.Windows.Thickness 2, 0, 0, 2
+            } else {
+                $el["MU$i"].VerticalAlignment = 'Top'
+                $el["MU$i"].Margin = New-Object System.Windows.Thickness 2, 2, 0, 0
+            }
             $el["Slot$i"].Visibility = 'Visible'
         } else {
             $el["MS$i"].Tag = $null
@@ -2323,7 +2381,7 @@ foreach ($i in 1..4) {
     $el["MS$i"].Add_ValueChanged({ param($s, $e)
         $row = $s.Tag
         if ($null -eq $row) { return }
-        $el[($s.Name -replace '^MS', 'MV')].Text = '{0}{1}' -f [int]$s.Value, $row[4]
+        $el[($s.Name -replace '^MS', 'MV')].Text = '{0}' -f [int]$s.Value
         if ($script:panelLoading) { return }
         Apply-ModeSetting ([string]$row[1]) ([int]$s.Value)
         if ([string]$row[1] -eq 'boostHigh') {
@@ -2609,6 +2667,21 @@ function Update-WarnFlag([string]$p, [double]$m) {
     }
 }
 
+# Hardware model strings arrive as marketing names too wide for the cards
+# ("NVIDIA GeForce RTX 2060", "Samsung SSD 980 PRO 1TB"). Drop the noise
+# the card already implies, keep the full name reachable as a tooltip.
+function Set-ModelLabel($tb, [string]$raw) {
+    $n = $raw -replace '\((R|TM|C)\)', ''
+    $n = $n -replace '^\s*(NVIDIA|AMD|Intel)\s+', ''
+    $n = $n -replace '^GeForce\s+(?=[RG]TX?\s)', ''
+    $n = $n -replace '^Samsung SSD\s+', 'Samsung '
+    $n = $n -replace '\s+\d+-Core Processor\s*$', ''
+    $n = $n -replace '\s+(CPU|Processor)\s*$', ''
+    $n = ($n -replace '\s{2,}', ' ').Trim()
+    if (-not $n) { $n = $raw }
+    if ($tb.Text -ne $n) { $tb.Text = $n; $tb.ToolTip = $raw }
+}
+
 $script:lastWarn = $null
 $script:lastBalloon = $null
 $script:updateNotified = $false
@@ -2629,8 +2702,8 @@ $script:timer.Add_Tick({
     }
     $d = $sync.Data
 
-    if ($null -ne $d.CpuName) { $el.CpuNameText.Text = $d.CpuName }
-    if ($null -ne $d.GpuName) { $el.GpuNameText.Text = $d.GpuName }
+    if ($null -ne $d.CpuName) { Set-ModelLabel $el.CpuNameText $d.CpuName }
+    if ($null -ne $d.GpuName) { Set-ModelLabel $el.GpuNameText $d.GpuName }
 
     # unit is a separate small RPM label in the XAML now
     $el.CpuFanVal.Text  = if ($null -ne $d.CpuFan)  { '{0}' -f $d.CpuFan }  else { '--' }
@@ -2666,8 +2739,8 @@ $script:timer.Add_Tick({
         Update-WarnFlag 'Gpu' ($d.GpuTemp - 65)
     } else { $el.GpuTempVal.Text = '--'; Update-WarnFlag 'Gpu' -99 }
 
-    if ($null -ne $d.SsdName) { $el.SsdNameText.Text = $d.SsdName }
-    if ($null -ne $d.MbName)  { $el.MbNameText.Text  = $d.MbName }
+    if ($null -ne $d.SsdName) { Set-ModelLabel $el.SsdNameText $d.SsdName }
+    if ($null -ne $d.MbName)  { Set-ModelLabel $el.MbNameText  $d.MbName }
 
     # These two sensors can legitimately vanish mid-run (drive unplugged,
     # SuperIO diode going implausible), so '--' also clears the value color
@@ -2679,7 +2752,7 @@ $script:timer.Add_Tick({
 
     if ($null -ne $d.MbTemp) {
         $el.MbTempVal.Text = '{0}' -f [int]$d.MbTemp
-        Update-WarnFlag 'Mb' ($d.MbTemp - 50)
+        Update-WarnFlag 'Mb' ($d.MbTemp - 62)
     } else { $el.MbTempVal.Text = '--'; Update-WarnFlag 'Mb' -99 }
 
     # Sirocco: thermal position = the hottest sensor's distance to its own
@@ -2687,7 +2760,9 @@ $script:timer.Add_Tick({
     $margin = -20.0; $hotName = $null; $hotVal = $null
     foreach ($probe in @(
         @($d.CpuTemp, 65, 'CPU'), @($d.GpuTemp, 65, 'GPU'),
-        @($d.SsdTemp, 60, 'SSD'), @($d.MbTemp, 50, 'BOARD'))) {
+        # Board sensors (VRM/chipset via SuperIO) idle in the high 50s on many
+        # boards - 62 keeps a healthy idle out of the warm/hot palette.
+        @($d.SsdTemp, 60, 'SSD'), @($d.MbTemp, 62, 'BOARD'))) {
         if ($null -ne $probe[0]) {
             $m = [double]$probe[0] - $probe[1]
             if ($m -gt $margin) { $margin = $m; $hotName = $probe[2]; $hotVal = $probe[0] }
