@@ -2217,7 +2217,20 @@ function Apply-Thermal($mix) {
     $el.StateBadge.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0x42)
     $el.UpdatePill.Background  = $el.StateBadge.Background
     $el.UpdatePill.BorderBrush = $el.StateBadge.BorderBrush
-    $el.UpdateBanner.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0x66)
+    # banner: accent-washed panel with an accent glow so it demands the eye
+    $el.UpdateBanner.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0xB3)
+    $bbg = New-Object System.Windows.Media.LinearGradientBrush
+    $bbg.StartPoint = New-Object System.Windows.Point 0, 0
+    $bbg.EndPoint   = New-Object System.Windows.Point 0, 1
+    $bbg.GradientStops.Add((New-Object System.Windows.Media.GradientStop (Mix-Color $pal.tile $acc 0.30), 0))
+    $bbg.GradientStops.Add((New-Object System.Windows.Media.GradientStop (Mix-Color $pal.tile $acc 0.10), 1))
+    $bbg.Freeze()
+    $el.UpdateBanner.Background = $bbg
+    if ($el.UpdateBanner.Effect) {
+        $el.UpdateBanner.Effect.Color = $acc
+        $el.UpdateBanner.Effect.Opacity = 0.5
+        $el.UpdateBanner.Effect.BlurRadius = 22
+    }
     $el.StateBadgeText.Text = @('COOL', 'WARM', 'HOT')[$onIdx]
     $sectBrush = New-SolidBrushC (New-AlphaColor $acc 0x22)
     $el.SectLine1.Background = $sectBrush
