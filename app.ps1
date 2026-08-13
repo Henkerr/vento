@@ -130,15 +130,26 @@ namespace VentoNative {
 # Own taskbar identity: without this the window is grouped under
 # powershell.exe and the taskbar shows the PowerShell icon.
 try {
-    Add-Type -Namespace VentoNative -Name Shell -MemberDefinition '[DllImport("shell32.dll", SetLastError=true)] public static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID);'
+    Add-Type -Namespace VentoNative -Name Shell -MemberDefinition '[DllImport("shell32.dll", SetLastError=true)] public static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID); [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern uint RegisterWindowMessage(string msg); [DllImport("user32.dll")] public static extern bool ChangeWindowMessageFilter(uint msg, uint action);'
     [void][VentoNative.Shell]::SetCurrentProcessExplicitAppUserModelID('Blakfy.Vento')
+    # Vento runs elevated, so Explorer's TaskbarCreated broadcast is blocked
+    # by UIPI and the tray icon would never come back after an Explorer
+    # restart. Let the message through (1 = MSGFLT_ADD) so WinForms'
+    # NotifyIcon can re-register itself.
+    $tbMsg = [VentoNative.Shell]::RegisterWindowMessage('TaskbarCreated')
+    if ($tbMsg) { [void][VentoNative.Shell]::ChangeWindowMessageFilter($tbMsg, 1) }
 } catch { }
 
 # --- Single instance -------------------------------------------------
 $created = $false
 $script:mutex = New-Object System.Threading.Mutex($true, 'Global\VentoSingleInstance', [ref]$created)
+# Launching Vento while it is already running should surface the running
+# window (the tray icon may be hidden or lost), not show a dead modal.
+# The second instance signals this event and exits; the first instance
+# polls it in the UI tick and calls Show-Main.
+$script:showMe = New-Object System.Threading.EventWaitHandle($false, ([System.Threading.EventResetMode]::AutoReset), 'Global\VentoShowMe')
 if (-not $created) {
-    [void][System.Windows.MessageBox]::Show('Vento is already running.', 'Vento', 'OK', 'Information')
+    [void]$script:showMe.Set()
     exit
 }
 
@@ -2840,6 +2851,8 @@ $script:updateNotified = $false
 $script:timer = New-Object System.Windows.Threading.DispatcherTimer
 $script:timer.Interval = [TimeSpan]::FromMilliseconds(500)
 $script:timer.Add_Tick({
+    # a second launch asked us to come forward
+    if ($script:showMe.WaitOne(0)) { Show-Main }
     if ($sync.Status -eq 'error') {
         $script:timer.Stop()
         [void][System.Windows.MessageBox]::Show($script:L.SensorFail, 'Vento', 'OK', 'Error')
