@@ -1198,7 +1198,9 @@ $xaml = @'
                 <ColumnDefinition Width="*"/>
               </Grid.ColumnDefinitions>
               <Grid Width="206" Height="206" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <Ellipse x:Name="OrbGlow" Width="204" Height="204" Opacity="0.55"/>
+                <!-- BitmapCache: the breathing opacity animation composites a cached
+                     bitmap instead of re-rendering the gradient every frame -->
+                <Ellipse x:Name="OrbGlow" Width="204" Height="204" Opacity="0.55" CacheMode="BitmapCache"/>
                 <Canvas Width="206" Height="206">
                   <Path x:Name="HaloTrack" Stroke="{DynamicResource ThTrackBrush}" StrokeThickness="7"
                         StrokeStartLineCap="Round" StrokeEndLineCap="Round"
@@ -1391,8 +1393,12 @@ $xaml = @'
                       <Border Style="{StaticResource IconChip}" Width="20" Height="20" CornerRadius="6" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
                         <Grid Width="14" Height="14">
                           <Ellipse Stroke="{DynamicResource AccentBrush}" StrokeThickness="1" Opacity="0.55"/>
+                          <!-- BitmapCache: the spin rotates a cached bitmap on the render
+                               thread; without it every frame re-renders the card subtree -->
                           <Path x:Name="RotorCpu" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Margin="1.5" RenderTransformOrigin="0.5,0.5"
-                                Data="M 12,10.8 Q 14.4,5.6 17.6,8.6 Q 15,11 12,10.8 Z M 13.04,12.6 Q 16.34,17.28 12.14,18.55 Q 11.37,15.1 13.04,12.6 Z M 10.96,12.6 Q 5.26,13.12 6.26,8.85 Q 9.63,9.9 10.96,12.6 Z"/>
+                                Data="M 12,10.8 Q 14.4,5.6 17.6,8.6 Q 15,11 12,10.8 Z M 13.04,12.6 Q 16.34,17.28 12.14,18.55 Q 11.37,15.1 13.04,12.6 Z M 10.96,12.6 Q 5.26,13.12 6.26,8.85 Q 9.63,9.9 10.96,12.6 Z">
+                            <Path.CacheMode><BitmapCache RenderAtScale="2"/></Path.CacheMode>
+                          </Path>
                         </Grid>
                       </Border>
                       <TextBlock Style="{StaticResource CardTitle}" Text="CPU FAN" Margin="7,0,0,0" VerticalAlignment="Center"/>
@@ -1415,7 +1421,9 @@ $xaml = @'
                         <Grid Width="14" Height="14">
                           <Ellipse Stroke="{DynamicResource AccentBrush}" StrokeThickness="1" Opacity="0.55"/>
                           <Path x:Name="RotorCase" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Margin="1.5" RenderTransformOrigin="0.5,0.5"
-                                Data="M 12,10.8 Q 14.4,5.6 17.6,8.6 Q 15,11 12,10.8 Z M 13.04,12.6 Q 16.34,17.28 12.14,18.55 Q 11.37,15.1 13.04,12.6 Z M 10.96,12.6 Q 5.26,13.12 6.26,8.85 Q 9.63,9.9 10.96,12.6 Z"/>
+                                Data="M 12,10.8 Q 14.4,5.6 17.6,8.6 Q 15,11 12,10.8 Z M 13.04,12.6 Q 16.34,17.28 12.14,18.55 Q 11.37,15.1 13.04,12.6 Z M 10.96,12.6 Q 5.26,13.12 6.26,8.85 Q 9.63,9.9 10.96,12.6 Z">
+                            <Path.CacheMode><BitmapCache RenderAtScale="2"/></Path.CacheMode>
+                          </Path>
                         </Grid>
                       </Border>
                       <TextBlock Style="{StaticResource CardTitle}" Text="CASE FANS" Margin="7,0,0,0" VerticalAlignment="Center"/>
@@ -1438,7 +1446,9 @@ $xaml = @'
                         <Grid Width="14" Height="14">
                           <Ellipse Stroke="{DynamicResource AccentBrush}" StrokeThickness="1" Opacity="0.55"/>
                           <Path x:Name="RotorGpu" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Margin="1.5" RenderTransformOrigin="0.5,0.5"
-                                Data="M 12,10.8 Q 14.4,5.6 17.6,8.6 Q 15,11 12,10.8 Z M 13.04,12.6 Q 16.34,17.28 12.14,18.55 Q 11.37,15.1 13.04,12.6 Z M 10.96,12.6 Q 5.26,13.12 6.26,8.85 Q 9.63,9.9 10.96,12.6 Z"/>
+                                Data="M 12,10.8 Q 14.4,5.6 17.6,8.6 Q 15,11 12,10.8 Z M 13.04,12.6 Q 16.34,17.28 12.14,18.55 Q 11.37,15.1 13.04,12.6 Z M 10.96,12.6 Q 5.26,13.12 6.26,8.85 Q 9.63,9.9 10.96,12.6 Z">
+                            <Path.CacheMode><BitmapCache RenderAtScale="2"/></Path.CacheMode>
+                          </Path>
                         </Grid>
                       </Border>
                       <TextBlock Style="{StaticResource CardTitle}" Text="GPU FANS" Margin="7,0,0,0" VerticalAlignment="Center"/>
