@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.3.0'
+$script:AppVersion = '1.4.0'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot

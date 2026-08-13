@@ -6,6 +6,42 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.4.0 — 2026-08-13
+
+The Sirocco release: the whole window is now lit by the machine's thermal state. One position —
+the hottest sensor's distance to its own comfort target — drives every color in the UI, smoothly
+blended from a cool blue through warm coral to hot red.
+
+### Added
+- **Dynamic thermal palette.** Every brush in the window (background light, accents, cards,
+  charts) is re-tinted continuously from the thermal position; no more fixed accent color.
+- **Hero orb and halo gauge.** The hottest sensor's temperature sits in a glowing orb wrapped by
+  a 240° arc that fills along the cool → warm → hot scale, with a state badge in the title bar
+  and a one-line summary of what the fans are doing about it.
+- **Fan rotor icons spin at the real fan RPM** on the CPU / case / GPU cards, and pause when a
+  fan stops.
+- **Sora typeface** (SIL OFL 1.1) is bundled and used for all UI text; the license is listed in
+  THIRD-PARTY-NOTICES.md.
+- **Mode panel slider tiles.** Each per-mode setting is an inset tile with the setting name, a
+  large value and a full-width slider, instead of the old cramped label-slider-value rows.
+- **COMFORT TARGETS settings section.** The per-sensor thresholds that drive the palette, the
+  hero copy and the per-card warning chips are now sliders (CPU/GPU 50–80 °C, SSD/board
+  45–75 °C). Defaults: 65/65/60/62.
+- **Hardware model names are legible now** — larger, brighter, stripped of marketing prefixes
+  ("NVIDIA GeForce RTX 2060 SUPER" → "RTX 2060 SUPER"), with the full name as a tooltip.
+
+### Changed
+- The board card's default warning threshold moved from 50 °C to 62 °C — SuperIO board sensors
+  idle in the high 50s on many boards, which parked the whole UI in the hot palette.
+- The window is taller again (890 → 966 px) for the hero and the mode tiles.
+
+### Fixed
+- **Rendering cost dropped from about half a CPU core to ~5%.** The rotor and glow animations
+  now composite cached bitmaps instead of re-rendering vector subtrees every frame, and are
+  capped at 30 fps.
+
+---
+
 ## 1.3.0 — 2026-08-10
 
 The dashboard now covers the rest of the machine's temperatures: SSD and motherboard cards sit
