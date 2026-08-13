@@ -990,15 +990,34 @@ $xaml = @'
       <Setter Property="Margin" Value="12,0"/>
       <Setter Property="Template">
         <Setter.Value>
+          <!-- The Sirocco board's thermo-bar language: a groove recessed into
+               the tile (dark inner top shadow + 1px bottom light edge), the
+               gradient fill inside it, and a white light-blade handle that
+               stands proud of the track - the halo dot's slider sibling. -->
           <ControlTemplate TargetType="Slider">
-            <Grid VerticalAlignment="Center" Height="20">
+            <Grid VerticalAlignment="Center" Height="24">
+              <Border Height="8" CornerRadius="4" VerticalAlignment="Center" Background="#52000000"
+                      BorderBrush="#0DFFFFFF" BorderThickness="0,0,0,1">
+                <Rectangle Height="3" VerticalAlignment="Top" RadiusX="4" RadiusY="2" Margin="1,0.5,1,0">
+                  <Rectangle.Fill>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                      <GradientStop Color="#59000000" Offset="0"/>
+                      <GradientStop Color="#00000000" Offset="1"/>
+                    </LinearGradientBrush>
+                  </Rectangle.Fill>
+                </Rectangle>
+              </Border>
               <Track x:Name="PART_Track">
                 <Track.DecreaseRepeatButton>
                   <RepeatButton IsTabStop="False" Command="Slider.DecreaseLarge">
                     <RepeatButton.Template>
                       <ControlTemplate TargetType="RepeatButton">
-                        <Border Height="5" CornerRadius="2.5"
-                                Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}"/>
+                        <Grid Height="6" Margin="1,0,0,0">
+                          <Border CornerRadius="3"
+                                  Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}"/>
+                          <!-- 1px specular meniscus on the lit fill -->
+                          <Rectangle Height="1" VerticalAlignment="Top" Margin="3,1,3,0" Fill="#30FFFFFF" RadiusX="0.5" RadiusY="0.5"/>
+                        </Grid>
                       </ControlTemplate>
                     </RepeatButton.Template>
                   </RepeatButton>
@@ -1007,27 +1026,26 @@ $xaml = @'
                   <RepeatButton IsTabStop="False" Command="Slider.IncreaseLarge">
                     <RepeatButton.Template>
                       <ControlTemplate TargetType="RepeatButton">
-                        <!-- constant-alpha black so the empty track reads on any
-                             thermal tile tone -->
-                        <Border Height="5" CornerRadius="2.5" Background="#3D000000"/>
+                        <Border Height="8" Background="Transparent"/>
                       </ControlTemplate>
                     </RepeatButton.Template>
                   </RepeatButton>
                 </Track.IncreaseRepeatButton>
                 <Track.Thumb>
-                  <!-- fader-style pill handle instead of the stock ball -->
-                  <Thumb Width="10" Height="20">
+                  <Thumb Width="11" Height="22">
                     <Thumb.Template>
                       <ControlTemplate TargetType="Thumb">
-                        <Border x:Name="knob" CornerRadius="5" Background="#ECF0F7"
-                                BorderBrush="#59000000" BorderThickness="1">
-                          <Border.Effect>
-                            <DropShadowEffect ShadowDepth="1.5" Direction="270" BlurRadius="5" Opacity="0.45" Color="#000000"/>
-                          </Border.Effect>
-                        </Border>
+                        <Grid Background="Transparent">
+                          <Rectangle x:Name="blade" Width="3.5" Height="16" RadiusX="1.75" RadiusY="1.75" Fill="#FFFFFF">
+                            <Rectangle.Effect>
+                              <DropShadowEffect ShadowDepth="0" BlurRadius="8" Opacity="0.65" Color="#FFFFFF"/>
+                            </Rectangle.Effect>
+                          </Rectangle>
+                        </Grid>
                         <ControlTemplate.Triggers>
                           <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="knob" Property="Background" Value="#FFFFFF"/>
+                            <Setter TargetName="blade" Property="Width" Value="4.5"/>
+                            <Setter TargetName="blade" Property="Height" Value="18"/>
                           </Trigger>
                         </ControlTemplate.Triggers>
                       </ControlTemplate>
