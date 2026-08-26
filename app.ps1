@@ -1,4 +1,4 @@
-﻿# =====================================================================
+# =====================================================================
 #  Vento - lightweight fan monitoring & control for Windows
 #  PowerShell 5.1 + WPF + LibreHardwareMonitor. Admin rights required
 #  for SuperIO sensor access.
@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.4.2'
+$script:AppVersion = '1.5.0'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -127,6 +127,59 @@ namespace VentoNative {
 }
 '@
 
+# DDC/CI monitor control (brightness / contrast / color preset) through the
+# dxva2.dll high-level API. HMONITOR enumeration is done in C# because
+# scriptblock->delegate marshaling is unreliable inside a background runspace.
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace VentoNative {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct PHYSICAL_MONITOR {
+        public IntPtr hPhysicalMonitor;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string szPhysicalMonitorDescription;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DRECT { public int left, top, right, bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MONITORINFO { public int cbSize; public DRECT rcMonitor; public DRECT rcWork; public uint dwFlags; }
+    public static class Ddc {
+        private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, IntPtr rc, IntPtr data);
+        [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFO lpmi);
+        // Desktop rectangle of a display, so the panel's map matches the desk.
+        public static int[] GetBounds(IntPtr hMonitor) {
+            MONITORINFO mi = new MONITORINFO();
+            mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+            if (!GetMonitorInfoW(hMonitor, ref mi)) return null;
+            return new int[] { mi.rcMonitor.left, mi.rcMonitor.top,
+                               mi.rcMonitor.right - mi.rcMonitor.left,
+                               mi.rcMonitor.bottom - mi.rcMonitor.top,
+                               (int)(mi.dwFlags & 1) };
+        }
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, out uint count);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool GetPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, uint count, [Out] PHYSICAL_MONITOR[] monitors);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool DestroyPhysicalMonitors(uint count, PHYSICAL_MONITOR[] monitors);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool GetMonitorBrightness(IntPtr h, out uint min, out uint cur, out uint max);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool SetMonitorBrightness(IntPtr h, uint v);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool GetMonitorContrast(IntPtr h, out uint min, out uint cur, out uint max);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool SetMonitorContrast(IntPtr h, uint v);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool GetVCPFeatureAndVCPFeatureReply(IntPtr h, byte code, out uint type, out uint cur, out uint max);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool SetVCPFeature(IntPtr h, byte code, uint v);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool GetCapabilitiesStringLength(IntPtr h, out uint len);
+        [DllImport("dxva2.dll", SetLastError = true)] public static extern bool CapabilitiesRequestAndCapabilitiesReply(IntPtr h, System.Text.StringBuilder caps, uint len);
+        public static System.Collections.Generic.List<IntPtr> GetHMonitors() {
+            var list = new System.Collections.Generic.List<IntPtr>();
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (hm, hdc, rc, d) => { list.Add(hm); return true; }, IntPtr.Zero);
+            return list;
+        }
+    }
+}
+'@
+} catch { }
+
 # Own taskbar identity: without this the window is grouped under
 # powershell.exe and the taskbar shows the PowerShell icon.
 try {
@@ -138,6 +191,13 @@ try {
     # NotifyIcon can re-register itself.
     $tbMsg = [VentoNative.Shell]::RegisterWindowMessage('TaskbarCreated')
     if ($tbMsg) { [void][VentoNative.Shell]::ChangeWindowMessageFilter($tbMsg, 1) }
+} catch { }
+
+# OSD overlay: extended window styles (click-through, no activation, hidden
+# from Alt-Tab) plus a periodic topmost re-assert - borderless games like to
+# reorder the z stack.
+try {
+    Add-Type -Namespace VentoNative -Name Osd -MemberDefinition '[DllImport("user32.dll", EntryPoint="GetWindowLongPtrW", SetLastError=true)] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex); [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong); [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);'
 } catch { }
 
 # --- Single instance -------------------------------------------------
@@ -203,13 +263,67 @@ function Get-DefaultSettings {
         warnMb           = 62
         checkUpdates     = $true       # notify when a new GitHub release exists
         updateRepo       = 'Henkerr/vento'
-        gameBoost        = $true       # auto Performance while the GPU is under load
+        gameAction       = 'performance' # what to do when a game is detected: performance | curve | off
         gameOnLoad       = 80          # % GPU load that counts as gaming
         gameCooldownSec  = 15          # extra full-speed seconds after a game ends (0 = off)
         curve40          = 25          # Curve mode: case fan % at 40/55/70/80 deg C
         curve55          = 40
         curve70          = 65
         curve80          = 100
+        osdMode          = 'auto'      # in-game overlay: auto (while gaming) | on | off
+        osdLayout        = 'blade'     # blade | strip | hero | pills | ghost | micro | thermo
+        osdTheme         = 'sirocco'   # sirocco | ember | venom | violet | crimson | mono
+        osdCorner        = 'tr'        # overlay corner: tr | tl | bl | br
+        osdScale         = 100         # overlay scale %
+        osdOnSecondary   = $false      # place the overlay on the secondary monitor
+        osdOpacity       = 100         # overlay opacity %
+        osdFree          = $false      # overlay parked where the user dragged it
+        osdX             = 0           # free position, DIPs
+        osdY             = 0
+        osdCpu           = $true       # overlay metrics
+        osdGpu           = $true
+        osdGpuLoad       = $true
+        osdRam           = $false      # memory usage %
+        osdFans          = $true
+        osdSsd           = $false
+        osdMb            = $false
+        osdColCpu        = ''          # per-metric color overrides ('' = theme decides)
+        osdColGpu        = ''
+        osdColLoad       = ''
+        osdColRam        = ''
+        osdColSsd        = ''
+        osdColMb         = ''
+        osdColFan        = ''
+        monSync          = $false      # monitor panel: one set of sliders drives all displays
+        monProfile       = 'DAY'       # display profile currently applied
+        monAdvOpen       = $true       # the ALL CONTROLS section starts expanded
+        monProfileScope  = 'all'       # a profile drives every display, or only the selected one
+        monProfileByMon  = @()         # per-display profile names, used when the scope is 'one'
+        monNight         = $false      # dim every display inside a nightly window
+        monNightFrom     = 1380        # minutes past midnight (23:00)
+        monNightTo       = 420         # 07:00
+        monNightProfile  = 'NIGHT'     # profile the schedule applies
+        # Built-in display profiles. Each carries its own identity colour, which
+        # tints the panel while it is the active one; users add their own with
+        # any colour they like.
+        #
+        # The numbers are not invented. Brightness tracks the room, because
+        # that is the only lever that should: ~120-150 cd/m2 for a lit room
+        # (ISO 9241-303 / TFTCentral), 80-100 cd/m2 in the dark (ISO 3664),
+        # and 100 cd/m2 for film, which is the ITU-R BT.2035 reference
+        # viewing environment. Contrast stays at the factory 70 in all of
+        # them: on an LCD it is a signal-gain control, and pushing it past
+        # default clips highlight detail (Lagom white-saturation test).
+        # 6500K is D65, the white point sRGB, Rec.709, DCI-P3-D65 and Rec.2100
+        # all master to, so it is the accurate choice everywhere; NIGHT's
+        # 5000K is a deliberate comfort deviation, since warm white suppresses
+        # melatonin far less than cool white.
+        monProfiles      = @(
+            @{ Name = 'DAY';    Color = '#FFC46F'; Bri = 45; Con = 70; Preset = 5; Builtin = $true },
+            @{ Name = 'NIGHT';  Color = '#8F86FF'; Bri = 15; Con = 70; Preset = 4; Builtin = $true },
+            @{ Name = 'CINEMA'; Color = '#FF7A8A'; Bri = 25; Con = 70; Preset = 5; Builtin = $true },
+            @{ Name = 'GAME';   Color = '#7FE0A0'; Bri = 50; Con = 70; Preset = 5; Builtin = $true }
+        )
     }
 }
 
@@ -227,6 +341,11 @@ function Import-Settings {
             foreach ($k in @($s.Keys)) {
                 $p = $json.PSObject.Properties[$k]
                 if ($null -ne $p -and $null -ne $p.Value) { $s[$k] = $p.Value }
+            }
+            # 1.4.x stored the game reaction as a bool - map it onto the tri-state action.
+            $pOld = $json.PSObject.Properties['gameBoost']
+            if ($null -ne $pOld -and $null -eq $json.PSObject.Properties['gameAction']) {
+                $s.gameAction = $(if ([bool]$pOld.Value) { 'performance' } else { 'off' })
             }
         } catch { }
     }
@@ -256,17 +375,74 @@ function Import-Settings {
         $s.mbTempSensor     = [string]$s.mbTempSensor
         $s.checkUpdates     = [bool]$s.checkUpdates
         $s.updateRepo       = [string]$s.updateRepo
-        $s.gameBoost        = [bool]$s.gameBoost
         $s.gameOnLoad       = [int](Limit $s.gameOnLoad 50 100)
         $s.gameCooldownSec  = [int](Limit $s.gameCooldownSec 0 60)
         $s.curve40          = [int](Limit $s.curve40 20 100)
         $s.curve55          = [int](Limit $s.curve55 20 100)
         $s.curve70          = [int](Limit $s.curve70 20 100)
         $s.curve80          = [int](Limit $s.curve80 20 100)
+        $s.osdScale         = [int](Limit $s.osdScale 75 200)
+        $s.osdOnSecondary   = [bool]$s.osdOnSecondary
+        $s.osdOpacity       = [int](Limit $s.osdOpacity 30 100)
+        $s.osdFree          = [bool]$s.osdFree
+        $s.osdX             = [double](Limit $s.osdX -20000 20000)
+        $s.osdY             = [double](Limit $s.osdY -20000 20000)
+        foreach ($k in 'osdCpu','osdGpu','osdGpuLoad','osdRam','osdFans','osdSsd','osdMb') { $s[$k] = [bool]$s[$k] }
+        $s.monSync          = [bool]$s.monSync
+        $s.monNight         = [bool]$s.monNight
+        $s.monAdvOpen       = [bool]$s.monAdvOpen
+        $s.monNightFrom     = [int](Limit $s.monNightFrom 0 1439)
+        $s.monNightTo       = [int](Limit $s.monNightTo   0 1439)
     } catch {
         $s = Get-DefaultSettings
     }
+    # Profiles come back from JSON as objects; normalise them to hashtables and
+    # keep the built-ins present so the panel always has something to apply.
+    # Kept out of the block above so one bad profile can't wipe every setting.
+    try {
+        $def = (Get-DefaultSettings).monProfiles
+        $norm = @()
+        foreach ($p in @($s.monProfiles)) {
+            if ($null -eq $p) { continue }
+            $h = @{}
+            if ($p -is [hashtable]) { foreach ($k in $p.Keys) { $h[$k] = $p[$k] } }
+            else { foreach ($pp in $p.PSObject.Properties) { $h[$pp.Name] = $pp.Value } }
+            $nm = ([string]$h.Name).Trim()
+            if (-not $nm) { continue }
+            $col = [string]$h.Color
+            try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($col) } catch { $col = '#6FB1FF' }
+            # Parsed per field: a hand-edited value salvages that one number
+            # instead of throwing the whole profile list away.
+            $bri = 0; $con = 0; $pre = 0
+            [void][int]::TryParse([string]$h.Bri, [ref]$bri)
+            [void][int]::TryParse([string]$h.Con, [ref]$con)
+            [void][int]::TryParse([string]$h.Preset, [ref]$pre)
+            $norm += ,@{ Name = $nm; Color = $col
+                         Bri = [int](Limit $bri 0 100); Con = [int](Limit $con 0 100)
+                         Preset = $pre; Builtin = [bool]$h.Builtin }
+        }
+        foreach ($d in $def) {
+            $hit = $false
+            foreach ($p in $norm) { if ($p.Name -eq $d.Name) { $hit = $true; break } }
+            if (-not $hit) { $norm += ,$d }
+        }
+        $s.monProfiles = @($norm)
+    } catch { $s.monProfiles = (Get-DefaultSettings).monProfiles }
+    $s.monProfile        = [string]$s.monProfile
+    $s.monNightProfile   = [string]$s.monNightProfile
+    if (@('all', 'one') -notcontains [string]$s.monProfileScope) { $s.monProfileScope = 'all' }
+    $s.monProfileByMon   = @(@($s.monProfileByMon) | ForEach-Object { [string]$_ })
     if (@('quiet','normal','performance','curve','auto') -notcontains [string]$s.lastMode) { $s.lastMode = 'auto' }
+    if (@('performance','curve','off') -notcontains [string]$s.gameAction) { $s.gameAction = 'performance' }
+    if (@('auto','on','off') -notcontains [string]$s.osdMode) { $s.osdMode = 'auto' }
+    if (@('tr','tl','bl','br') -notcontains [string]$s.osdCorner) { $s.osdCorner = 'tr' }
+    if (@('blade','strip','hero','pills','ghost','micro','thermo') -notcontains [string]$s.osdLayout) { $s.osdLayout = 'blade' }
+    if (@('sirocco','ember','venom','violet','crimson','mono') -notcontains [string]$s.osdTheme) { $s.osdTheme = 'sirocco' }
+    foreach ($k in 'osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan') {
+        $v = [string]$s[$k]
+        if ($v) { try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($v) } catch { $v = '' } }
+        $s[$k] = $v
+    }
     # Settings files written before the GitHub username was final point the
     # updater at a repo that never existed - migrate them.
     if ([string]$s.updateRepo -eq 'blakfy/vento') { $s.updateRepo = 'Henkerr/vento' }
@@ -276,7 +452,9 @@ function Import-Settings {
 }
 
 function Export-Settings($s) {
-    $s | ConvertTo-Json | Out-File -FilePath $script:settingsPath -Encoding utf8
+    # Depth 6: display profiles are a list of objects, and the default depth of
+    # 2 would serialise them as type names instead of values.
+    $s | ConvertTo-Json -Depth 6 | Out-File -FilePath $script:settingsPath -Encoding utf8
 }
 
 $script:settings = Import-Settings
@@ -291,6 +469,8 @@ $sync = [hashtable]::Synchronized(@{
     Stopped         = $false
     Status          = 'loading'
     Error           = $null
+    DdcQueue        = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+    Ddc             = [hashtable]::Synchronized(@{ Gen = 0; WGen = 0; Busy = $false; Monitors = @(); LastWrite = $null })
 })
 foreach ($k in $script:settings.Keys) { $sync.Settings[$k] = $script:settings[$k] }
 
@@ -305,6 +485,7 @@ $worker = {
         $pc.IsCpuEnabled = $true
         $pc.IsGpuEnabled = $true
         $pc.IsStorageEnabled = $true
+        $pc.IsMemoryEnabled = $true    # RAM usage % for the overlay
         $pc.Open()
 
         # Storage is skipped here: SSD units are updated per-pass anyway, and
@@ -379,6 +560,37 @@ $worker = {
             if (-not $gpuLoad) { $gpuLoad = $gpuHw.Sensors | Where-Object { $_.SensorType.ToString() -eq 'Load' } | Select-Object -First 1 }
         }
 
+        # RAM usage % for the overlay. This LHM build splits memory into
+        # 'Virtual Memory' (commit charge) and 'Total Memory' (physical), in
+        # that order - taking the first would overstate usage, so anything
+        # named Virtual is skipped when a physical entry exists.
+        $memHw = $pc.Hardware | Where-Object { $_.HardwareType.ToString() -eq 'Memory' -and $_.Name -notmatch 'Virtual' } | Select-Object -First 1
+        if (-not $memHw) { $memHw = $pc.Hardware | Where-Object { $_.HardwareType.ToString() -eq 'Memory' } | Select-Object -First 1 }
+        $ramLoad = $null
+        if ($memHw) {
+            $ramLoad = $memHw.Sensors | Where-Object { $_.SensorType.ToString() -eq 'Load' -and $_.Name -eq 'Memory' } | Select-Object -First 1
+            if (-not $ramLoad) { $ramLoad = $memHw.Sensors | Where-Object { $_.SensorType.ToString() -eq 'Load' } | Select-Object -First 1 }
+        }
+        # DIMM thermal sensors, read over SPD. DDR5 modules always carry one,
+        # many DDR4 sticks do not - on those this list is simply empty and the
+        # readout never appears.
+        $ramTempSensors = @()
+        $ramTempHw = @()
+        foreach ($hw0 in $pc.Hardware) {
+            if ($hw0.HardwareType.ToString() -ne 'Memory') { continue }
+            $hit = $false
+            foreach ($sn0 in $hw0.Sensors) {
+                if ($sn0.SensorType.ToString() -eq 'Temperature') { $ramTempSensors += $sn0; $hit = $true }
+            }
+            foreach ($sub0 in $hw0.SubHardware) {
+                foreach ($sn0 in $sub0.Sensors) {
+                    if ($sn0.SensorType.ToString() -eq 'Temperature') { $ramTempSensors += $sn0; $hit = $true }
+                }
+            }
+            # Only modules that actually carry a sensor get polled each pass.
+            if ($hit) { $ramTempHw += $hw0 }
+        }
+
         # SSD card shows the hottest solid-state drive. HDDs are excluded from
         # the recurring poll so steady-state SMART reads can't keep a sleeping
         # disk awake (drive enumeration at Open() still touches each once).
@@ -441,6 +653,9 @@ $worker = {
         $sync.Status = 'ready'
         $boostOn = $false
         $gameOn = $false; $gameHot = 0; $gameIdle = 0; $preGame = 'auto'
+        $gameEngaged = 'performance'   # mode the game action actually switched to
+        $detOn = $false; $detHot = 0; $detIdle = 0
+        $sync.Data.GameDetected = $false
         $coolMs = 0; $coolHot = 0
         $lastCurve = -100
         $sinceUpdate = 999999
@@ -485,7 +700,7 @@ $worker = {
             # remaining time and the hand-back stay accurate even when the
             # sensor interval is long.
             if ($coolMs -gt 0) {
-                if ($sync.Data.ActiveMode -ne 'performance') {
+                if ($sync.Data.ActiveMode -ne $gameEngaged) {
                     # user changed mode manually - drop the cooldown
                     $coolMs = 0; $coolHot = 0
                     $sync.Data.CoolDown = $false
@@ -507,6 +722,8 @@ $worker = {
                 if ($sio)   { $sio.Update() }
                 if ($cpuHw) { $cpuHw.Update() }
                 if ($gpuHw) { $gpuHw.Update() }
+                if ($memHw) { $memHw.Update() }
+                foreach ($hw0 in $ramTempHw) { try { $hw0.Update() } catch { } }
                 # A drive whose Update() throws (USB enclosure unplugged) is
                 # retired: LHM never nulls Sensor.Value, so without this the
                 # card would keep showing the last reading as if it were live.
@@ -522,6 +739,14 @@ $worker = {
                 $d.GpuTemp = if ($gpuTemp -and $null -ne $gpuTemp.Value) { [math]::Round($gpuTemp.Value, 1) } else { $null }
                 $d.GpuFan1 = if ($gpuFans.Count -ge 1 -and $null -ne $gpuFans[0].Value) { [int]$gpuFans[0].Value } else { $null }
                 $d.GpuFan2 = if ($gpuFans.Count -ge 2 -and $null -ne $gpuFans[1].Value) { [int]$gpuFans[1].Value } else { $null }
+                $d.RamLoad = if ($ramLoad -and $null -ne $ramLoad.Value) { [math]::Round($ramLoad.Value) } else { $null }
+                # Hottest DIMM, when the sticks report one at all.
+                $ramT = $null
+                foreach ($sn0 in $ramTempSensors) {
+                    $v0 = $sn0.Value
+                    if ($null -ne $v0 -and $v0 -gt 0 -and $v0 -lt 120 -and ($null -eq $ramT -or $v0 -gt $ramT)) { $ramT = $v0 }
+                }
+                $d.RamTemp = if ($null -ne $ramT) { [math]::Round($ramT, 1) } else { $null }
 
                 # Plausibility re-checked every pass: SuperIO chips report
                 # -55 / 127 deg C on disconnected diodes.
@@ -572,13 +797,30 @@ $worker = {
                 # inflate the game-boost / cooldown accumulators.
                 $passMs = if ($lastPassMs -lt 0) { [int]$s.updateIntervalMs } else { [int][math]::Min(60000, $nowMs - $lastPassMs) }
                 $lastPassMs = $nowMs
+                # Game detection (signal only): feeds the OSD overlay's auto
+                # mode and stays live even when the game action is 'off'.
+                # Faster on (10s) than the action's 30s ramp so the overlay
+                # appears promptly; 60s idle release so loading screens and
+                # menus don't flicker it.
+                if ($null -ne $load) {
+                    if ($detOn) {
+                        if ($load -le 30) { $detIdle += $passMs } else { $detIdle = 0 }
+                        if ($detIdle -ge 60000) { $detOn = $false; $detIdle = 0 }
+                    } else {
+                        if ($load -ge $s.gameOnLoad) { $detHot += $passMs } else { $detHot = 0 }
+                        if ($detHot -ge 10000) { $detOn = $true; $detHot = 0; $detIdle = 0 }
+                    }
+                } elseif ($detOn) { $detOn = $false; $detHot = 0; $detIdle = 0 }
+                $d.GameDetected = $detOn
                 # Near the safety limits, never (re)arm game boost - otherwise
                 # the guard's forced Auto and the boost would fight in a loop.
                 $tooHot = ((($null -ne $d.CpuTemp) -and ($d.CpuTemp -gt ($s.cpuMaxTemp - 4))) -or
                            (($null -ne $d.GpuTemp) -and ($d.GpuTemp -gt ($s.gpuMaxTemp - 4))))
-                if ($s.gameBoost -and $null -ne $load) {
+                $act = [string]$s.gameAction
+                $gameMode = if ($act -eq 'curve') { 'curve' } else { 'performance' }
+                if ($act -ne 'off' -and $null -ne $load) {
                     if ($gameOn) {
-                        if ($d.ActiveMode -ne 'performance') {
+                        if ($d.ActiveMode -ne $gameEngaged) {
                             # user changed mode manually - stop tracking
                             $gameOn = $false; $d.GameBoost = $false
                         } else {
@@ -608,21 +850,24 @@ $worker = {
                             $gameOn = $true; $d.GameBoost = $true; $gameIdle = 0
                         }
                     } else {
-                        if (($load -ge $s.gameOnLoad) -and ($d.ActiveMode -ne 'performance') -and (-not $tooHot)) { $gameHot += $passMs } else { $gameHot = 0 }
+                        if (($load -ge $s.gameOnLoad) -and ($d.ActiveMode -ne $gameMode) -and (-not $tooHot)) { $gameHot += $passMs } else { $gameHot = 0 }
                         if ($gameHot -ge 30000) {
                             $preGame = $d.ActiveMode
-                            Set-Mode 'performance'
-                            $gameOn = $true; $d.GameBoost = $true
+                            $gameEngaged = $gameMode
+                            Set-Mode $gameMode
+                            $lastCurve = -100   # entering curve: apply the curve target promptly
+                            $gameOn = $true; $d.GameBoost = $true; $d.GameMode = $gameEngaged
+                            $d.GameDetected = $true; $detOn = $true
                             $gameHot = 0; $gameIdle = 0
                             $boostOn = $false; $d.BoostActive = $false
                         }
                     }
                 } elseif ($gameOn -or $coolMs -gt 0) {
-                    # tracking lost (sensor vanished or feature disabled) -
-                    # don't strand the fans in Performance
+                    # tracking lost (sensor vanished or action set to off) -
+                    # don't strand the fans in the game mode
                     $gameOn = $false; $d.GameBoost = $false
                     $coolMs = 0; $coolHot = 0; $d.CoolDown = $false
-                    if ($d.ActiveMode -eq 'performance') { Set-Mode $preGame; $lastCurve = -100 }
+                    if ($d.ActiveMode -eq $gameEngaged) { Set-Mode $preGame; $lastCurve = -100 }
                 }
 
                 # Safety guard: in any manual mode, runaway temps force Auto.
@@ -712,6 +957,32 @@ $xaml = @'
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
                 <Setter TargetName="bg" Property="Background" Value="#233048"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Title-bar chip: the displays button carries a label so it reads as a
+         destination, not a decoration. -->
+    <Style x:Key="ChipTitleBtn" TargetType="Button">
+      <Setter Property="Height" Value="30"/>
+      <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bg" Background="#1A6FB1FF" BorderBrush="{DynamicResource AccentSoftBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="11,0">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#2E6FB1FF"/>
+                <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#456FB1FF"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -993,6 +1264,39 @@ $xaml = @'
         </Setter.Value>
       </Setter>
     </Style>
+    <!-- Pill switch: the monitor panel's schedule toggle. Track lights up in
+         the accent, knob slides right - reads as hardware, not a form field. -->
+    <Style x:Key="PillSwitch" TargetType="CheckBox">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Grid Width="42" Height="23" Background="Transparent">
+              <Border x:Name="track" CornerRadius="11" Background="#0C1119" BorderBrush="#2B3447" BorderThickness="1.5"/>
+              <Border x:Name="lit" CornerRadius="11" Background="{DynamicResource AccentBrush}" Opacity="0"/>
+              <Ellipse x:Name="knob" Width="15" Height="15" Fill="#6B7789" HorizontalAlignment="Left" Margin="4,0,0,0"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="lit" Property="Opacity" Value="1"/>
+                <Setter TargetName="track" Property="BorderThickness" Value="0"/>
+                <Setter TargetName="knob" Property="Fill" Value="#FFFFFF"/>
+                <Setter TargetName="knob" Property="HorizontalAlignment" Value="Right"/>
+                <Setter TargetName="knob" Property="Margin" Value="0,0,4,0"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="track" Property="BorderBrush" Value="#41506C"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Small glyph/label chip used across the monitor panel's action row. -->
+    <Style x:Key="ChipBtn" TargetType="Button" BasedOn="{StaticResource SubtleBtn}">
+      <Setter Property="Height" Value="30"/>
+    </Style>
     <Style x:Key="SetSlider" TargetType="Slider">
       <Setter Property="Foreground" Value="#4C8DFF"/>
       <Setter Property="IsSnapToTickEnabled" Value="True"/>
@@ -1207,7 +1511,18 @@ $xaml = @'
                              Margin="7,0,0,0" VerticalAlignment="Center" Text="STARTING"/>
                 </StackPanel>
               </Border>
-              <Button x:Name="BtnSettings" Style="{StaticResource TitleBtn}" Content="&#xE713;" ToolTip="Settings" Margin="0,0,4,0"/>
+              <Button x:Name="BtnMonitors" Style="{StaticResource ChipTitleBtn}" ToolTip="Displays: brightness, color, profiles" Margin="0,0,8,0">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="15" Text="&#xE7F4;" VerticalAlignment="Center"/>
+                  <TextBlock Text="DISPLAYS" FontSize="10" FontWeight="Bold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+              </Button>
+              <Button x:Name="BtnSettings" Style="{StaticResource ChipTitleBtn}" ToolTip="Settings" Margin="0,0,8,0">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="15" Text="&#xE713;" VerticalAlignment="Center"/>
+                  <TextBlock Text="SETTINGS" FontSize="10" FontWeight="Bold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+              </Button>
               <Button x:Name="BtnMin" Style="{StaticResource TitleBtn}" Content="&#xE921;" ToolTip="Minimize to tray"/>
               <Button x:Name="BtnClose" Style="{StaticResource TitleBtnClose}" Content="&#xE8BB;" ToolTip="Close"/>
             </StackPanel>
@@ -1802,23 +2117,150 @@ $xaml = @'
                         <Rectangle Style="{StaticResource AccentTick}"/>
                         <TextBlock Style="{StaticResource CardTitle}" Text="GAME BOOST" Foreground="#4C8DFF" x:Name="SecGame" Margin="7,0,0,0" VerticalAlignment="Center"/>
                       </StackPanel>
-                      <CheckBox x:Name="S_Game" Style="{StaticResource SetCheck}" Content="Switch to Performance during games (GPU load based)"/>
+                      <TextBlock Style="{StaticResource SetLabel}" Text="When a game is detected (GPU load based)" Margin="0,8,0,0"/>
+                      <Border x:Name="GameActShell" Background="{DynamicResource ThTileBrush}" BorderThickness="1" BorderBrush="#246FB1FF" CornerRadius="10" Padding="3" Margin="0,6,0,0" HorizontalAlignment="Left">
+                        <UniformGrid Columns="3" Width="336">
+                          <Button x:Name="S_GameActPerf"  Style="{StaticResource SegBtn}" Content="Performance"/>
+                          <Button x:Name="S_GameActCurve" Style="{StaticResource SegBtn}" Content="Curve"/>
+                          <Button x:Name="S_GameActOff"   Style="{StaticResource SegBtn}" Content="Do nothing"/>
+                        </UniformGrid>
+                      </Border>
+                      <StackPanel x:Name="GameSliders">
+                        <Grid Margin="0,9,0,0">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Style="{StaticResource SetLabel}" Text="Trigger - GPU load above"/>
+                          <Slider Grid.Column="1" x:Name="S_GameLoad" Style="{StaticResource SetSlider}" Minimum="50" Maximum="100"/>
+                          <TextBlock Grid.Column="2" x:Name="V_GameLoad" Style="{StaticResource SetValue}"/>
+                        </Grid>
+                        <Grid Margin="0,7,0,0">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Style="{StaticResource SetLabel}" Text="Post-game cooldown"/>
+                          <Slider Grid.Column="1" x:Name="S_GameCool" Style="{StaticResource SetSlider}" Minimum="0" Maximum="60"/>
+                          <TextBlock Grid.Column="2" x:Name="V_GameCool" Style="{StaticResource SetValue}"/>
+                        </Grid>
+                      </StackPanel>
+
+                      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="OVERLAY (OSD)" Foreground="#4C8DFF" x:Name="SecOsd" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <TextBlock Style="{StaticResource CardSub}" Text="A small always-on-top readout for games. Works over borderless and windowed games; true exclusive fullscreen hides it." Margin="0,2,0,0" TextWrapping="Wrap"/>
+                      <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Show overlay"/>
+                        <Border Grid.Column="1" x:Name="OsdModeShell" Background="{DynamicResource ThTileBrush}" BorderThickness="1" BorderBrush="#246FB1FF" CornerRadius="10" Padding="3" HorizontalAlignment="Left">
+                          <UniformGrid Columns="3" Width="300">
+                            <Button x:Name="O_ModeAuto" Style="{StaticResource SegBtn}" Content="While gaming"/>
+                            <Button x:Name="O_ModeOn"   Style="{StaticResource SegBtn}" Content="Always"/>
+                            <Button x:Name="O_ModeOff"  Style="{StaticResource SegBtn}" Content="Off"/>
+                          </UniformGrid>
+                        </Border>
+                      </Grid>
+                      <TextBlock Style="{StaticResource SetLabel}" Text="Layout" Margin="0,10,0,0"/>
+                      <Border x:Name="OsdLayoutShell" Background="{DynamicResource ThTileBrush}" BorderThickness="1" BorderBrush="#246FB1FF" CornerRadius="10" Padding="3" Margin="0,4,0,0" HorizontalAlignment="Left">
+                        <UniformGrid Columns="7" Width="595">
+                          <Button x:Name="O_LayBlade"  Style="{StaticResource SegBtn}" Content="Blade"/>
+                          <Button x:Name="O_LayStrip"  Style="{StaticResource SegBtn}" Content="Strip"/>
+                          <Button x:Name="O_LayHero"   Style="{StaticResource SegBtn}" Content="Hero"/>
+                          <Button x:Name="O_LayPills"  Style="{StaticResource SegBtn}" Content="Pills"/>
+                          <Button x:Name="O_LayGhost"  Style="{StaticResource SegBtn}" Content="Ghost"/>
+                          <Button x:Name="O_LayMicro"  Style="{StaticResource SegBtn}" Content="Micro"/>
+                          <Button x:Name="O_LayThermo" Style="{StaticResource SegBtn}" Content="Thermo"/>
+                        </UniformGrid>
+                      </Border>
+                      <TextBlock Style="{StaticResource SetLabel}" Text="Theme" Margin="0,10,0,0"/>
+                      <Border x:Name="OsdThemeShell" Background="{DynamicResource ThTileBrush}" BorderThickness="1" BorderBrush="#246FB1FF" CornerRadius="10" Padding="3" Margin="0,4,0,0" HorizontalAlignment="Left">
+                        <UniformGrid Columns="6" Width="510">
+                          <Button x:Name="O_ThSirocco" Style="{StaticResource SegBtn}" Content="Ice"/>
+                          <Button x:Name="O_ThEmber"   Style="{StaticResource SegBtn}" Content="Ember"/>
+                          <Button x:Name="O_ThVenom"   Style="{StaticResource SegBtn}" Content="Venom"/>
+                          <Button x:Name="O_ThViolet"  Style="{StaticResource SegBtn}" Content="Violet"/>
+                          <Button x:Name="O_ThCrimson" Style="{StaticResource SegBtn}" Content="Crimson"/>
+                          <Button x:Name="O_ThMono"    Style="{StaticResource SegBtn}" Content="Mono"/>
+                        </UniformGrid>
+                      </Border>
+                      <TextBlock Style="{StaticResource SetLabel}" Text="Preview" Margin="0,10,0,0"/>
+                      <Border x:Name="OsdPreviewFrame" CornerRadius="10" Margin="0,4,0,0" Height="150" ClipToBounds="True" BorderThickness="1" BorderBrush="#1AFFFFFF">
+                        <Border.Background>
+                          <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#131A25" Offset="0"/>
+                            <GradientStop Color="#0B0F16" Offset="0.6"/>
+                            <GradientStop Color="#121722" Offset="1"/>
+                          </LinearGradientBrush>
+                        </Border.Background>
+                        <Grid x:Name="OsdPreviewHost">
+                          <TextBlock Text="( game )" Foreground="#1FFFFFFF" FontSize="18" FontWeight="Light" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                      </Border>
+                      <Grid Margin="0,7,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Corner"/>
+                        <Border Grid.Column="1" x:Name="OsdCornerShell" Background="{DynamicResource ThTileBrush}" BorderThickness="1" BorderBrush="#246FB1FF" CornerRadius="10" Padding="3" HorizontalAlignment="Left">
+                          <UniformGrid Columns="4" Width="300">
+                            <Button x:Name="O_CorTL" Style="{StaticResource SegBtn}" Content="Top L"/>
+                            <Button x:Name="O_CorTR" Style="{StaticResource SegBtn}" Content="Top R"/>
+                            <Button x:Name="O_CorBL" Style="{StaticResource SegBtn}" Content="Bot L"/>
+                            <Button x:Name="O_CorBR" Style="{StaticResource SegBtn}" Content="Bot R"/>
+                          </UniformGrid>
+                        </Border>
+                      </Grid>
                       <Grid Margin="0,9,0,0">
                         <Grid.ColumnDefinitions>
                           <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Style="{StaticResource SetLabel}" Text="Trigger - GPU load above"/>
-                        <Slider Grid.Column="1" x:Name="S_GameLoad" Style="{StaticResource SetSlider}" Minimum="50" Maximum="100"/>
-                        <TextBlock Grid.Column="2" x:Name="V_GameLoad" Style="{StaticResource SetValue}"/>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Size"/>
+                        <Slider Grid.Column="1" x:Name="S_OsdScale" Style="{StaticResource SetSlider}" Minimum="75" Maximum="200"/>
+                        <TextBlock Grid.Column="2" x:Name="V_OsdScale" Style="{StaticResource SetValue}"/>
                       </Grid>
                       <Grid Margin="0,7,0,0">
                         <Grid.ColumnDefinitions>
                           <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Style="{StaticResource SetLabel}" Text="Post-game cooldown"/>
-                        <Slider Grid.Column="1" x:Name="S_GameCool" Style="{StaticResource SetSlider}" Minimum="0" Maximum="60"/>
-                        <TextBlock Grid.Column="2" x:Name="V_GameCool" Style="{StaticResource SetValue}"/>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Opacity"/>
+                        <Slider Grid.Column="1" x:Name="S_OsdOpacity" Style="{StaticResource SetSlider}" Minimum="30" Maximum="100"/>
+                        <TextBlock Grid.Column="2" x:Name="V_OsdOpacity" Style="{StaticResource SetValue}"/>
                       </Grid>
+                      <Grid Margin="0,9,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="200"/><ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Position"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                          <Button x:Name="BtnOsdMove" Style="{StaticResource SubtleBtn}" Content="MOVE FREELY"/>
+                          <Button x:Name="BtnOsdResetPos" Style="{StaticResource SubtleBtn}" Content="BACK TO CORNER" Margin="8,0,0,0" Visibility="Collapsed"/>
+                          <TextBlock x:Name="OsdPosNote" Style="{StaticResource CardSub}" Text="" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                      </Grid>
+                      <CheckBox x:Name="S_OsdSecond" Style="{StaticResource SetCheck}" Content="Show on the secondary monitor"/>
+                      <TextBlock Style="{StaticResource SetLabel}" Text="Show in the overlay" Margin="0,10,0,0"/>
+                      <WrapPanel Margin="0,2,0,0">
+                        <CheckBox x:Name="S_OsdCpu"  Style="{StaticResource SetCheck}" Content="CPU temperature" Width="220"/>
+                        <CheckBox x:Name="S_OsdGpu"  Style="{StaticResource SetCheck}" Content="GPU temperature" Width="220"/>
+                        <CheckBox x:Name="S_OsdLoad" Style="{StaticResource SetCheck}" Content="GPU load" Width="220"/>
+                        <CheckBox x:Name="S_OsdRam"  Style="{StaticResource SetCheck}" Content="RAM usage" Width="220"/>
+                        <CheckBox x:Name="S_OsdFans" Style="{StaticResource SetCheck}" Content="Fan speeds (CPU + case)" Width="220"/>
+                        <CheckBox x:Name="S_OsdSsd"  Style="{StaticResource SetCheck}" Content="SSD temperature" Width="220"/>
+                        <CheckBox x:Name="S_OsdMb"   Style="{StaticResource SetCheck}" Content="Board temperature" Width="220"/>
+                      </WrapPanel>
+                      <TextBlock Style="{StaticResource SetLabel}" Text="Metric colors - click to pick one; unpainted metrics follow the theme" Margin="0,10,0,0"/>
+                      <WrapPanel Margin="0,4,0,0">
+                        <Button x:Name="O_ColCpu"   Style="{StaticResource SegBtn}" Content="CPU"   MinWidth="58" Margin="0,2,4,2"/>
+                        <Button x:Name="O_ColGpu"   Style="{StaticResource SegBtn}" Content="GPU"   MinWidth="58" Margin="0,2,4,2"/>
+                        <Button x:Name="O_ColLoad"  Style="{StaticResource SegBtn}" Content="LOAD"  MinWidth="58" Margin="0,2,4,2"/>
+                        <Button x:Name="O_ColRam"   Style="{StaticResource SegBtn}" Content="RAM"   MinWidth="58" Margin="0,2,4,2"/>
+                        <Button x:Name="O_ColSsd"   Style="{StaticResource SegBtn}" Content="SSD"   MinWidth="58" Margin="0,2,4,2"/>
+                        <Button x:Name="O_ColMb"    Style="{StaticResource SegBtn}" Content="BOARD" MinWidth="58" Margin="0,2,4,2"/>
+                        <Button x:Name="O_ColFan"   Style="{StaticResource SegBtn}" Content="FAN"   MinWidth="58" Margin="0,2,4,2"/>
+                        <Button x:Name="O_ColReset" Style="{StaticResource SegBtn}" Content="Reset" MinWidth="58" Margin="8,2,0,2"/>
+                      </WrapPanel>
 
                       <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
                         <Rectangle Style="{StaticResource AccentTick}"/>
@@ -1905,6 +2347,319 @@ $xaml = @'
               </Border>
             </Border>
           </Border>
+          <!-- MONITORS panel: desk map (brightness lives on the screens),
+               the selected display's controls, profile scenes, the night
+               schedule band, and an ADVANCED sheet for the deep DDC codes. -->
+          <Border x:Name="MonitorOverlay" Grid.Row="1" Grid.RowSpan="2" Background="#E607090D" Visibility="Collapsed">
+            <Border Style="{StaticResource Card}" Margin="16,8,16,14">
+              <Border Style="{StaticResource CardInner}" Padding="20,16">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <Grid Grid.Row="0">
+                    <StackPanel Orientation="Horizontal">
+                      <Rectangle Style="{StaticResource AccentTick}"/>
+                      <TextBlock Style="{StaticResource CardTitle}" Text="MONITORS" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      <TextBlock x:Name="MonStatus" Style="{StaticResource CardSub}" Text="" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                      <Ellipse x:Name="MonSceneDot" Width="7" Height="7" Fill="#5A6B84" VerticalAlignment="Center"/>
+                      <TextBlock x:Name="MonSceneText" Style="{StaticResource CardTitle}" Text="" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </Grid>
+
+                  <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,10,0,0">
+                    <StackPanel Margin="0,0,6,0">
+                      <!-- Desk map: screens drawn to scale from the Windows
+                           desktop layout; each carries its own brightness. -->
+                      <Border Background="#0A0F17" CornerRadius="10" Height="286" ClipToBounds="True">
+                        <Grid>
+                          <Canvas x:Name="MonMapCanvas"/>
+                          <TextBlock x:Name="MonMapTag" Text="DESK" FontSize="9" FontWeight="SemiBold"
+                                     Foreground="#3C4A5E" Margin="14,10,0,0" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                          <TextBlock x:Name="MonMapHint" Text="DRAG A BLADE " FontSize="9" FontWeight="SemiBold"
+                                     Foreground="#3C4A5E" Margin="0,0,14,10" HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
+                        </Grid>
+                      </Border>
+
+                      <!-- Selected display + actions -->
+                      <Grid Margin="0,14,0,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                          <Rectangle Style="{StaticResource AccentTick}"/>
+                          <TextBlock Style="{StaticResource CardTitle}" Text="SELECTED" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                          <TextBlock x:Name="MonSelName" Style="{StaticResource CardTitle}" Foreground="#6FB1FF" Text="" Margin="9,0,0,0" VerticalAlignment="Center"/>
+                          <TextBlock x:Name="MonSelMeta" Style="{StaticResource CardSub}" Text="" Margin="9,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                          <Button x:Name="BtnMonSync" Style="{StaticResource ChipBtn}" Content="SYNC"/>
+                          <Button x:Name="BtnMonIdentify" Style="{StaticResource ChipBtn}" Content="IDENTIFY" Margin="6,0,0,0"/>
+                        </StackPanel>
+                      </Grid>
+
+                      <!-- Contrast + preset + input, one compact row -->
+                      <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="196"/>
+                          <ColumnDefinition Width="*"/>
+                          <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel x:Name="MonConRow" Grid.Column="0" Margin="0,0,16,0">
+                          <Grid>
+                            <StackPanel Orientation="Horizontal">
+                              <Rectangle Style="{StaticResource AccentTick}"/>
+                              <TextBlock Style="{StaticResource CardTitle}" Text="CONTRAST" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                              <TextBlock x:Name="V_MonCon" Style="{StaticResource TileValue}" Text="--"/>
+                              <TextBlock Style="{StaticResource TileUnit}" Text="%"/>
+                            </StackPanel>
+                          </Grid>
+                          <Slider x:Name="S_MonCon" Style="{StaticResource SetSlider}" Minimum="0" Maximum="100" Margin="0,4,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                          <StackPanel Orientation="Horizontal">
+                            <Rectangle Style="{StaticResource AccentTick}"/>
+                            <TextBlock Style="{StaticResource CardTitle}" Text="COLOR PRESET" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                          </StackPanel>
+                          <WrapPanel x:Name="MonPreHost" Margin="0,4,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                          <StackPanel Orientation="Horizontal">
+                            <Rectangle Style="{StaticResource AccentTick}"/>
+                            <TextBlock Style="{StaticResource CardTitle}" Text="INPUT" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                          </StackPanel>
+                          <WrapPanel x:Name="MonInHost" Margin="0,4,0,0"/>
+                        </StackPanel>
+                      </Grid>
+
+                      <!-- Everything else the selected display exposes, in
+                           plain sight rather than behind a dialog. -->
+                      <Border x:Name="MonAdvCard" Background="#0C121C" CornerRadius="10" Margin="0,14,0,0" Padding="16,12">
+                        <StackPanel>
+                          <Grid>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                              <Rectangle Style="{StaticResource AccentTick}"/>
+                              <TextBlock Style="{StaticResource CardTitle}" Text="ALL CONTROLS" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                              <TextBlock x:Name="MonAdvTitle" Style="{StaticResource CardSub}" Text="" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <Button x:Name="BtnMonAdv" Style="{StaticResource ChipBtn}" Content="HIDE" Height="26" HorizontalAlignment="Right"/>
+                          </Grid>
+                          <StackPanel x:Name="MonAdvBody">
+                            <StackPanel x:Name="MonModeRow" Margin="0,12,0,0">
+                              <TextBlock Style="{StaticResource CardTitle}" Text="PICTURE MODE"/>
+                              <WrapPanel x:Name="MonModeHost" Margin="0,6,0,0"/>
+                              <TextBlock x:Name="MonModeHint" Style="{StaticResource CardSub}" Foreground="#4A5970" Text="" Margin="0,2,0,0" Visibility="Collapsed"/>
+                            </StackPanel>
+                            <!-- Response time is not a DDC/CI feature on any consumer
+                                 display; the honest thing is to say so where the user
+                                 will look for it. -->
+                            <Border Background="#0E1622" CornerRadius="8" Padding="12,8" Margin="0,12,0,0">
+                              <StackPanel>
+                                <TextBlock Style="{StaticResource CardTitle}" Text="ONLY IN THE DISPLAY'S OWN MENU"/>
+                                <TextBlock x:Name="MonRtText" Style="{StaticResource CardSub}" Foreground="#8FA3BC" TextWrapping="Wrap" Margin="0,4,0,0" Text=""/>
+                              </StackPanel>
+                            </Border>
+                            <Grid Margin="0,12,0,0">
+                              <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                              </Grid.ColumnDefinitions>
+                              <StackPanel x:Name="MonRgbGroup" Grid.Column="0" Margin="0,0,14,0">
+                                <TextBlock Style="{StaticResource CardTitle}" Text="RGB GAIN"/>
+                                <Grid Margin="0,8,0,0">
+                                  <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/>
+                                  </Grid.ColumnDefinitions>
+                                  <TextBlock Text="R" FontSize="10" FontWeight="SemiBold" Foreground="#FF7A7A" VerticalAlignment="Center"/>
+                                  <Slider Grid.Column="1" x:Name="S_MonR" Style="{StaticResource SetSlider}" Minimum="0" Maximum="100" Margin="4,0"/>
+                                  <TextBlock Grid.Column="2" x:Name="V_MonR" Style="{StaticResource SetValue}" Text="--"/>
+                                </Grid>
+                                <Grid Margin="0,6,0,0">
+                                  <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/>
+                                  </Grid.ColumnDefinitions>
+                                  <TextBlock Text="G" FontSize="10" FontWeight="SemiBold" Foreground="#7FE0A0" VerticalAlignment="Center"/>
+                                  <Slider Grid.Column="1" x:Name="S_MonG" Style="{StaticResource SetSlider}" Minimum="0" Maximum="100" Margin="4,0"/>
+                                  <TextBlock Grid.Column="2" x:Name="V_MonG" Style="{StaticResource SetValue}" Text="--"/>
+                                </Grid>
+                                <Grid Margin="0,6,0,0">
+                                  <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/>
+                                  </Grid.ColumnDefinitions>
+                                  <TextBlock Text="B" FontSize="10" FontWeight="SemiBold" Foreground="#6FB1FF" VerticalAlignment="Center"/>
+                                  <Slider Grid.Column="1" x:Name="S_MonB" Style="{StaticResource SetSlider}" Minimum="0" Maximum="100" Margin="4,0"/>
+                                  <TextBlock Grid.Column="2" x:Name="V_MonB" Style="{StaticResource SetValue}" Text="--"/>
+                                </Grid>
+                              </StackPanel>
+                              <StackPanel Grid.Column="1">
+                                <StackPanel x:Name="MonSharpRow">
+                                  <Grid>
+                                    <TextBlock Style="{StaticResource CardTitle}" Text="SHARPNESS"/>
+                                    <TextBlock x:Name="V_MonSharp" Style="{StaticResource SetValue}" Text="--" HorizontalAlignment="Right"/>
+                                  </Grid>
+                                  <Slider x:Name="S_MonSharp" Style="{StaticResource SetSlider}" Minimum="0" Maximum="100" Margin="0,6,0,0"/>
+                                </StackPanel>
+                                <StackPanel x:Name="MonVolRow" Margin="0,10,0,0">
+                                  <Grid>
+                                    <TextBlock Style="{StaticResource CardTitle}" Text="VOLUME"/>
+                                    <TextBlock x:Name="V_MonVol" Style="{StaticResource SetValue}" Text="--" HorizontalAlignment="Right"/>
+                                  </Grid>
+                                  <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                      <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="BtnMonMute" Style="{StaticResource ChipBtn}" FontFamily="Segoe MDL2 Assets"
+                                            FontSize="12" Content="&#xE767;" Width="38" Height="26"/>
+                                    <Slider Grid.Column="1" x:Name="S_MonVol" Style="{StaticResource SetSlider}" Minimum="0" Maximum="100" Margin="8,0,0,0"/>
+                                  </Grid>
+                                </StackPanel>
+                              </StackPanel>
+                            </Grid>
+                            <!-- Named so the user can tell "this display can't"
+                                 apart from "Vento can't". -->
+                            <TextBlock x:Name="MonAdvNa" Style="{StaticResource CardSub}" Foreground="#4A5970"
+                                       Text="" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="MonWriteNote" Style="{StaticResource CardSub}" Foreground="#FFC46F"
+                                       Text="" Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+                            <Grid Margin="0,12,0,0">
+                              <Border x:Name="MonAdvHzChip" Background="#0E1622" CornerRadius="8" Padding="12,6" HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal">
+                                  <Ellipse Width="6" Height="6" Fill="#7FE0A0" VerticalAlignment="Center"/>
+                                  <TextBlock x:Name="MonAdvHz" Style="{StaticResource CardTitle}" Foreground="#C9D2E2" Text="" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                </StackPanel>
+                              </Border>
+                              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="BtnMonResetColor" Style="{StaticResource ChipBtn}" Content="RESET COLOR"/>
+                                <Button x:Name="BtnMonResetLevels" Style="{StaticResource ChipBtn}" Content="RESET LEVELS" Margin="8,0,0,0"/>
+                                <Button x:Name="BtnMonSoftOff" Style="{StaticResource ChipBtn}" Content="SOFT OFF" Foreground="#FF8A8A" Margin="8,0,0,0"/>
+                              </StackPanel>
+                            </Grid>
+                            <!-- Factory reset is irreversible from software, so it
+                                 asks before it fires. -->
+                            <Grid Margin="0,8,0,0">
+                              <Button x:Name="BtnMonFactory" Style="{StaticResource ChipBtn}" Content="FACTORY RESET" Foreground="#FF8A8A" HorizontalAlignment="Left"/>
+                              <StackPanel x:Name="MonFactoryConfirm" Orientation="Horizontal" HorizontalAlignment="Left" Visibility="Collapsed">
+                                <TextBlock Style="{StaticResource CardSub}" Text="Reset every setting on this display?" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <Button x:Name="BtnMonFactoryYes" Style="{StaticResource ChipBtn}" Content="RESET" Foreground="#FF8A8A"/>
+                                <Button x:Name="BtnMonFactoryNo" Style="{StaticResource ChipBtn}" Content="CANCEL" Margin="6,0,0,0"/>
+                              </StackPanel>
+                            </Grid>
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
+
+                      <!-- Switching input can leave a display dark with no way
+                           back, so the change reverts itself unless kept. -->
+                      <Border x:Name="MonRevertBar" Background="#2A1A0E" BorderBrush="#5A4020" BorderThickness="1"
+                              CornerRadius="9" Padding="14,9" Margin="0,12,0,0" Visibility="Collapsed">
+                        <Grid>
+                          <TextBlock x:Name="MonRevertText" Style="{StaticResource CardSub}" Foreground="#FFC46F"
+                                     Text="" Margin="0" VerticalAlignment="Center"/>
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="BtnMonRevertKeep" Style="{StaticResource ChipBtn}" Content="KEEP"/>
+                            <Button x:Name="BtnMonRevertNow" Style="{StaticResource ChipBtn}" Content="REVERT NOW" Margin="6,0,0,0"/>
+                          </StackPanel>
+                        </Grid>
+                      </Border>
+
+                      <!-- Profiles: one tap applies brightness + contrast +
+                           color preset to every display. -->
+                      <Grid Margin="0,16,0,0">
+                        <StackPanel Orientation="Horizontal">
+                          <Rectangle Style="{StaticResource AccentTick}"/>
+                          <TextBlock Style="{StaticResource CardTitle}" Text="PROFILES" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                          <TextBlock Style="{StaticResource CardTitle}" Foreground="#3C4A5E" Text="TAP TO APPLY &#xB7; RIGHT-CLICK TO EDIT" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                          <TextBlock Style="{StaticResource CardTitle}" Foreground="#3C4A5E" Text="APPLY TO" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                          <Button x:Name="BtnMonScopeAll" Style="{StaticResource ChipBtn}" Content="ALL DISPLAYS" Height="26"/>
+                          <Button x:Name="BtnMonScopeOne" Style="{StaticResource ChipBtn}" Content="SELECTED" Height="26" Margin="6,0,0,0"/>
+                        </StackPanel>
+                      </Grid>
+                      <WrapPanel x:Name="MonSceneHost" Margin="0,6,0,0"/>
+
+                      <!-- Night schedule -->
+                      <Border Background="#0C121C" CornerRadius="10" Margin="0,16,0,0" Padding="16,12">
+                        <StackPanel>
+                          <Grid>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                              <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#8F86FF" Text="&#xE708;" VerticalAlignment="Center"/>
+                              <TextBlock Style="{StaticResource CardTitle}" Text="NIGHT SHIFT" Margin="9,0,0,0" VerticalAlignment="Center"/>
+                              <TextBlock x:Name="MonNightText" Style="{StaticResource CardSub}" Text="" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                              <Button x:Name="BtnMonNightEdit" Style="{StaticResource ChipBtn}" Content="EDIT" Margin="0,0,8,0"/>
+                              <CheckBox x:Name="S_MonNight" Style="{StaticResource PillSwitch}"/>
+                            </StackPanel>
+                          </Grid>
+                          <Canvas x:Name="MonTimeCanvas" Height="42" Margin="0,10,0,0"/>
+                          <StackPanel x:Name="MonNightEdit" Orientation="Horizontal" Margin="0,8,0,0" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="FROM" VerticalAlignment="Center"/>
+                            <Button x:Name="BtnNightFromDn" Style="{StaticResource ChipBtn}" Content="&#x2013;" Width="30" Height="26" Margin="8,0,0,0"/>
+                            <TextBlock x:Name="MonNightFromVal" Style="{StaticResource TileValue}" Text="23:00" Margin="8,0,8,0" VerticalAlignment="Center"/>
+                            <Button x:Name="BtnNightFromUp" Style="{StaticResource ChipBtn}" Content="+" Width="30" Height="26"/>
+                            <TextBlock Style="{StaticResource CardTitle}" Text="TO" Margin="20,0,0,0" VerticalAlignment="Center"/>
+                            <Button x:Name="BtnNightToDn" Style="{StaticResource ChipBtn}" Content="&#x2013;" Width="30" Height="26" Margin="8,0,0,0"/>
+                            <TextBlock x:Name="MonNightToVal" Style="{StaticResource TileValue}" Text="07:00" Margin="8,0,8,0" VerticalAlignment="Center"/>
+                            <Button x:Name="BtnNightToUp" Style="{StaticResource ChipBtn}" Content="+" Width="30" Height="26"/>
+                            <TextBlock x:Name="MonNightProfVal" Style="{StaticResource CardSub}" Text="" Margin="20,0,0,0" VerticalAlignment="Center"/>
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
+                    </StackPanel>
+                  </ScrollViewer>
+
+                  <Grid Grid.Row="2" Margin="0,12,0,0">
+                    <!-- What the display itself reports about itself. -->
+                    <StackPanel VerticalAlignment="Center" Margin="2,0,12,0">
+                      <TextBlock x:Name="MonInfoText" Style="{StaticResource CardSub}" Text="" Margin="0" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock x:Name="MonInfoText2" Style="{StaticResource CardSub}" Foreground="#4A5970" Text="" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                      <Button x:Name="BtnMonRescan" Style="{StaticResource GhostBtn}" Content="Rescan" Width="96"/>
+                      <Button x:Name="BtnMonClose" Style="{StaticResource PrimaryBtn}" Content="Close" Width="96" Margin="8,0,0,0"/>
+                    </StackPanel>
+                  </Grid>
+
+                  <!-- New-profile sheet: name it, give it a colour, save the
+                       displays' current state into it. -->
+                  <Grid x:Name="MonNewLayer" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed">
+                    <Border Background="#B00A0E14"/>
+                    <Border Background="#151C28" CornerRadius="12" Padding="20,16"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" Width="420">
+                      <Border.Effect>
+                        <DropShadowEffect ShadowDepth="6" BlurRadius="34" Opacity="0.65" Color="#000000"/>
+                      </Border.Effect>
+                      <StackPanel>
+                        <TextBlock x:Name="MonNewTitle" Style="{StaticResource CardTitle}" Text="NEW PROFILE"/>
+                        <TextBlock x:Name="MonNewHint" Style="{StaticResource CardSub}" Text="Saves what the displays are showing right now." TextWrapping="Wrap"/>
+                        <Border Background="#0C1119" CornerRadius="8" BorderBrush="#2B3447" BorderThickness="1" Margin="0,10,0,0">
+                          <TextBox x:Name="MonNewName" Background="Transparent" BorderThickness="0" Foreground="#EDF1F8"
+                                   FontSize="14" FontWeight="SemiBold" Padding="12,9" CaretBrush="#6FB1FF" MaxLength="18"/>
+                        </Border>
+                        <Grid Margin="0,14,0,0">
+                          <TextBlock Style="{StaticResource CardTitle}" Text="IDENTITY COLOR"/>
+                          <TextBlock Style="{StaticResource CardTitle}" Foreground="#3C4A5E" Text="PICK ANY" HorizontalAlignment="Right"/>
+                        </Grid>
+                        <WrapPanel x:Name="MonNewSwatches" Margin="0,8,0,0"/>
+                        <Grid Margin="0,16,0,0">
+                          <Button x:Name="BtnMonNewDelete" Style="{StaticResource ChipBtn}" Content="DELETE" Foreground="#FF8A8A"
+                                  HorizontalAlignment="Left" Visibility="Collapsed"/>
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="BtnMonNewCancel" Style="{StaticResource GhostBtn}" Content="Cancel" Width="90"/>
+                            <Button x:Name="BtnMonNewSave" Style="{StaticResource PrimaryBtn}" Content="Save" Width="90" Margin="8,0,0,0"/>
+                          </StackPanel>
+                        </Grid>
+                      </StackPanel>
+                    </Border>
+                  </Grid>
+                </Grid>
+              </Border>
+            </Border>
+          </Border>
         </Grid>
       </Border>
     </Border>
@@ -1953,12 +2708,39 @@ foreach ($name in @(
     'AxR0','AxR1','AxR2',
     'BtnQuiet','BtnNormal','BtnPerf','BtnCurve','BtnAuto',
     'StatusDot','StatusText','WarnText','TitleBar','BtnSettings','BtnMin','BtnClose','LogoOuter',
-    'SettingsOverlay','SecFans','SecBoost','SecCurve','SecGame','SecSafety','SecTargets','SecGeneral',
+    'SettingsOverlay','SecFans','SecBoost','SecCurve','SecGame','SecOsd','SecSafety','SecTargets','SecGeneral',
+    'MonitorOverlay','BtnMonitors','MonStatus','MonSceneDot','MonSceneText',
+    'MonMapCanvas','MonMapTag','MonMapHint',
+    'MonSelName','MonSelMeta','BtnMonSync','BtnMonIdentify','BtnMonAdv',
+    'MonConRow','S_MonCon','V_MonCon','MonPreHost','MonInHost','MonSceneHost',
+    'S_MonNight','MonNightText','MonTimeCanvas','BtnMonNightEdit','BtnMonRescan','BtnMonClose',
+    'MonNightEdit','BtnNightFromDn','BtnNightFromUp','MonNightFromVal',
+    'BtnNightToDn','BtnNightToUp','MonNightToVal','MonNightProfVal',
+    'MonAdvCard','MonAdvBody','MonAdvTitle','MonAdvNa','MonWriteNote','MonRgbGroup',
+    'S_MonR','V_MonR','S_MonG','V_MonG','S_MonB','V_MonB',
+    'MonSharpRow','S_MonSharp','V_MonSharp','MonVolRow','S_MonVol','V_MonVol','BtnMonMute',
+    'MonModeRow','MonModeHost','MonModeHint','MonRtText',
+    'MonRevertBar','MonRevertText','BtnMonRevertKeep','BtnMonRevertNow',
+    'MonAdvHzChip','MonAdvHz','BtnMonResetColor','BtnMonResetLevels','BtnMonSoftOff',
+    'BtnMonFactory','MonFactoryConfirm','BtnMonFactoryYes','BtnMonFactoryNo',
+    'BtnMonScopeAll','BtnMonScopeOne','MonInfoText','MonInfoText2',
+    'MonNewLayer','MonNewTitle','MonNewHint','MonNewName','MonNewSwatches',
+    'BtnMonNewDelete','BtnMonNewCancel','BtnMonNewSave',
     'S_WarnCpu','S_WarnGpu','S_WarnSsd','S_WarnMb',
     'V_WarnCpu','V_WarnGpu','V_WarnSsd','V_WarnMb',
     'S_QuietCase','S_NormalCase','S_PerfCase','S_PerfCpu',
     'S_BoostEnabled','S_BoostHigh','S_BoostLow','S_BoostCase',
-    'S_C40','S_C55','S_C70','S_C80','S_Game','S_GameLoad','S_GameCool',
+    'GameActShell','S_GameActPerf','S_GameActCurve','S_GameActOff','GameSliders',
+    'OsdModeShell','O_ModeAuto','O_ModeOn','O_ModeOff',
+    'OsdLayoutShell','O_LayBlade','O_LayStrip','O_LayHero','O_LayPills','O_LayGhost','O_LayMicro','O_LayThermo',
+    'OsdThemeShell','O_ThSirocco','O_ThEmber','O_ThVenom','O_ThViolet','O_ThCrimson','O_ThMono',
+    'OsdPreviewFrame','OsdPreviewHost',
+    'OsdCornerShell','O_CorTL','O_CorTR','O_CorBL','O_CorBR',
+    'S_OsdScale','V_OsdScale','S_OsdSecond',
+    'S_OsdOpacity','V_OsdOpacity','BtnOsdMove','BtnOsdResetPos','OsdPosNote',
+    'S_OsdCpu','S_OsdGpu','S_OsdLoad','S_OsdRam','S_OsdFans','S_OsdSsd','S_OsdMb',
+    'O_ColCpu','O_ColGpu','O_ColLoad','O_ColRam','O_ColSsd','O_ColMb','O_ColFan','O_ColReset',
+    'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool',
     'S_CpuMax','S_GpuMax','S_Interval','S_StartMin','S_CloseTray','S_Updates','S_AutoStart',
     'V_QuietCase','V_NormalCase','V_PerfCase','V_PerfCpu',
     'V_BoostHigh','V_BoostLow','V_BoostCase','V_C40','V_C55','V_C70','V_C80','V_GameLoad','V_GameCool',
@@ -2057,7 +2839,7 @@ $script:thin = [char]0x2009   # thin space used to letter-space the orb label
 $script:modeNames    = @{ quiet = 'Quiet'; normal = 'Normal'; performance = 'Performance'; curve = 'Curve'; auto = 'Auto' }
 $script:sliderNames  = @('S_QuietCase','S_NormalCase','S_PerfCase','S_PerfCpu','S_BoostHigh','S_BoostLow','S_BoostCase',
                          'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool','S_CpuMax','S_GpuMax',
-                         'S_WarnCpu','S_WarnGpu','S_WarnSsd','S_WarnMb','S_Interval')
+                         'S_WarnCpu','S_WarnGpu','S_WarnSsd','S_WarnMb','S_Interval','S_OsdScale')
 
 # All code-generated UI strings live here so a future language option is a
 # table swap (XAML labels move here in the same pass).
@@ -2068,6 +2850,7 @@ $script:L = @{
     BoostActive   = "Cooling boost active $script:mid case fans at {0}% until below {1}{2}C"
     CurveActive   = "Curve mode $script:mid case fans at {0}%"
     GameActive    = "Game detected $script:mid Performance until the GPU goes idle"
+    GameActiveCurve = "Game detected $script:mid Curve fans until the GPU goes idle"
     CoolDown      = "Post-game cooldown $script:mid {0}s, then back to {1}"
     Downloading   = 'Downloading update...'
     UpdateBalloon = 'Version {0} is available. Use the tray menu to install it.'
@@ -2121,14 +2904,16 @@ function Mix-Color($a, $b, [double]$u) {
         [byte]($a.B + ($b.B - $a.B) * $u))
 }
 function Get-ThermalMix([double]$margin) {
-    if ($margin -le -8)    { $a = 'cool'; $b = 'cool'; $u = 0.0; $pos = 0.02 }
-    elseif ($margin -lt 0) { $a = 'cool'; $b = 'warm'; $u = ($margin + 8) / 8.0; $pos = 0.55 * $u }
-    elseif ($margin -lt 4) { $a = 'warm'; $b = 'hot';  $u = $margin / 4.0; $pos = 0.55 + 0.45 * $u }
-    else                   { $a = 'hot';  $b = 'hot';  $u = 0.0; $pos = 1.0 }
-    $pal = @{}
-    $pa = $script:thAnchor[$a]; $pb = $script:thAnchor[$b]
-    foreach ($n in @($pa.Keys)) { $pal[$n] = Mix-Color $pa[$n] $pb[$n] $u }
-    return @{ pal = $pal; pos = [math]::Max(0.02, [math]::Min(1.0, $pos)) }
+    if ($margin -le -8)    { $pos = 0.02 }
+    elseif ($margin -lt 0) { $pos = 0.55 * (($margin + 8) / 8.0) }
+    elseif ($margin -lt 4) { $pos = 0.55 + 0.45 * ($margin / 4.0) }
+    else                   { $pos = 1.0 }
+    $pos = [math]::Max(0.02, [math]::Min(1.0, $pos))
+    # The palette snaps to the three anchors (blue / orange / red) on the same
+    # thresholds as the state badge - no in-between blends. Only the halo dot
+    # travels continuously along the arc.
+    $state = if ($pos -lt 0.35) { 'cool' } elseif ($pos -le 0.8) { 'warm' } else { 'hot' }
+    return @{ pal = $script:thAnchor[$state]; pos = $pos }
 }
 function New-SolidBrushC($c) { $b = New-Object System.Windows.Media.SolidColorBrush $c; $b.Freeze(); return $b }
 function New-AlphaColor($c, [byte]$a) { return [System.Windows.Media.Color]::FromArgb($a, $c.R, $c.G, $c.B) }
@@ -2247,6 +3032,8 @@ function Apply-Thermal($mix) {
     $el.SectLine1.Background = $sectBrush
     $el.SectLine2.Background = $sectBrush
     $el.ModeShell.BorderBrush  = New-SolidBrushC (New-AlphaColor $acc 0x24)
+    $shellBrush = New-SolidBrushC (New-AlphaColor $acc 0x24)
+    foreach ($sh in 'GameActShell', 'OsdModeShell', 'OsdCornerShell', 'OsdLayoutShell', 'OsdThemeShell') { $el[$sh].BorderBrush = $shellBrush }
     $el.FooterPill.BorderBrush = New-SolidBrushC (New-AlphaColor $acc 0x26)
     $slotBorder = New-SolidBrushC (New-AlphaColor $acc 0x1C)
     foreach ($sl in 'Slot1', 'Slot2', 'Slot3', 'Slot4') { $el[$sl].BorderBrush = $slotBorder }
@@ -2277,12 +3064,14 @@ function Apply-Thermal($mix) {
     foreach ($sp in 'CpuSparkFill', 'GpuSparkFill', 'SsdSparkFill', 'MbSparkFill') { $el[$sp].Fill = $spFill }
 
     # settings + mode panel accents
-    foreach ($sec in 'SecFans', 'SecBoost', 'SecCurve', 'SecGame', 'SecSafety', 'SecTargets', 'SecGeneral') { $el[$sec].Foreground = $script:brushAccent }
-    # slider fills: accent -> bright-accent gradient across the filled side
+    foreach ($sec in 'SecFans', 'SecBoost', 'SecCurve', 'SecGame', 'SecOsd', 'SecSafety', 'SecTargets', 'SecGeneral') { $el[$sec].Foreground = $script:brushAccent }
+    # slider fills: dark -> bright accent, so the bar "charges up" toward the
+    # blade (user call: karanliktan parlaga)
     $sgb = New-Object System.Windows.Media.LinearGradientBrush
     $sgb.StartPoint = New-Object System.Windows.Point 0, 0.5
     $sgb.EndPoint   = New-Object System.Windows.Point 1, 0.5
-    $sgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop $acc, 0))
+    $sgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop (New-AlphaColor $acc 0x4D), 0))
+    $sgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop $acc, 0.72))
     $sgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop $pal.accB, 1))
     $sgb.Freeze()
     foreach ($sn in $script:sliderNames) { $el[$sn].Foreground = $sgb }
@@ -2366,6 +3155,8 @@ $script:sliderMap = @(
     @('S_C80',        'V_C80',        'curve80',    '%'),
     @('S_GameLoad',   'V_GameLoad',   'gameOnLoad', '%'),
     @('S_GameCool',   'V_GameCool',   'gameCooldownSec', 's'),
+    @('S_OsdScale',   'V_OsdScale',   'osdScale',   '%'),
+    @('S_OsdOpacity', 'V_OsdOpacity', 'osdOpacity', '%'),
     @('S_CpuMax',     'V_CpuMax',     'cpuMaxTemp', "$script:deg"),
     @('S_GpuMax',     'V_GpuMax',     'gpuMaxTemp', "$script:deg"),
     @('S_WarnCpu',    'V_WarnCpu',    'warnCpu',    "$script:deg"),
@@ -2527,13 +3318,171 @@ $el.BtnModeReset.Add_Click({
     Update-ModePanel $mode
 })
 
+# --- Settings pickers: segmented buttons for game action + OSD -------
+$script:gameActionUI  = 'performance'
+$script:osdModePick   = 'auto'
+$script:osdCornerPick = 'tr'
+$script:osdLayoutPick = 'blade'
+$script:osdThemePick  = 'sirocco'
+$script:osdColorStage = @{}      # metric color overrides staged while the panel is open
+$script:osdCheckMap = @(@('S_OsdCpu','osdCpu'), @('S_OsdGpu','osdGpu'), @('S_OsdLoad','osdGpuLoad'),
+                        @('S_OsdRam','osdRam'),
+                        @('S_OsdFans','osdFans'), @('S_OsdSsd','osdSsd'), @('S_OsdMb','osdMb'))
+$script:osdColBtnMap = @(@('O_ColCpu','osdColCpu'), @('O_ColGpu','osdColGpu'), @('O_ColLoad','osdColLoad'),
+                         @('O_ColRam','osdColRam'), @('O_ColSsd','osdColSsd'), @('O_ColMb','osdColMb'),
+                         @('O_ColFan','osdColFan'))
+
+function Update-PickerButtons($map, [string]$picked) {
+    foreach ($k in @($map.Keys)) {
+        $b = $el[$map[$k]]
+        if ($k -eq $picked) { $b.Background = $script:brushAccentPill; $b.Foreground = $script:brushDark }
+        else { $b.Background = $script:brushClear; $b.Foreground = $script:brushDim }
+    }
+}
+$script:gameActBtns   = @{ performance = 'S_GameActPerf'; curve = 'S_GameActCurve'; off = 'S_GameActOff' }
+$script:osdModeBtns   = @{ auto = 'O_ModeAuto'; on = 'O_ModeOn'; off = 'O_ModeOff' }
+$script:osdCornerBtns = @{ tl = 'O_CorTL'; tr = 'O_CorTR'; bl = 'O_CorBL'; br = 'O_CorBR' }
+$script:osdLayoutBtns = @{ blade = 'O_LayBlade'; strip = 'O_LayStrip'; hero = 'O_LayHero'; pills = 'O_LayPills';
+                           ghost = 'O_LayGhost'; micro = 'O_LayMicro'; thermo = 'O_LayThermo' }
+$script:osdThemeBtns  = @{ sirocco = 'O_ThSirocco'; ember = 'O_ThEmber'; venom = 'O_ThVenom'; violet = 'O_ThViolet';
+                           crimson = 'O_ThCrimson'; mono = 'O_ThMono' }
+
+function Update-GameActionButtons {
+    Update-PickerButtons $script:gameActBtns $script:gameActionUI
+    $off = ($script:gameActionUI -eq 'off')
+    $el.GameSliders.IsEnabled = -not $off
+    $el.GameSliders.Opacity = $(if ($off) { 0.45 } else { 1.0 })
+}
+function Update-OsdColorButtons {
+    foreach ($row in $script:osdColBtnMap) {
+        $b = $el[$row[0]]
+        $hex = [string]$script:osdColorStage[$row[1]]
+        if ($hex) {
+            $b.Background = New-SolidBrushC ([System.Windows.Media.ColorConverter]::ConvertFromString($hex))
+            $b.Foreground = $script:brushDark
+        } else {
+            $b.Background = $script:brushClear
+            $b.Foreground = $script:brushDim
+        }
+    }
+    $el.O_ColReset.Background = $script:brushClear
+    $el.O_ColReset.Foreground = $script:brushDim
+}
+function Update-OsdPickers {
+    Update-PickerButtons $script:osdModeBtns $script:osdModePick
+    Update-PickerButtons $script:osdCornerBtns $script:osdCornerPick
+    Update-PickerButtons $script:osdLayoutBtns $script:osdLayoutPick
+    Update-PickerButtons $script:osdThemeBtns $script:osdThemePick
+    Update-OsdColorButtons
+    Update-OsdPreview
+}
+
+# Live preview inside the settings panel: runs the real overlay builder
+# against the STAGED picks (nothing is saved yet) by briefly swapping the
+# builder's context, then restoring the live overlay's references.
+function Update-OsdPreview {
+    if (-not $el.OsdPreviewHost) { return }
+    $stage = @{}
+    foreach ($k in $script:settings.Keys) { $stage[$k] = $script:settings[$k] }
+    $stage.osdLayout = [string]$script:osdLayoutPick
+    $stage.osdTheme  = [string]$script:osdThemePick
+    $stage.osdScale  = [int]$el.S_OsdScale.Value
+    foreach ($p in $script:osdCheckMap) { $stage[$p[1]] = [bool]$el[$p[0]].IsChecked }
+    foreach ($row in $script:osdColBtnMap) { $stage[$row[1]] = [string]$script:osdColorStage[$row[1]] }
+    $bakSettings = $script:settings; $bakHost = $script:osdHost
+    $bakVals = $script:osdVals; $bakAcc = $script:osdAccented
+    $bakDot = $script:osdThermoDot; $bakHero = $script:osdHeroId; $bakState = $script:osdState
+    try {
+        $script:settings = $stage
+        $script:osdHost = $el.OsdPreviewHost
+        $script:osdState = 'cool'
+        Build-OsdContent
+        $sample = @{ cpu = "62$($script:deg)"; gpu = "71$($script:deg)"; load = '98%'; ram = '54%'
+                     ssd = "48$($script:deg)"; mb = "46$($script:deg)"; fan = "842 $($script:mid) 615" }
+        foreach ($id in @($script:osdVals.Keys)) { $script:osdVals[$id].Text = $sample[$id] }
+        if ($el.OsdPreviewHost.Children.Count -gt 0) {
+            $c = $el.OsdPreviewHost.Children[$el.OsdPreviewHost.Children.Count - 1]
+            switch ([string]$script:osdCornerPick) {
+                'tl' { $c.HorizontalAlignment = 'Left';  $c.VerticalAlignment = 'Top' }
+                'bl' { $c.HorizontalAlignment = 'Left';  $c.VerticalAlignment = 'Bottom' }
+                'br' { $c.HorizontalAlignment = 'Right'; $c.VerticalAlignment = 'Bottom' }
+                default { $c.HorizontalAlignment = 'Right'; $c.VerticalAlignment = 'Top' }
+            }
+            $c.Margin = New-Object System.Windows.Thickness 12
+        }
+    } catch { } finally {
+        $script:settings = $bakSettings; $script:osdHost = $bakHost
+        $script:osdVals = $bakVals; $script:osdAccented = $bakAcc
+        $script:osdThermoDot = $bakDot; $script:osdHeroId = $bakHero; $script:osdState = $bakState
+    }
+}
+foreach ($k in @($script:gameActBtns.Keys)) {
+    $el[$script:gameActBtns[$k]].Tag = $k
+    $el[$script:gameActBtns[$k]].Add_Click({ param($s0, $e0) $script:gameActionUI = [string]$s0.Tag; Update-GameActionButtons })
+}
+foreach ($k in @($script:osdModeBtns.Keys)) {
+    $el[$script:osdModeBtns[$k]].Tag = $k
+    $el[$script:osdModeBtns[$k]].Add_Click({ param($s0, $e0) $script:osdModePick = [string]$s0.Tag; Update-OsdPickers })
+}
+foreach ($k in @($script:osdCornerBtns.Keys)) {
+    $el[$script:osdCornerBtns[$k]].Tag = $k
+    $el[$script:osdCornerBtns[$k]].Add_Click({ param($s0, $e0) $script:osdCornerPick = [string]$s0.Tag; Update-OsdPickers })
+}
+foreach ($k in @($script:osdLayoutBtns.Keys)) {
+    $el[$script:osdLayoutBtns[$k]].Tag = $k
+    $el[$script:osdLayoutBtns[$k]].Add_Click({ param($s0, $e0) $script:osdLayoutPick = [string]$s0.Tag; Update-OsdPickers })
+}
+foreach ($k in @($script:osdThemeBtns.Keys)) {
+    $el[$script:osdThemeBtns[$k]].Tag = $k
+    $el[$script:osdThemeBtns[$k]].Add_Click({ param($s0, $e0) $script:osdThemePick = [string]$s0.Tag; Update-OsdPickers })
+}
+foreach ($row in $script:osdColBtnMap) {
+    $el[$row[0]].Tag = $row[1]
+    $el[$row[0]].Add_Click({ param($s0, $e0)
+        $key = [string]$s0.Tag
+        $dlg = New-Object System.Windows.Forms.ColorDialog
+        $dlg.FullOpen = $true
+        $cur = [string]$script:osdColorStage[$key]
+        if ($cur) {
+            try { $dlg.Color = [System.Drawing.ColorTranslator]::FromHtml($cur) } catch { }
+        }
+        # Owned by the main window so the picker always opens in front of it.
+        $own = New-Object System.Windows.Forms.NativeWindow
+        try { $own.AssignHandle((New-Object System.Windows.Interop.WindowInteropHelper $window).Handle) } catch { }
+        if ($dlg.ShowDialog($own) -eq [System.Windows.Forms.DialogResult]::OK) {
+            $script:osdColorStage[$key] = '#{0:X2}{1:X2}{2:X2}' -f $dlg.Color.R, $dlg.Color.G, $dlg.Color.B
+            Update-OsdColorButtons
+            Update-OsdPreview
+        }
+        try { $own.ReleaseHandle() } catch { }
+        $dlg.Dispose()
+    })
+}
+$el.O_ColReset.Add_Click({ $script:osdColorStage = @{}; Update-OsdColorButtons; Update-OsdPreview })
+foreach ($p in $script:osdCheckMap) {
+    $el[$p[0]].Add_Click({ Update-OsdPreview })
+}
+$el.S_OsdScale.Add_ValueChanged({ if ($el.SettingsOverlay.Visibility -eq 'Visible') { Update-OsdPreview } })
+
 function Open-Settings {
     $s = $script:settings
     foreach ($row in $script:sliderMap) { $el[$row[0]].Value = [double]$s[$row[2]] }
     $el.S_Interval.Value = [math]::Round($s.updateIntervalMs / 1000)
     Update-SliderLabels
     $el.S_BoostEnabled.IsChecked = [bool]$s.boostEnabled
-    $el.S_Game.IsChecked         = [bool]$s.gameBoost
+    $el.BtnOsdResetPos.Visibility = $(if ([bool]$s.osdFree) { 'Visible' } else { 'Collapsed' })
+    $el.OsdPosNote.Text = $(if ([bool]$s.osdFree) { 'parked where you dragged it' } else { '' })
+    $script:gameActionUI  = [string]$s.gameAction
+    $script:osdModePick   = [string]$s.osdMode
+    $script:osdCornerPick = [string]$s.osdCorner
+    $script:osdLayoutPick = [string]$s.osdLayout
+    $script:osdThemePick  = [string]$s.osdTheme
+    $script:osdColorStage = @{}
+    foreach ($row in $script:osdColBtnMap) { if ([string]$s[$row[1]]) { $script:osdColorStage[$row[1]] = [string]$s[$row[1]] } }
+    $el.S_OsdSecond.IsChecked = [bool]$s.osdOnSecondary
+    foreach ($p in $script:osdCheckMap) { $el[$p[0]].IsChecked = [bool]$s[$p[1]] }
+    Update-GameActionButtons
+    Update-OsdPickers
     $el.S_StartMin.IsChecked     = [bool]$s.startMinimized
     $el.S_CloseTray.IsChecked    = [bool]$s.closeToTray
     $el.S_Updates.IsChecked      = [bool]$s.checkUpdates
@@ -2550,7 +3499,16 @@ function Save-Settings {
     $s.startMinimized = [bool]$el.S_StartMin.IsChecked
     $s.closeToTray    = [bool]$el.S_CloseTray.IsChecked
     $s.checkUpdates   = [bool]$el.S_Updates.IsChecked
-    $s.gameBoost      = [bool]$el.S_Game.IsChecked
+    $s.gameAction     = [string]$script:gameActionUI
+    $s.osdMode        = [string]$script:osdModePick
+    # Picking a corner is an explicit "snap back": it clears a dragged position.
+    if ([string]$s.osdCorner -ne [string]$script:osdCornerPick) { $s.osdFree = $false }
+    $s.osdCorner      = [string]$script:osdCornerPick
+    $s.osdLayout      = [string]$script:osdLayoutPick
+    $s.osdTheme       = [string]$script:osdThemePick
+    $s.osdOnSecondary = [bool]$el.S_OsdSecond.IsChecked
+    foreach ($p in $script:osdCheckMap) { $s[$p[1]] = [bool]$el[$p[0]].IsChecked }
+    foreach ($row in $script:osdColBtnMap) { $s[$row[1]] = [string]$script:osdColorStage[$row[1]] }
     $want = [bool]$el.S_AutoStart.IsChecked
     if ($want -ne (Test-AutoStart)) {
         $err = Set-AutoStart $want
@@ -2565,11 +3523,32 @@ function Save-Settings {
     foreach ($k in $s.Keys) { $sync.Settings[$k] = $s[$k] }
     $sync.SettingsChanged = $true
     if ($script:panelMode) { Update-ModePanel $script:panelMode }
+    Update-OsdLayout
     $el.SettingsOverlay.Visibility = 'Collapsed'
 }
 
 $el.BtnSetSave.Add_Click({ Save-Settings })
-$el.BtnSetCancel.Add_Click({ $el.SettingsOverlay.Visibility = 'Collapsed' })
+$el.BtnSetCancel.Add_Click({
+    $el.SettingsOverlay.Visibility = 'Collapsed'
+    # The opacity slider previews live on the real overlay; Cancel puts the
+    # saved value back.
+    if ($script:osd) { $script:osd.Opacity = ([int]$script:settings.osdOpacity) / 100.0 }
+})
+$el.S_OsdOpacity.Add_ValueChanged({
+    if ($script:osd) { $script:osd.Opacity = [double]$el.S_OsdOpacity.Value / 100.0 }
+})
+$el.BtnOsdMove.Add_Click({
+    $el.SettingsOverlay.Visibility = 'Collapsed'
+    Set-OsdEdit $true
+})
+$el.BtnOsdResetPos.Add_Click({
+    $script:settings.osdFree = $false
+    $sync.Settings.osdFree = $false
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    $el.BtnOsdResetPos.Visibility = 'Collapsed'
+    $el.OsdPosNote.Text = ''
+    Position-Osd
+})
 $el.UpdatePill.Add_MouseLeftButtonUp({ Install-Update })
 
 # --- Update banner ---------------------------------------------------
@@ -2613,6 +3592,1131 @@ $el.BtnSettings.Add_Click({
     else { Open-Settings }
 })
 
+# --- Monitor panel (DDC/CI) ------------------------------------------
+# The monitors are the source of truth: values are read fresh on every
+# panel open, only the sync preference is persisted. Slider moves are
+# debounced into the DDC worker's queue so dragging never blocks the UI.
+$script:monLoading = $false
+$script:monGen = -1
+$script:monWGen = 0
+$script:nightLastMin = -1
+$script:ddcPending = @{}
+$script:presetNames = @{ 1 = 'sRGB'; 2 = 'Native'; 3 = '4000K'; 4 = '5000K'; 5 = '6500K'; 6 = '7500K';
+                         7 = '8200K'; 8 = '9300K'; 9 = '10000K'; 10 = '11500K'; 11 = 'User 1'; 12 = 'User 2'; 13 = 'User 3' }
+# VCP 0x60 input sources, standard MCCS numbering.
+$script:inputNames  = @{ 1 = 'VGA 1'; 2 = 'VGA 2'; 3 = 'DVI 1'; 4 = 'DVI 2'; 5 = 'Composite'; 6 = 'Composite 2';
+                         7 = 'S-Video'; 8 = 'S-Video 2'; 9 = 'Tuner'; 12 = 'Component'; 15 = 'DP 1'; 16 = 'DP 2';
+                         17 = 'HDMI 1'; 18 = 'HDMI 2' }
+# VCP 0xDC picture modes, standard MCCS numbering.
+$script:modeNamesDdc = @{ 1 = 'Productivity'; 2 = 'Mixed'; 3 = 'Movie'; 4 = 'User'; 5 = 'Games';
+                          6 = 'Sports'; 7 = 'Professional'; 8 = 'Eco'; 9 = 'Low power'; 10 = 'Demo'; 240 = 'Dynamic' }
+# The chips carry the standard MCCS names. Vendors label these slots their
+# own way in the OSD, but no mapping is guessed here: a wrong name is worse
+# than a generic one.
+function Get-MonModeName($m, [int]$code) {
+    if ($script:modeNamesDdc.ContainsKey($code)) { return $script:modeNamesDdc[$code] }
+    return '0x{0:X2}' -f $code
+}
+$script:monSel      = 0        # index of the display the controls act on
+$script:monMapItems = @()      # map tiles, index-aligned with the DDC snapshot
+$script:nightApplied = $false  # night profile is currently forced by the schedule
+$script:nightPrev    = $null   # profile to restore when the window closes
+
+# Slider moves are throttled, not debounced: while a blade is being dragged
+# the newest value goes out every 40 ms instead of waiting for the hand to
+# stop, so the other display follows the drag rather than the release. A DDC
+# write is ~60 ms, and the worker keeps only the newest value per target, so
+# a fast drag never queues up stale steps.
+$script:ddcSendTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:ddcSendTimer.Interval = [TimeSpan]::FromMilliseconds(40)
+$script:ddcSendTimer.Add_Tick({
+    $script:ddcSendTimer.Stop()
+    foreach ($k in @($script:ddcPending.Keys)) { $sync.DdcQueue.Enqueue($script:ddcPending[$k]) }
+    $script:ddcPending = @{}
+})
+function Queue-DdcSet([string]$cmd, [int]$mon, [int]$value, [int]$code) {
+    $script:ddcPending['{0}:{1}:{2}' -f $cmd, $mon, $code] = @{ Cmd = $cmd; Mon = $mon; Value = $value; Code = $code }
+    if (-not $script:ddcSendTimer.IsEnabled) { $script:ddcSendTimer.Start() }
+}
+
+function ConvertTo-MonColor([string]$hex) {
+    try { return [System.Windows.Media.ColorConverter]::ConvertFromString($hex) }
+    catch { return [System.Windows.Media.ColorConverter]::ConvertFromString('#6FB1FF') }
+}
+# Bar fill in the app's language: dark at the left, bright under the blade.
+function New-MonBarBrush($col) {
+    $dark = [System.Windows.Media.Color]::FromArgb(0xFF, [byte]($col.R * 0.32), [byte]($col.G * 0.32), [byte]($col.B * 0.32))
+    $b = New-Object System.Windows.Media.LinearGradientBrush
+    $b.StartPoint = New-Object System.Windows.Point 0, 0.5
+    $b.EndPoint   = New-Object System.Windows.Point 1, 0.5
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop $dark, 0))
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop $col, 1))
+    $b.Freeze()
+    return $b
+}
+function New-MonBrush($col, [byte]$alpha = 255) {
+    $b = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb($alpha, $col.R, $col.G, $col.B))
+    $b.Freeze(); return $b
+}
+function Show-ColorPicker([string]$current) {
+    $dlg = New-Object System.Windows.Forms.ColorDialog
+    $dlg.FullOpen = $true
+    if ($current) { try { $dlg.Color = [System.Drawing.ColorTranslator]::FromHtml($current) } catch { } }
+    # Owned by the main window so the picker can't open behind the elevated app.
+    $own = New-Object System.Windows.Forms.NativeWindow
+    try { $own.AssignHandle((New-Object System.Windows.Interop.WindowInteropHelper $window).Handle) } catch { }
+    $res = $null
+    if ($dlg.ShowDialog($own) -eq [System.Windows.Forms.DialogResult]::OK) {
+        $res = '#{0:X2}{1:X2}{2:X2}' -f $dlg.Color.R, $dlg.Color.G, $dlg.Color.B
+    }
+    try { $own.ReleaseHandle() } catch { }
+    $dlg.Dispose()
+    return $res
+}
+
+# --- Display profiles ------------------------------------------------
+# A profile is a snapshot the displays can be put back into with one tap:
+# brightness, contrast and colour preset, plus an identity colour that
+# tints the panel while it is the active one.
+function Get-MonProfiles {
+    $out = @()
+    foreach ($p in @($script:settings.monProfiles)) {
+        if ($null -eq $p) { continue }
+        $h = @{}
+        if ($p -is [hashtable]) { foreach ($k in $p.Keys) { $h[$k] = $p[$k] } }
+        else { foreach ($pp in $p.PSObject.Properties) { $h[$pp.Name] = $pp.Value } }
+        if (-not $h.Name) { continue }
+        $h.Name    = [string]$h.Name
+        $h.Color   = [string]$h.Color
+        $h.Bri     = [int](Limit ([int]$h.Bri) 0 100)
+        $h.Con     = [int](Limit ([int]$h.Con) 0 100)
+        $h.Preset  = [int]$h.Preset
+        $h.Builtin = [bool]$h.Builtin
+        try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($h.Color) } catch { $h.Color = '#6FB1FF' }
+        $out += ,$h
+    }
+    return $out
+}
+function Save-MonProfiles($arr) {
+    $script:settings.monProfiles = @($arr)
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+}
+function Get-MonProfile([string]$name) {
+    foreach ($p in (Get-MonProfiles)) { if ($p.Name -eq $name) { return $p } }
+    return $null
+}
+# Which profile is showing on a display: in 'all' scope every display shares
+# one, in 'one' scope each display remembers its own.
+function Get-MonActiveProfileName([int]$idx) {
+    if ([string]$script:settings.monProfileScope -eq 'all') { return [string]$script:settings.monProfile }
+    $by = @($script:settings.monProfileByMon)
+    if ($idx -ge 0 -and $idx -lt $by.Count -and $by[$idx]) { return [string]$by[$idx] }
+    return ''
+}
+function Set-MonActiveProfileName([int]$idx, [string]$name) {
+    $by = @($script:settings.monProfileByMon)
+    $need = [math]::Max($idx + 1, @($sync.Ddc.Monitors).Count)
+    while ($by.Count -lt $need) { $by += '' }
+    $by[$idx] = $name
+    $script:settings.monProfileByMon = @($by)
+}
+# Applies to every display, or only the selected one, per the scope switch.
+function Apply-MonProfile($p, [switch]$Silent) {
+    if (-not $p) { return }
+    $mons = @($sync.Ddc.Monitors)
+    $one = ([string]$script:settings.monProfileScope -eq 'one')
+    $targets = if ($one) { ,$script:monSel } else { 0..([math]::Max(0, $mons.Count - 1)) }
+    foreach ($i in $targets) {
+        if ($i -lt 0 -or $i -ge $mons.Count -or -not $mons[$i].Ok) { continue }
+        Queue-DdcSet 'SetBri' $i ([int]$p.Bri) 0
+        if ($null -ne $mons[$i].ConCur) { Queue-DdcSet 'SetCon' $i ([int]$p.Con) 0 }
+        if ([int]$p.Preset -gt 0 -and @($mons[$i].Presets) -contains [int]$p.Preset) {
+            Queue-DdcSet 'SetVcp' $i ([int]$p.Preset) 0x14
+        }
+        # Reflect the new values locally; the next Enum re-reads them from the display.
+        $mons[$i].BriCur = [int]$p.Bri
+        if ($null -ne $mons[$i].ConCur) { $mons[$i].ConCur = [int]$p.Con }
+        if ([int]$p.Preset -gt 0 -and @($mons[$i].Presets) -contains [int]$p.Preset) { $mons[$i].PreCur = [int]$p.Preset }
+        Set-MonActiveProfileName $i ([string]$p.Name)
+    }
+    if (-not $one) { $script:settings.monProfile = [string]$p.Name }
+    if (-not $Silent) { $script:saveTimer.Stop(); $script:saveTimer.Start() }
+    Update-MonitorPanel
+}
+
+# --- Panel painting --------------------------------------------------
+function Get-MonAccent {
+    $p = Get-MonProfile (Get-MonActiveProfileName $script:monSel)
+    if ($p) { return (ConvertTo-MonColor $p.Color) }
+    return (ConvertTo-MonColor '#6FB1FF')
+}
+
+# Desk map: the real desktop layout, scaled to the stage. Brightness lives
+# on the screens themselves - the value large in the middle, its blade
+# docked along the bottom edge.
+function Build-MonMap {
+    $cv = $el.MonMapCanvas
+    $cv.Children.Clear()
+    $script:monMapItems = @()
+    $W = $cv.ActualWidth; $H = $cv.ActualHeight
+    if ($W -lt 40 -or $H -lt 40) { return }
+    $mons = @($sync.Ddc.Monitors)
+    if ($mons.Count -eq 0) { return }
+    $acc = Get-MonAccent
+    $accBrush = New-MonBrush $acc
+    # Bounding box of every display that reported a rectangle.
+    $minX = $null; $minY = $null; $maxX = $null; $maxY = $null
+    foreach ($m in $mons) {
+        if ($null -eq $m.MapW -or [int]$m.MapW -le 0) { continue }
+        $l = [int]$m.MapX; $t = [int]$m.MapY; $r = $l + [int]$m.MapW; $b = $t + [int]$m.MapH
+        if ($null -eq $minX -or $l -lt $minX) { $minX = $l }
+        if ($null -eq $minY -or $t -lt $minY) { $minY = $t }
+        if ($null -eq $maxX -or $r -gt $maxX) { $maxX = $r }
+        if ($null -eq $maxY -or $b -gt $maxY) { $maxY = $b }
+    }
+    if ($null -eq $minX) { return }
+    $padX = 26.0; $padTop = 34.0; $padBot = 30.0
+    $spanX = [double]($maxX - $minX); $spanY = [double]($maxY - $minY)
+    if ($spanX -le 0 -or $spanY -le 0) { return }
+    $scale = [math]::Min(($W - 2 * $padX) / $spanX, ($H - $padTop - $padBot) / $spanY)
+    $offX = ($W - $spanX * $scale) / 2.0
+    $offY = ($H - $padBot - $spanY * $scale) / 2.0 + 4
+    $el.MonMapTag.Text = 'DESK {0} {1} x {2}' -f $script:mid, $spanX, $spanY
+
+    for ($i = 0; $i -lt $mons.Count; $i++) {
+        $m = $mons[$i]
+        if ($null -eq $m.MapW -or [int]$m.MapW -le 0) { continue }
+        $x = $offX + ([int]$m.MapX - $minX) * $scale
+        $y = $offY + ([int]$m.MapY - $minY) * $scale
+        $w = [int]$m.MapW * $scale
+        $h = [int]$m.MapH * $scale
+        if ($w -lt 60 -or $h -lt 40) { continue }
+        $sel = ($i -eq $script:monSel)
+        $bri = [double]0.5
+        if ($m.Ok -and [int]$m.BriMax -gt 0) { $bri = [double][int]$m.BriCur / [double][int]$m.BriMax }
+
+        # Screen face: a steel-blue gradient whose lift tracks brightness.
+        $face = New-Object System.Windows.Controls.Border
+        $face.Width = $w; $face.Height = $h
+        $face.CornerRadius = New-Object System.Windows.CornerRadius ([math]::Min(9, $h / 2 - 1))
+        $g = New-Object System.Windows.Media.LinearGradientBrush
+        $g.StartPoint = New-Object System.Windows.Point 0, 0
+        $g.EndPoint   = New-Object System.Windows.Point 0.4, 1
+        $lift = 0.12 + 0.78 * $bri
+        $c1 = [System.Windows.Media.Color]::FromRgb([byte](26 + 150 * $lift), [byte](36 + 150 * $lift), [byte](52 + 140 * $lift))
+        $c2 = [System.Windows.Media.Color]::FromRgb([byte](18 + 110 * $lift), [byte](26 + 115 * $lift), [byte](40 + 120 * $lift))
+        $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop $c1, 0))
+        $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop $c2, 1))
+        $g.Freeze()
+        $face.Background = $g
+        $face.BorderThickness = New-Object System.Windows.Thickness 2
+        if ($sel) {
+            $face.BorderBrush = $accBrush
+            $fx = New-Object System.Windows.Media.Effects.DropShadowEffect
+            $fx.ShadowDepth = 0; $fx.BlurRadius = 26; $fx.Opacity = 0.75; $fx.Color = $acc
+            $face.Effect = $fx
+        } else {
+            $face.BorderBrush = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x2A, 0x35, 0x49))
+        }
+        $face.Cursor = [System.Windows.Input.Cursors]::Hand
+        $face.Tag = $i
+        $face.Add_MouseLeftButtonDown({ param($s0, $e0)
+            $script:monSel = [int]$s0.Tag
+            Update-MonitorPanel
+        })
+        [System.Windows.Controls.Canvas]::SetLeft($face, $x)
+        [System.Windows.Controls.Canvas]::SetTop($face, $y)
+        [void]$cv.Children.Add($face)
+
+        $inner = New-Object System.Windows.Controls.Grid
+        $face.Child = $inner
+
+        # index badge
+        $badge = New-Object System.Windows.Controls.Border
+        $badge.Background = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x0A, 0x0F, 0x18)) 0xB0
+        $badge.CornerRadius = New-Object System.Windows.CornerRadius 6
+        $badge.Padding = New-Object System.Windows.Thickness 7, 2, 7, 2
+        $badge.HorizontalAlignment = 'Left'; $badge.VerticalAlignment = 'Top'
+        $badge.Margin = New-Object System.Windows.Thickness 8, 8, 0, 0
+        $bt = New-Object System.Windows.Controls.TextBlock
+        $bt.Text = if ($m.Primary) { '{0} {1} PRIMARY' -f ($i + 1), $script:mid } else { '{0}' -f ($i + 1) }
+        $bt.FontSize = 8.5; $bt.FontWeight = 'SemiBold'
+        $bt.Foreground = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xC9, 0xD2, 0xE2))
+        $badge.Child = $bt
+        [void]$inner.Children.Add($badge)
+
+        if ($m.Ok) {
+            # brightness value + unit
+            $vs = New-Object System.Windows.Controls.StackPanel
+            $vs.Orientation = 'Horizontal'
+            $vs.HorizontalAlignment = 'Center'; $vs.VerticalAlignment = 'Center'
+            $vs.Margin = New-Object System.Windows.Thickness 0, 0, 0, 14
+            $vt = New-Object System.Windows.Controls.TextBlock
+            $vt.Text = '{0}' -f [int]$m.BriCur
+            $vt.FontSize = [math]::Max(20, [math]::Min(34, $h * 0.34))
+            $vt.FontWeight = 'Bold'
+            $vt.Foreground = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xF2, 0xF6, 0xFC))
+            if ($sel) {
+                $tx = New-Object System.Windows.Media.Effects.DropShadowEffect
+                $tx.ShadowDepth = 0; $tx.BlurRadius = 14; $tx.Opacity = 0.8; $tx.Color = [System.Windows.Media.Colors]::White
+                $vt.Effect = $tx
+            }
+            $ut = New-Object System.Windows.Controls.TextBlock
+            $ut.Text = '%'; $ut.FontSize = 10; $ut.FontWeight = 'SemiBold'
+            $ut.VerticalAlignment = 'Bottom'
+            $ut.Margin = New-Object System.Windows.Thickness 3, 0, 0, 5
+            $ut.Foreground = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xB6, 0xC4, 0xD8))
+            [void]$vs.Children.Add($vt); [void]$vs.Children.Add($ut)
+            [void]$inner.Children.Add($vs)
+
+            # docked brightness blade
+            $sl = New-Object System.Windows.Controls.Slider
+            $sl.Style = $window.FindResource('SetSlider')
+            $sl.Minimum = 0; $sl.Maximum = [double][math]::Max(1, [int]$m.BriMax)
+            $sl.Value = [double][int]$m.BriCur
+            $sl.Width = [math]::Max(40, $w - 26)
+            $sl.HorizontalAlignment = 'Center'; $sl.VerticalAlignment = 'Bottom'
+            $sl.Margin = New-Object System.Windows.Thickness 0, 0, 0, 9
+            $sl.Foreground = New-MonBarBrush (ConvertTo-MonColor '#6FB1FF')
+            $sl.Tag = @($i, $vt)
+            $sl.Add_ValueChanged({ param($s0, $e0)
+                $t = $s0.Tag
+                $t[1].Text = '{0}' -f [int]$s0.Value
+                if (-not $script:monLoading) {
+                    $tgt = if ([bool]$script:settings.monSync) { -1 } else { [int]$t[0] }
+                    Queue-DdcSet 'SetBri' $tgt ([int]$s0.Value) 0
+                    # In sync the other screens' blades follow the drag on the
+                    # spot; the hardware catches up ~60 ms behind.
+                    if ($tgt -lt 0) {
+                        $script:monLoading = $true
+                        try {
+                            foreach ($it in $script:monMapItems) {
+                                if ([int]$it.Idx -ne [int]$t[0]) { $it.Slider.Value = $s0.Value; $it.Value.Text = $t[1].Text }
+                            }
+                        } finally { $script:monLoading = $false }
+                    }
+                }
+            })
+            [void]$inner.Children.Add($sl)
+            $script:monMapItems += ,@{ Idx = $i; Slider = $sl; Value = $vt }
+        } else {
+            $na = New-Object System.Windows.Controls.TextBlock
+            $na.Text = 'NO DDC/CI'
+            $na.FontSize = 9; $na.FontWeight = 'SemiBold'
+            $na.HorizontalAlignment = 'Center'; $na.VerticalAlignment = 'Center'
+            $na.Foreground = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x6B, 0x79, 0x8C))
+            [void]$inner.Children.Add($na)
+        }
+
+        # stand + name plate under the screen
+        $stand = New-Object System.Windows.Shapes.Rectangle
+        $stand.Width = [math]::Max(24, $w * 0.22); $stand.Height = 4
+        $stand.RadiusX = 2; $stand.RadiusY = 2
+        $stand.Fill = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x22, 0x2B, 0x3B))
+        [System.Windows.Controls.Canvas]::SetLeft($stand, $x + ($w - $stand.Width) / 2)
+        [System.Windows.Controls.Canvas]::SetTop($stand, $y + $h + 3)
+        [void]$cv.Children.Add($stand)
+
+        $nm = New-Object System.Windows.Controls.TextBlock
+        $desc = ([string]$m.Desc).Trim()
+        $nm.Text = if ($desc) { $desc.ToUpperInvariant() } else { 'DISPLAY {0}' -f ($i + 1) }
+        $nm.FontSize = 9; $nm.FontWeight = 'SemiBold'
+        $nm.Foreground = if ($sel) { $accBrush } else { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x5A, 0x6B, 0x84)) }
+        $nm.Measure((New-Object System.Windows.Size ([double]::PositiveInfinity), ([double]::PositiveInfinity)))
+        [System.Windows.Controls.Canvas]::SetLeft($nm, $x + ($w - $nm.DesiredSize.Width) / 2)
+        [System.Windows.Controls.Canvas]::SetTop($nm, $y + $h + 11)
+        [void]$cv.Children.Add($nm)
+    }
+}
+
+# Profile row: built-ins plus whatever the user has saved, then + NEW.
+function Build-MonScenes {
+    $host0 = $el.MonSceneHost
+    $host0.Children.Clear()
+    $profiles = Get-MonProfiles
+    $active = Get-MonActiveProfileName $script:monSel
+    # Fixed-size tiles in a wrap panel: adding profiles grows a second row
+    # instead of squeezing every name into an ellipsis.
+    $tileW = 118.0; $tileH = 84.0
+    foreach ($p in $profiles) {
+        $col = ConvertTo-MonColor $p.Color
+        $on = ($p.Name -eq $active)
+        $tile = New-Object System.Windows.Controls.Border
+        $tile.CornerRadius = New-Object System.Windows.CornerRadius 10
+        $tile.Width = $tileW; $tile.Height = $tileH
+        $tile.Margin = New-Object System.Windows.Thickness 0, 0, 8, 8
+        $tile.Padding = New-Object System.Windows.Thickness 11, 9, 11, 9
+        $tile.BorderThickness = New-Object System.Windows.Thickness 1
+        $tile.Cursor = [System.Windows.Input.Cursors]::Hand
+        if ($on) {
+            $tile.Background = New-MonBrush $col 0x1F
+            $tile.BorderBrush = New-MonBrush $col 0xCC
+            $fx = New-Object System.Windows.Media.Effects.DropShadowEffect
+            $fx.ShadowDepth = 0; $fx.BlurRadius = 20; $fx.Opacity = 0.55; $fx.Color = $col
+            $tile.Effect = $fx
+        } else {
+            $tile.Background = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x0C, 0x12, 0x1C))
+            $tile.BorderBrush = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x1E, 0x27, 0x36))
+        }
+        $tile.Tag = $p.Name
+        $tile.Add_MouseLeftButtonDown({ param($s0, $e0)
+            $pr = Get-MonProfile ([string]$s0.Tag)
+            if ($pr) { Apply-MonProfile $pr }
+        })
+        $tile.Add_MouseRightButtonUp({ param($s0, $e0)
+            Open-MonProfileSheet ([string]$s0.Tag)
+        })
+        $tile.ToolTip = 'Click to apply, right-click to rename, recolour or delete'
+        $sp = New-Object System.Windows.Controls.StackPanel
+        $head = New-Object System.Windows.Controls.StackPanel
+        $head.Orientation = 'Horizontal'
+        $chip = New-Object System.Windows.Controls.Border
+        $chip.Width = 22; $chip.Height = 22
+        $chip.CornerRadius = New-Object System.Windows.CornerRadius 7
+        $chip.Background = New-MonBrush $col 0x2E
+        $gl = New-Object System.Windows.Controls.TextBlock
+        $gl.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
+        $gl.FontSize = 11
+        $gl.Text = switch ($p.Name) { 'DAY' { [char]0xE706 } 'NIGHT' { [char]0xE708 } 'CINEMA' { [char]0xE714 } 'GAME' { [char]0xE7FC } default { [char]0xE790 } }
+        $gl.Foreground = New-MonBrush $col
+        $gl.HorizontalAlignment = 'Center'; $gl.VerticalAlignment = 'Center'
+        $chip.Child = $gl
+        [void]$head.Children.Add($chip)
+        $nm = New-Object System.Windows.Controls.TextBlock
+        $nm.Text = $p.Name.ToUpperInvariant()
+        $nm.FontSize = 12; $nm.FontWeight = 'Bold'
+        $nm.Margin = New-Object System.Windows.Thickness 8, 0, 0, 0
+        $nm.VerticalAlignment = 'Center'
+        $nm.TextTrimming = 'CharacterEllipsis'
+        $nm.Foreground = if ($on) { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xED, 0xF1, 0xF8)) } else { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xC9, 0xD2, 0xE2)) }
+        [void]$head.Children.Add($nm)
+        [void]$sp.Children.Add($head)
+        $rc = New-Object System.Windows.Controls.TextBlock
+        $pn = if ($script:presetNames.ContainsKey([int]$p.Preset)) { $script:presetNames[[int]$p.Preset] } else { '' }
+        $rc.Text = ('{0} {1} {2}' -f $p.Bri, $script:mid, $p.Con) + $(if ($pn) { ' {0} {1}' -f $script:mid, $pn } else { '' })
+        $rc.FontSize = 9.5; $rc.FontWeight = 'SemiBold'
+        $rc.Margin = New-Object System.Windows.Thickness 0, 8, 0, 0
+        $rc.Foreground = New-MonBrush $col 0xCC
+        [void]$sp.Children.Add($rc)
+        if ($on) {
+            $pill = New-Object System.Windows.Controls.Border
+            $pill.Background = New-MonBrush $col 0x33
+            $pill.CornerRadius = New-Object System.Windows.CornerRadius 6
+            $pill.Padding = New-Object System.Windows.Thickness 7, 2, 7, 2
+            $pill.HorizontalAlignment = 'Left'
+            $pill.Margin = New-Object System.Windows.Thickness 0, 7, 0, 0
+            $pt = New-Object System.Windows.Controls.TextBlock
+            $pt.Text = 'ACTIVE'; $pt.FontSize = 8; $pt.FontWeight = 'Bold'
+            $pt.Foreground = New-MonBrush $col
+            $pill.Child = $pt
+            [void]$sp.Children.Add($pill)
+        }
+        $tile.Child = $sp
+        [void]$host0.Children.Add($tile)
+    }
+    # + NEW
+    $nt = New-Object System.Windows.Controls.Border
+    $nt.CornerRadius = New-Object System.Windows.CornerRadius 10
+    $nt.Width = $tileW; $nt.Height = $tileH
+    $nt.Margin = New-Object System.Windows.Thickness 0, 0, 8, 8
+    $nt.BorderThickness = New-Object System.Windows.Thickness 1
+    $nt.BorderBrush = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x2B, 0x34, 0x47))
+    $nt.Background = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x0A, 0x0F, 0x17))
+    $nt.Cursor = [System.Windows.Input.Cursors]::Hand
+    $nt.Add_MouseLeftButtonDown({ Open-MonProfileSheet })
+    $ns = New-Object System.Windows.Controls.StackPanel
+    $ns.HorizontalAlignment = 'Center'; $ns.VerticalAlignment = 'Center'
+    $nl = New-Object System.Windows.Controls.TextBlock
+    $nl.Text = '+ NEW'; $nl.FontSize = 12; $nl.FontWeight = 'Bold'
+    $nl.HorizontalAlignment = 'Center'
+    $nl.Foreground = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x8F, 0xA3, 0xBC))
+    [void]$ns.Children.Add($nl)
+    $dots = New-Object System.Windows.Controls.StackPanel
+    $dots.Orientation = 'Horizontal'; $dots.HorizontalAlignment = 'Center'
+    $dots.Margin = New-Object System.Windows.Thickness 0, 8, 0, 0
+    foreach ($hex in @('#FFC46F', '#8F86FF', '#FF7A8A', '#7FE0A0')) {
+        $d = New-Object System.Windows.Shapes.Ellipse
+        $d.Width = 6; $d.Height = 6
+        $d.Margin = New-Object System.Windows.Thickness 2, 0, 2, 0
+        $d.Fill = New-MonBrush (ConvertTo-MonColor $hex)
+        [void]$dots.Children.Add($d)
+    }
+    [void]$ns.Children.Add($dots)
+    $nt.Child = $ns
+    [void]$host0.Children.Add($nt)
+}
+
+# 24-hour band: the night window in the schedule profile's colour, the day
+# stretch dim, and a light blade at the current time.
+function Build-MonTimeline {
+    $cv = $el.MonTimeCanvas
+    $cv.Children.Clear()
+    $W = $cv.ActualWidth
+    if ($W -lt 60) { return }
+    $barH = 22.0
+    $from = [int]$script:settings.monNightFrom
+    $to   = [int]$script:settings.monNightTo
+    $np = Get-MonProfile ([string]$script:settings.monNightProfile)
+    $nc = if ($np) { ConvertTo-MonColor $np.Color } else { ConvertTo-MonColor '#8F86FF' }
+    $dp = Get-MonProfile 'DAY'
+    $dc = if ($dp) { ConvertTo-MonColor $dp.Color } else { ConvertTo-MonColor '#FFC46F' }
+    $on = [bool]$script:settings.monNight
+
+    $groove = New-Object System.Windows.Shapes.Rectangle
+    $groove.Width = $W; $groove.Height = $barH
+    $groove.RadiusX = 6; $groove.RadiusY = 6
+    $groove.Fill = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x08, 0x0C, 0x14))
+    [System.Windows.Controls.Canvas]::SetLeft($groove, 0)
+    [System.Windows.Controls.Canvas]::SetTop($groove, 0)
+    [void]$cv.Children.Add($groove)
+
+    # Day stretch first, night blocks over it (night may wrap midnight).
+    $spans = @()
+    if ($from -eq $to) { $spans += ,@(0, 1440, $dc, $false) }
+    elseif ($from -lt $to) {
+        $spans += ,@(0, $from, $dc, $false); $spans += ,@($from, $to, $nc, $true); $spans += ,@($to, 1440, $dc, $false)
+    } else {
+        $spans += ,@(0, $to, $nc, $true); $spans += ,@($to, $from, $dc, $false); $spans += ,@($from, 1440, $nc, $true)
+    }
+    foreach ($s in $spans) {
+        $a = [double]$s[0]; $b = [double]$s[1]
+        if ($b - $a -lt 1) { continue }
+        $r = New-Object System.Windows.Shapes.Rectangle
+        $r.Width = [math]::Max(2, ($b - $a) / 1440.0 * $W)
+        $r.Height = $barH - 4
+        $r.RadiusX = 4; $r.RadiusY = 4
+        $isNight = [bool]$s[3]
+        $alpha = if ($isNight) { if ($on) { 0xCC } else { 0x55 } } else { 0x2A }
+        $r.Fill = New-MonBrush $s[2] $alpha
+        [System.Windows.Controls.Canvas]::SetLeft($r, $a / 1440.0 * $W)
+        [System.Windows.Controls.Canvas]::SetTop($r, 2)
+        [void]$cv.Children.Add($r)
+    }
+    # hour ticks
+    foreach ($hr in @(0, 6, 12, 18, 24)) {
+        $t = New-Object System.Windows.Controls.TextBlock
+        $t.Text = '{0:00}' -f $hr
+        $t.FontSize = 8.5; $t.FontWeight = 'SemiBold'
+        $t.Foreground = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x4A, 0x59, 0x70))
+        $t.Measure((New-Object System.Windows.Size ([double]::PositiveInfinity), ([double]::PositiveInfinity)))
+        $x = $hr / 24.0 * $W
+        if ($hr -eq 24) { $x -= $t.DesiredSize.Width }
+        elseif ($hr -gt 0) { $x -= $t.DesiredSize.Width / 2 }
+        [System.Windows.Controls.Canvas]::SetLeft($t, $x)
+        [System.Windows.Controls.Canvas]::SetTop($t, $barH + 5)
+        [void]$cv.Children.Add($t)
+    }
+    # now blade
+    $now = [datetime]::Now
+    $nx = ($now.Hour * 60 + $now.Minute) / 1440.0 * $W
+    $bl = New-Object System.Windows.Shapes.Rectangle
+    $bl.Width = 3; $bl.Height = $barH + 8
+    $bl.RadiusX = 1.5; $bl.RadiusY = 1.5
+    $bl.Fill = New-MonBrush ([System.Windows.Media.Colors]::White)
+    $fx = New-Object System.Windows.Media.Effects.DropShadowEffect
+    $fx.ShadowDepth = 0; $fx.BlurRadius = 8; $fx.Opacity = 0.7; $fx.Color = [System.Windows.Media.Colors]::White
+    $bl.Effect = $fx
+    [System.Windows.Controls.Canvas]::SetLeft($bl, [math]::Min([math]::Max(0, $nx - 1.5), $W - 3))
+    [System.Windows.Controls.Canvas]::SetTop($bl, -4)
+    [void]$cv.Children.Add($bl)
+}
+
+function Format-MonTime([int]$mins) { '{0:00}:{1:00}' -f ([math]::Floor($mins / 60)), ($mins % 60) }
+
+function Update-MonitorPanel {
+    $mons = @($sync.Ddc.Monitors)
+    $script:monLoading = $true
+    try {
+        if ($script:monSel -ge $mons.Count) { $script:monSel = 0 }
+        $el.MonStatus.Text = if ($sync.Ddc.Busy) { 'Reading monitors...' }
+                             elseif ($mons.Count -eq 0) { 'No DDC/CI-capable display found' }
+                             else { '{0} displays {1} DDC/CI live' -f $mons.Count, $script:mid }
+        $acc = Get-MonAccent
+        $accBrush = New-MonBrush $acc
+        $prof = Get-MonProfile (Get-MonActiveProfileName $script:monSel)
+        $el.MonSceneDot.Fill = if ($prof) { $accBrush } else { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x5A, 0x6B, 0x84)) }
+        $el.MonSceneText.Text = if ($prof) { '{0} PROFILE' -f $prof.Name.ToUpperInvariant() } else { '' }
+        $el.MonSceneText.Foreground = $accBrush
+
+        Build-MonMap
+        Build-MonScenes
+        Build-MonTimeline
+
+        $el.BtnMonSync.Foreground = if ([bool]$script:settings.monSync) { $accBrush } else { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x8A, 0x93, 0xA6)) }
+        $one = ([string]$script:settings.monProfileScope -eq 'one')
+        $dimB = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x8A, 0x93, 0xA6))
+        $el.BtnMonScopeAll.Foreground = if ($one) { $dimB } else { $accBrush }
+        $el.BtnMonScopeOne.Foreground = if ($one) { $accBrush } else { $dimB }
+        $el.S_MonNight.IsChecked = [bool]$script:settings.monNight
+        $el.MonNightText.Text = '{0} {1} {2} {3} {4}' -f (Format-MonTime ([int]$script:settings.monNightFrom)), [char]0x2013,
+                                (Format-MonTime ([int]$script:settings.monNightTo)), $script:mid, ('dims every display to {0}' -f [string]$script:settings.monNightProfile)
+        $el.MonNightFromVal.Text = Format-MonTime ([int]$script:settings.monNightFrom)
+        $el.MonNightToVal.Text   = Format-MonTime ([int]$script:settings.monNightTo)
+        $el.MonNightProfVal.Text = 'applies {0}' -f [string]$script:settings.monNightProfile
+
+        if ($mons.Count -eq 0 -or -not $mons[$script:monSel].Ok) {
+            $el.MonSelName.Text = ''
+            $el.MonSelMeta.Text = if ($mons.Count -eq 0) { '' } else { 'DDC/CI not responding - enable it in the display menu' }
+            $el.MonPreHost.Children.Clear(); $el.MonInHost.Children.Clear()
+            $el.MonConRow.Visibility = 'Collapsed'
+            $el.MonInfoText.Text = ''; $el.MonInfoText2.Text = ''
+            return
+        }
+        $m = $mons[$script:monSel]
+        $desc = ([string]$m.Desc).Trim()
+        $el.MonSelName.Text = if ($desc) { $desc.ToUpperInvariant() } else { 'DISPLAY {0}' -f ($script:monSel + 1) }
+        $el.MonSelName.Foreground = $accBrush
+        $meta = @()
+        if ([int]$m.MapW -gt 0) { $meta += '{0} x {1}' -f [int]$m.MapW, [int]$m.MapH }
+        # Invariant so the refresh rate reads 143.8, not a locale's 143,8.
+        if ($null -ne $m.Hz) { $meta += '{0} Hz' -f ([double]$m.Hz).ToString('0.#', [cultureinfo]::InvariantCulture) }
+        if ($null -ne $m.InCur -and $script:inputNames.ContainsKey([int]$m.InCur)) { $meta += $script:inputNames[[int]$m.InCur] }
+        $el.MonSelMeta.Text = if ($meta.Count) { '{0} {1}' -f $script:mid, ($meta -join " $script:mid ") } else { '' }
+
+        # contrast
+        if ($null -ne $m.ConCur) {
+            $el.MonConRow.Visibility = 'Visible'
+            $el.S_MonCon.Maximum = [double][math]::Max(1, [int]$m.ConMax)
+            $el.S_MonCon.Value = [double][int]$m.ConCur
+            $el.V_MonCon.Text = '{0}' -f [int]$m.ConCur
+            $el.S_MonCon.Foreground = New-MonBarBrush (ConvertTo-MonColor '#6FB1FF')
+        } else { $el.MonConRow.Visibility = 'Collapsed' }
+
+        # colour presets + inputs
+        $el.MonPreHost.Children.Clear()
+        foreach ($code in @($m.Presets)) {
+            $nm = if ($script:presetNames.ContainsKey([int]$code)) { $script:presetNames[[int]$code] } else { '0x{0:X2}' -f [int]$code }
+            $b = New-MonChip $nm ($null -ne $m.PreCur -and [int]$m.PreCur -eq [int]$code) @($script:monSel, [int]$code, 0x14)
+            [void]$el.MonPreHost.Children.Add($b)
+        }
+        $el.MonInHost.Children.Clear()
+        foreach ($code in @($m.Inputs)) {
+            $nm = if ($script:inputNames.ContainsKey([int]$code)) { $script:inputNames[[int]$code] } else { '0x{0:X2}' -f [int]$code }
+            $b = New-MonChip $nm ($null -ne $m.InCur -and [int]$m.InCur -eq [int]$code) @($script:monSel, [int]$code, 0x60)
+            [void]$el.MonInHost.Children.Add($b)
+        }
+        if (-not $script:revertPending) { $el.MonRevertBar.Visibility = 'Collapsed' }
+        Build-MonInfoLine $m
+        Update-MonAdv
+    } finally { $script:monLoading = $false }
+}
+
+# The footer line: what the display reports about itself, straight off the
+# wire - no guessing from Windows' side.
+function Build-MonInfoLine($m) {
+    $a = @()
+    $desc = ([string]$m.Desc).Trim()
+    if ($desc) { $a += $desc }
+    if ([int]$m.MapW -gt 0) { $a += '{0} x {1}' -f [int]$m.MapW, [int]$m.MapH }
+    if ($null -ne $m.Hz) { $a += '{0} Hz' -f ([double]$m.Hz).ToString('0.#', [cultureinfo]::InvariantCulture) }
+    if ($m.Primary) { $a += 'primary' }
+    $el.MonInfoText.Text = $a -join "  $script:mid  "
+    $b = @()
+    if ($m.Tech) { $b += [string]$m.Tech }
+    if ($m.SubPixel) { $b += [string]$m.SubPixel }
+    if ($null -ne $m.UsageHours) { $b += '{0} h powered on' -f ([int]$m.UsageHours).ToString('N0', [cultureinfo]::InvariantCulture) }
+    if ($m.Mccs) { $b += 'MCCS {0}' -f [string]$m.Mccs }
+    $b += '{0} controls' -f (@($m.Presets).Count + @($m.Inputs).Count +
+          $(if ($null -ne $m.ConCur) { 1 } else { 0 }) + $(if ($null -ne $m.SharpCur) { 1 } else { 0 }) +
+          $(if ($null -ne $m.VolCur) { 1 } else { 0 }) + $(if ($null -ne $m.RCur) { 3 } else { 0 }) + 1)
+    $el.MonInfoText2.Text = $b -join "  $script:mid  "
+}
+
+function New-MonChip([string]$text, [bool]$on, $tag) {
+    $b = New-Object System.Windows.Controls.Button
+    $b.Style = $window.FindResource('SegBtn')
+    $b.Content = $text
+    $b.Tag = $tag
+    $b.Margin = New-Object System.Windows.Thickness 0, 2, 5, 2
+    $b.MinWidth = 58
+    if ($on) { $b.Background = $script:brushAccentPill; $b.Foreground = $script:brushDark }
+    else { $b.Background = $script:brushClear; $b.Foreground = $script:brushDim }
+    $b.Add_Click({ param($s0, $e0)
+        $t = $s0.Tag
+        $i = [int]$t[0]; $val = [int]$t[1]; $code = [int]$t[2]
+        $mons = @($sync.Ddc.Monitors)
+        $prev = $null
+        if ($i -lt $mons.Count) {
+            switch ($code) {
+                0x14 { $prev = $mons[$i].PreCur;  $mons[$i].PreCur  = $val }
+                0x60 { $prev = $mons[$i].InCur;   $mons[$i].InCur   = $val }
+                0xDC { $prev = $mons[$i].ModeCur; $mons[$i].ModeCur = $val }
+            }
+        }
+        Queue-DdcSet 'SetVcp' $i $val $code
+        foreach ($sib in $s0.Parent.Children) { $sib.Background = $script:brushClear; $sib.Foreground = $script:brushDim }
+        $s0.Background = $script:brushAccentPill; $s0.Foreground = $script:brushDark
+        # An input switch can black out the display it lands on - and on many
+        # panels DDC/CI rides the active input, so there is no way to switch
+        # back. It therefore reverts itself unless the user says to keep it.
+        if ($code -eq 0x60 -and $null -ne $prev -and [int]$prev -ne $val) {
+            Start-MonRevert $i ([int]$prev) $val
+        }
+    })
+    return $b
+}
+
+# --- Input-switch safety net -----------------------------------------
+$script:revertPending = $false
+$script:revertMon = 0
+$script:revertTo = 0
+$script:revertLeft = 0
+$script:revertTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:revertTimer.Interval = [TimeSpan]::FromSeconds(1)
+$script:revertTimer.Add_Tick({
+    $script:revertLeft--
+    if ($script:revertLeft -le 0) { Stop-MonRevert -Apply }
+    else {
+        $el.MonRevertText.Text = 'Input switched. Reverting in {0}s unless you keep it.' -f $script:revertLeft
+    }
+})
+function Start-MonRevert([int]$mon, [int]$back, [int]$now) {
+    $script:revertPending = $true
+    $script:revertMon = $mon
+    $script:revertTo = $back
+    $script:revertLeft = 12
+    $nm = if ($script:inputNames.ContainsKey($now)) { $script:inputNames[$now] } else { '0x{0:X2}' -f $now }
+    $el.MonRevertText.Text = 'Switched to {0}. Reverting in {1}s unless you keep it.' -f $nm, $script:revertLeft
+    $el.MonRevertBar.Visibility = 'Visible'
+    $script:revertTimer.Stop(); $script:revertTimer.Start()
+}
+function Stop-MonRevert([switch]$Apply) {
+    $script:revertTimer.Stop()
+    if ($Apply -and $script:revertPending) {
+        Queue-DdcSet 'SetVcp' $script:revertMon $script:revertTo 0x60
+        $mons = @($sync.Ddc.Monitors)
+        if ($script:revertMon -lt $mons.Count) { $mons[$script:revertMon].InCur = $script:revertTo }
+    }
+    $script:revertPending = $false
+    $el.MonRevertBar.Visibility = 'Collapsed'
+    Update-MonitorPanel
+}
+$el.BtnMonRevertKeep.Add_Click({ Stop-MonRevert })
+$el.BtnMonRevertNow.Add_Click({ Stop-MonRevert -Apply })
+
+# ADVANCED sheet: only the codes this display actually advertises.
+function Update-MonAdv {
+    $mons = @($sync.Ddc.Monitors)
+    if ($script:monSel -ge $mons.Count) { return }
+    $m = $mons[$script:monSel]
+    $desc = ([string]$m.Desc).Trim()
+    $open = [bool]$script:settings.monAdvOpen
+    $el.MonAdvBody.Visibility = $(if ($open) { 'Visible' } else { 'Collapsed' })
+    $el.BtnMonAdv.Content = $(if ($open) { 'HIDE' } else { 'SHOW' })
+    $el.MonAdvTitle.Text = $(if ($desc) { 'on {0}' -f $desc } else { '' })
+    $hasRgb = ($null -ne $m.RCur -and $null -ne $m.GCur -and $null -ne $m.BCur)
+    $el.MonRgbGroup.Visibility = $(if ($hasRgb) { 'Visible' } else { 'Collapsed' })
+    if ($hasRgb) {
+        foreach ($row in @(@('R', $m.RCur, $m.RMax, '#FF7A7A'), @('G', $m.GCur, $m.GMax, '#7FE0A0'), @('B', $m.BCur, $m.BMax, '#6FB1FF'))) {
+            $sl = $el["S_Mon$($row[0])"]
+            $sl.Maximum = [double][math]::Max(1, [int]$row[2])
+            $sl.Value = [double][int]$row[1]
+            $sl.Foreground = New-MonBarBrush (ConvertTo-MonColor $row[3])
+            $el["V_Mon$($row[0])"].Text = '{0}' -f [int]$row[1]
+        }
+    }
+    if ($null -ne $m.SharpCur) {
+        $el.MonSharpRow.Visibility = 'Visible'
+        $el.S_MonSharp.Maximum = [double][math]::Max(1, [int]$m.SharpMax)
+        $el.S_MonSharp.Value = [double][int]$m.SharpCur
+        $el.S_MonSharp.Foreground = New-MonBarBrush (ConvertTo-MonColor '#6FB1FF')
+        $el.V_MonSharp.Text = '{0}' -f [int]$m.SharpCur
+    } else { $el.MonSharpRow.Visibility = 'Collapsed' }
+    if ($null -ne $m.VolCur) {
+        $el.MonVolRow.Visibility = 'Visible'
+        $el.S_MonVol.Maximum = [double][math]::Max(1, [int]$m.VolMax)
+        $el.S_MonVol.Value = [double][int]$m.VolCur
+        $el.S_MonVol.Foreground = New-MonBarBrush (ConvertTo-MonColor '#6FB1FF')
+        $el.V_MonVol.Text = '{0}' -f [int]$m.VolCur
+        $muted = ($null -ne $m.MuteCur -and [int]$m.MuteCur -eq 1)
+        $el.BtnMonMute.Content = [string][char]$(if ($muted) { 0xE74F } else { 0xE767 })
+        $el.BtnMonMute.Visibility = $(if ($null -ne $m.MuteCur) { 'Visible' } else { 'Collapsed' })
+    } else { $el.MonVolRow.Visibility = 'Collapsed' }
+    # Picture mode chips, straight from the display's own list.
+    $el.MonModeHost.Children.Clear()
+    $modes = @($m.Modes)
+    $el.MonModeRow.Visibility = $(if ($modes.Count -gt 1) { 'Visible' } else { 'Collapsed' })
+    foreach ($code in $modes) {
+        $nm = Get-MonModeName $m ([int]$code)
+        $b = New-MonChip $nm ($null -ne $m.ModeCur -and [int]$m.ModeCur -eq [int]$code) @($script:monSel, [int]$code, 0xDC)
+        [void]$el.MonModeHost.Children.Add($b)
+    }
+    # Picture mode cannot be read back on these panels, so the chips can't
+    # show which one is active; say so instead of showing nothing selected.
+    $el.MonModeHint.Text = $(if ($modes.Count -gt 1 -and $null -eq $m.ModeCur) {
+        'The display does not report its current mode - tap one to set it.' } else { '' })
+    $el.MonModeHint.Visibility = $(if ($el.MonModeHint.Text) { 'Visible' } else { 'Collapsed' })
+    $bits = @()
+    if ($null -ne $m.Hz) { $bits += '{0} HZ' -f ([double]$m.Hz).ToString('0.#', [cultureinfo]::InvariantCulture) }
+    if ($null -ne $m.InCur -and $script:inputNames.ContainsKey([int]$m.InCur)) { $bits += ($script:inputNames[[int]$m.InCur]).ToUpperInvariant() }
+    $el.MonAdvHz.Text = $bits -join " $script:mid "
+    $el.MonAdvHzChip.Visibility = $(if ($bits.Count) { 'Visible' } else { 'Collapsed' })
+    $el.BtnMonResetColor.Visibility = $(if ($m.HasColorReset) { 'Visible' } else { 'Collapsed' })
+    $el.BtnMonResetLevels.Visibility = $(if ($m.HasLevelReset) { 'Visible' } else { 'Collapsed' })
+    $el.BtnMonSoftOff.Visibility = $(if ($null -ne $m.PowerOff) { 'Visible' } else { 'Collapsed' })
+    # 0x05 is a real power-down: MCCS warns the display may need its own power
+    # button to come back, so the button says so instead of promising a wake.
+    if ($m.PowerHard) {
+        $el.BtnMonSoftOff.Content = 'POWER OFF'
+        $el.BtnMonSoftOff.ToolTip = 'Turns this display off. It may need its own power button to come back on.'
+    } else {
+        $el.BtnMonSoftOff.Content = 'SOFT OFF'
+        $el.BtnMonSoftOff.ToolTip = 'Sleeps this display. It wakes as soon as video returns.'
+    }
+    $el.BtnMonFactory.Visibility = $(if ($m.HasFactoryReset) { 'Visible' } else { 'Collapsed' })
+    $el.MonFactoryConfirm.Visibility = 'Collapsed'
+    # Say what this display withholds, so a missing slider reads as a limit of
+    # the hardware rather than a gap in Vento.
+    $na = @()
+    if (@($m.Modes).Count -le 1) { $na += 'picture modes' }
+    if (-not $hasRgb) { $na += 'RGB gain' }
+    if ($null -eq $m.SharpCur) { $na += 'sharpness' }
+    if ($null -eq $m.VolCur) { $na += 'speaker volume' }
+    if (@($m.Inputs).Count -le 1) { $na += 'input switching' }
+    # One honest list of everything this display keeps to itself. Response
+    # time / overdrive is on it for every consumer display: no MCCS code
+    # exists for it, and the XG2705's 1ms mode changed nothing across a
+    # full 256-code sweep.
+    $na += 'response time / 1ms mode'
+    $el.MonRtText.Text = ('{0}. These are not exposed over DDC/CI by this display, so no software can reach them - set them in its own menu once; Vento''s profiles compensate the brightness a 1ms mode costs.' -f (
+        (($na | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) }) -join ', ')))
+    $el.MonAdvNa.Visibility = 'Collapsed'
+}
+
+# Reports what the display actually did with the last write, and corrects the
+# control to the value it settled on.
+$script:monWriteNames = @{ 0x10 = 'Brightness'; 0x12 = 'Contrast'; 0x14 = 'Color preset'; 0x60 = 'Input'
+                           0x62 = 'Volume'; 0x87 = 'Sharpness'; 0x16 = 'Red gain'; 0x18 = 'Green gain'
+                           0x1A = 'Blue gain'; 0xDC = 'Picture mode'; 0x08 = 'Color reset'
+                           0x05 = 'Level reset'; 0x04 = 'Factory reset'; 0xD6 = 'Power'; 0x8D = 'Mute' }
+function Show-MonWriteResult($w) {
+    if (-not $w) { return }
+    $name = if ($script:monWriteNames.ContainsKey([int]$w.Code)) { $script:monWriteNames[[int]$w.Code] } else { '0x{0:X2}' -f [int]$w.Code }
+    if ($w.Took) { $el.MonWriteNote.Visibility = 'Collapsed'; return }
+    $el.MonWriteNote.Text = '{0} stayed at {1} - this display ignored the change. It may only allow it from its own menu, or in a different color preset.' -f $name, $w.Actual
+    $el.MonWriteNote.Visibility = 'Visible'
+    # Snap the control back to the truth.
+    $script:monLoading = $true
+    try {
+        $mons = @($sync.Ddc.Monitors)
+        if ([int]$w.Mon -eq $script:monSel -and $script:monSel -lt $mons.Count) {
+            $m = $mons[$script:monSel]
+            switch ([int]$w.Code) {
+                0x12 { $el.S_MonCon.Value = [double][int]$w.Actual; $el.V_MonCon.Text = '{0}' -f [int]$w.Actual }
+                0x87 { $el.S_MonSharp.Value = [double][int]$w.Actual; $el.V_MonSharp.Text = '{0}' -f [int]$w.Actual }
+                0x62 { $el.S_MonVol.Value = [double][int]$w.Actual; $el.V_MonVol.Text = '{0}' -f [int]$w.Actual }
+                0x16 { $el.S_MonR.Value = [double][int]$w.Actual; $el.V_MonR.Text = '{0}' -f [int]$w.Actual }
+                0x18 { $el.S_MonG.Value = [double][int]$w.Actual; $el.V_MonG.Text = '{0}' -f [int]$w.Actual }
+                0x1A { $el.S_MonB.Value = [double][int]$w.Actual; $el.V_MonB.Text = '{0}' -f [int]$w.Actual }
+            }
+        }
+    } finally { $script:monLoading = $false }
+}
+
+function Open-Monitors {
+    Start-DdcWorker
+    if (-not $script:psDdc) { $el.MonStatus.Text = 'DDC/CI is unavailable on this system' }
+    else { $el.MonStatus.Text = 'Reading monitors...'; $sync.DdcQueue.Enqueue(@{ Cmd = 'Enum' }) }
+    $el.MonNewLayer.Visibility = 'Collapsed'
+    Update-MonitorPanel
+    $el.MonitorOverlay.Visibility = 'Visible'
+}
+
+# --- Panel wiring ----------------------------------------------------
+$el.MonMapCanvas.Add_SizeChanged({ if ($el.MonitorOverlay.Visibility -eq 'Visible') { Build-MonMap } })
+$el.MonTimeCanvas.Add_SizeChanged({ if ($el.MonitorOverlay.Visibility -eq 'Visible') { Build-MonTimeline } })
+$el.BtnMonitors.Add_Click({
+    if ($el.MonitorOverlay.Visibility -eq 'Visible') { $el.MonitorOverlay.Visibility = 'Collapsed' }
+    else { Open-Monitors }
+})
+$el.BtnMonClose.Add_Click({ $el.MonitorOverlay.Visibility = 'Collapsed' })
+$el.BtnMonRescan.Add_Click({
+    if ($script:psDdc) { $el.MonStatus.Text = 'Reading monitors...'; $sync.DdcQueue.Enqueue(@{ Cmd = 'Enum' }) }
+})
+$el.BtnMonSync.Add_Click({
+    $script:settings.monSync = -not [bool]$script:settings.monSync
+    $sync.Settings.monSync = $script:settings.monSync
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    Update-MonitorPanel
+})
+# IDENTIFY: flash each display's own brightness so the numbers on the map
+# can be matched to the panels on the desk.
+$el.BtnMonIdentify.Add_Click({
+    $mons = @($sync.Ddc.Monitors)
+    for ($i = 0; $i -lt $mons.Count; $i++) {
+        if (-not $mons[$i].Ok) { continue }
+        Queue-DdcSet 'SetBri' $i ([int][math]::Max(0, [int]$mons[$i].BriMax - 5)) 0
+    }
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds(900)
+    $t.Add_Tick({ param($s0, $e0)
+        $s0.Stop()
+        $ms = @($sync.Ddc.Monitors)
+        for ($i = 0; $i -lt $ms.Count; $i++) {
+            if ($ms[$i].Ok) { Queue-DdcSet 'SetBri' $i ([int]$ms[$i].BriCur) 0 }
+        }
+    })
+    $t.Start()
+})
+$el.S_MonCon.Add_ValueChanged({
+    $el.V_MonCon.Text = '{0}' -f [int]$el.S_MonCon.Value
+    if (-not $script:monLoading) {
+        $tgt = if ([bool]$script:settings.monSync) { -1 } else { $script:monSel }
+        Queue-DdcSet 'SetCon' $tgt ([int]$el.S_MonCon.Value) 0
+    }
+})
+foreach ($ch in @(@('R', 0x16), @('G', 0x18), @('B', 0x1A))) {
+    $sn = "S_Mon$($ch[0])"; $vn = "V_Mon$($ch[0])"; $code = [int]$ch[1]
+    $el[$sn].Add_ValueChanged({
+        $el[$vn].Text = '{0}' -f [int]$el[$sn].Value
+        if (-not $script:monLoading) { Queue-DdcSet 'SetVcp' $script:monSel ([int]$el[$sn].Value) $code }
+    }.GetNewClosure())
+}
+$el.S_MonSharp.Add_ValueChanged({
+    $el.V_MonSharp.Text = '{0}' -f [int]$el.S_MonSharp.Value
+    if (-not $script:monLoading) { Queue-DdcSet 'SetVcp' $script:monSel ([int]$el.S_MonSharp.Value) 0x87 }
+})
+$el.S_MonVol.Add_ValueChanged({
+    $el.V_MonVol.Text = '{0}' -f [int]$el.S_MonVol.Value
+    if (-not $script:monLoading) { Queue-DdcSet 'SetVcp' $script:monSel ([int]$el.S_MonVol.Value) 0x62 }
+})
+$el.BtnMonMute.Add_Click({
+    $mons = @($sync.Ddc.Monitors)
+    if ($script:monSel -ge $mons.Count) { return }
+    $m = $mons[$script:monSel]
+    if ($null -eq $m.MuteCur) { return }
+    $new = if ([int]$m.MuteCur -eq 1) { 2 } else { 1 }
+    $m.MuteCur = $new
+    Queue-DdcSet 'SetVcp' $script:monSel $new 0x8D
+    Update-MonAdv
+})
+# VCP 0x08 restores the factory colour defaults (0x05 would reset
+# brightness/contrast instead, which is not what this button says).
+$el.BtnMonResetColor.Add_Click({ Queue-DdcSet 'SetVcp' $script:monSel 1 0x08 })
+# 0x05 restores the factory brightness/contrast pair.
+$el.BtnMonResetLevels.Add_Click({ Queue-DdcSet 'SetVcp' $script:monSel 1 0x05 })
+# 0x04 wipes every setting on the display and cannot be undone from software,
+# so it takes a second click.
+$el.BtnMonFactory.Add_Click({
+    $el.BtnMonFactory.Visibility = 'Collapsed'
+    $el.MonFactoryConfirm.Visibility = 'Visible'
+})
+$el.BtnMonFactoryNo.Add_Click({
+    $el.MonFactoryConfirm.Visibility = 'Collapsed'
+    $el.BtnMonFactory.Visibility = 'Visible'
+})
+$el.BtnMonFactoryYes.Add_Click({
+    Queue-DdcSet 'SetVcp' $script:monSel 1 0x04
+    $el.MonFactoryConfirm.Visibility = 'Collapsed'
+    $el.BtnMonFactory.Visibility = 'Visible'
+    if ($script:psDdc) { $sync.DdcQueue.Enqueue(@{ Cmd = 'Enum' }) }
+})
+$el.BtnMonSoftOff.Add_Click({
+    $mons = @($sync.Ddc.Monitors)
+    if ($script:monSel -ge $mons.Count) { return }
+    $v = $mons[$script:monSel].PowerOff
+    if ($null -ne $v) { Queue-DdcSet 'SetVcp' $script:monSel ([int]$v) 0xD6 }
+})
+$el.BtnMonAdv.Add_Click({
+    $script:settings.monAdvOpen = -not [bool]$script:settings.monAdvOpen
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    Update-MonAdv
+})
+
+# --- Night schedule --------------------------------------------------
+$el.S_MonNight.Add_Click({
+    $script:settings.monNight = [bool]$el.S_MonNight.IsChecked
+    $script:nightApplied = $false
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    Build-MonTimeline
+    Test-NightShift
+})
+$el.BtnMonNightEdit.Add_Click({
+    $el.MonNightEdit.Visibility = $(if ($el.MonNightEdit.Visibility -eq 'Visible') { 'Collapsed' } else { 'Visible' })
+})
+function Step-NightTime([string]$key, [int]$delta) {
+    $v = ([int]$script:settings[$key] + $delta + 1440) % 1440
+    $script:settings[$key] = $v
+    $script:nightApplied = $false
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    $el.MonNightFromVal.Text = Format-MonTime ([int]$script:settings.monNightFrom)
+    $el.MonNightToVal.Text   = Format-MonTime ([int]$script:settings.monNightTo)
+    $el.MonNightText.Text = '{0} {1} {2} {3} {4}' -f (Format-MonTime ([int]$script:settings.monNightFrom)), [char]0x2013,
+                            (Format-MonTime ([int]$script:settings.monNightTo)), $script:mid, ('dims every display to {0}' -f [string]$script:settings.monNightProfile)
+    Build-MonTimeline
+}
+$el.BtnNightFromDn.Add_Click({ Step-NightTime 'monNightFrom' (-30) })
+$el.BtnNightFromUp.Add_Click({ Step-NightTime 'monNightFrom'   30  })
+$el.BtnNightToDn.Add_Click({   Step-NightTime 'monNightTo'   (-30) })
+$el.BtnNightToUp.Add_Click({   Step-NightTime 'monNightTo'     30  })
+
+# Applies the night profile inside its window and restores the previous one
+# on the way out. Runs from the main tick, so it survives sleep/wake too.
+function Test-NightShift {
+    if (-not [bool]$script:settings.monNight) {
+        if ($script:nightApplied) {
+            $script:nightApplied = $false
+            $p = Get-MonProfile ([string]$script:nightPrev)
+            if ($p) { Apply-MonProfile $p }
+        }
+        return
+    }
+    if (@($sync.Ddc.Monitors).Count -eq 0) { return }
+    $now = [datetime]::Now
+    $mins = $now.Hour * 60 + $now.Minute
+    $from = [int]$script:settings.monNightFrom
+    $to   = [int]$script:settings.monNightTo
+    $inWindow = if ($from -eq $to) { $false }
+                elseif ($from -lt $to) { $mins -ge $from -and $mins -lt $to }
+                else { $mins -ge $from -or $mins -lt $to }
+    if ($inWindow -and -not $script:nightApplied) {
+        $np = Get-MonProfile ([string]$script:settings.monNightProfile)
+        if ($np) {
+            $script:nightPrev = [string]$script:settings.monProfile
+            $script:nightApplied = $true
+            Apply-MonProfile $np
+        }
+    } elseif (-not $inWindow -and $script:nightApplied) {
+        $script:nightApplied = $false
+        $p = Get-MonProfile ([string]$script:nightPrev)
+        if (-not $p) { $p = Get-MonProfile 'DAY' }
+        if ($p) { Apply-MonProfile $p }
+    }
+}
+
+# --- New profile sheet -----------------------------------------------
+$script:monNewColor = '#6FB1FF'
+function Build-MonSwatches {
+    $host0 = $el.MonNewSwatches
+    $host0.Children.Clear()
+    $picks = @('#FFC46F', '#8F86FF', '#FF7A8A', '#7FE0A0', '#6FB1FF', '#FF9E6F', '#6FE0FF', '#FF6FD8', '#B6FF6F')
+    if ($picks -notcontains $script:monNewColor) { $picks += $script:monNewColor }
+    foreach ($hex in $picks) {
+        $b = New-Object System.Windows.Controls.Border
+        $b.Width = 30; $b.Height = 30
+        $b.CornerRadius = New-Object System.Windows.CornerRadius 15
+        $b.Margin = New-Object System.Windows.Thickness 0, 0, 8, 8
+        $b.Background = New-MonBrush (ConvertTo-MonColor $hex)
+        $b.Cursor = [System.Windows.Input.Cursors]::Hand
+        $b.Tag = $hex
+        if ($hex -eq $script:monNewColor) {
+            $b.BorderThickness = New-Object System.Windows.Thickness 2.5
+            $b.BorderBrush = New-MonBrush ([System.Windows.Media.Colors]::White)
+        }
+        $b.Add_MouseLeftButtonDown({ param($s0, $e0)
+            $script:monNewColor = [string]$s0.Tag
+            Build-MonSwatches
+        })
+        [void]$host0.Children.Add($b)
+    }
+    # custom picker
+    $c = New-Object System.Windows.Controls.Border
+    $c.Width = 30; $c.Height = 30
+    $c.CornerRadius = New-Object System.Windows.CornerRadius 15
+    $c.Margin = New-Object System.Windows.Thickness 0, 0, 8, 8
+    $c.Cursor = [System.Windows.Input.Cursors]::Hand
+    $rb = New-Object System.Windows.Media.LinearGradientBrush
+    $rb.StartPoint = New-Object System.Windows.Point 0, 0
+    $rb.EndPoint = New-Object System.Windows.Point 1, 1
+    foreach ($stop in @(@('#FF6F6F', 0.0), @('#FFC46F', 0.25), @('#7FE0A0', 0.5), @('#6FB1FF', 0.75), @('#C86FFF', 1.0))) {
+        $sc = ConvertTo-MonColor ([string]$stop[0])
+        $so = [double]$stop[1]
+        $rb.GradientStops.Add((New-Object System.Windows.Media.GradientStop $sc, $so))
+    }
+    $rb.Freeze()
+    $c.Background = $rb
+    $c.Add_MouseLeftButtonDown({
+        $picked = Show-ColorPicker $script:monNewColor
+        if ($picked) { $script:monNewColor = $picked }
+        Build-MonSwatches
+    })
+    [void]$host0.Children.Add($c)
+}
+# One sheet for both jobs: creating a profile from what the displays are
+# showing, and editing or deleting an existing one.
+$script:monEditName = ''
+function Open-MonProfileSheet([string]$name = '') {
+    $script:monEditName = $name
+    $p = if ($name) { Get-MonProfile $name } else { $null }
+    if ($p) {
+        $script:monNewColor = [string]$p.Color
+        $el.MonNewName.Text = $p.Name
+        $el.MonNewTitle.Text = 'EDIT PROFILE'
+        $el.MonNewHint.Text = 'Save re-captures what the displays are showing right now.'
+        $el.BtnMonNewDelete.Visibility = $(if ($p.Builtin) { 'Collapsed' } else { 'Visible' })
+    } else {
+        $script:monNewColor = '#6FB1FF'
+        $el.MonNewName.Text = 'My profile'
+        $el.MonNewTitle.Text = 'NEW PROFILE'
+        $el.MonNewHint.Text = 'Saves what the displays are showing right now.'
+        $el.BtnMonNewDelete.Visibility = 'Collapsed'
+    }
+    Build-MonSwatches
+    $el.MonNewLayer.Visibility = 'Visible'
+    [void]$el.MonNewName.Focus()
+    $el.MonNewName.SelectAll()
+}
+$el.BtnMonNewCancel.Add_Click({ $el.MonNewLayer.Visibility = 'Collapsed' })
+$el.BtnMonNewSave.Add_Click({
+    $name = ([string]$el.MonNewName.Text).Trim()
+    if (-not $name) { return }
+    $old = [string]$script:monEditName
+    $mons = @($sync.Ddc.Monitors)
+    # The selected display seeds the recipe; it is the one the user was just
+    # looking at.
+    $seed = $null
+    if ($script:monSel -lt $mons.Count -and $mons[$script:monSel].Ok) { $seed = $mons[$script:monSel] }
+    if (-not $seed) { foreach ($m in $mons) { if ($m.Ok) { $seed = $m; break } } }
+    $prev = Get-MonProfile $old
+    if (-not $seed -and -not $prev) { $el.MonNewLayer.Visibility = 'Collapsed'; return }
+    $p = @{
+        Name    = $name
+        Color   = $script:monNewColor
+        Bri     = $(if ($seed) { [int]$seed.BriCur } else { [int]$prev.Bri })
+        Con     = $(if ($seed -and $null -ne $seed.ConCur) { [int]$seed.ConCur } elseif ($prev) { [int]$prev.Con } else { 50 })
+        Preset  = $(if ($seed -and $null -ne $seed.PreCur) { [int]$seed.PreCur } elseif ($prev) { [int]$prev.Preset } else { 0 })
+        Builtin = $(if ($prev) { [bool]$prev.Builtin } else { $false })
+    }
+    $arr = @(Get-MonProfiles | Where-Object { $_.Name -ne $name -and $_.Name -ne $old })
+    $arr += ,$p
+    Save-MonProfiles $arr
+    # A rename carries the active/schedule pointers with it.
+    if ($old -and $old -ne $name) {
+        if ([string]$script:settings.monProfile -eq $old) { $script:settings.monProfile = $name }
+        if ([string]$script:settings.monNightProfile -eq $old) { $script:settings.monNightProfile = $name }
+        $by = @($script:settings.monProfileByMon)
+        for ($i = 0; $i -lt $by.Count; $i++) { if ($by[$i] -eq $old) { $by[$i] = $name } }
+        $script:settings.monProfileByMon = @($by)
+    }
+    $script:monEditName = ''
+    $el.MonNewLayer.Visibility = 'Collapsed'
+    Update-MonitorPanel
+})
+$el.BtnMonNewDelete.Add_Click({
+    $name = [string]$script:monEditName
+    if (-not $name) { return }
+    $p = Get-MonProfile $name
+    if (-not $p -or $p.Builtin) { return }
+    Save-MonProfiles @(Get-MonProfiles | Where-Object { $_.Name -ne $name })
+    # Anything still pointing at the deleted profile falls back to a built-in.
+    if ([string]$script:settings.monProfile -eq $name) { $script:settings.monProfile = 'DAY' }
+    if ([string]$script:settings.monNightProfile -eq $name) { $script:settings.monNightProfile = 'NIGHT' }
+    $by = @($script:settings.monProfileByMon)
+    for ($i = 0; $i -lt $by.Count; $i++) { if ($by[$i] -eq $name) { $by[$i] = '' } }
+    $script:settings.monProfileByMon = @($by)
+    $script:monEditName = ''
+    $el.MonNewLayer.Visibility = 'Collapsed'
+    Update-MonitorPanel
+})
+# Scope: one profile across every display, or per display.
+function Set-MonScope([string]$scope) {
+    $script:settings.monProfileScope = $scope
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    Update-MonitorPanel
+}
+$el.BtnMonScopeAll.Add_Click({ Set-MonScope 'all' })
+$el.BtnMonScopeOne.Add_Click({ Set-MonScope 'one' })
+
 # --- Silent update install -------------------------------------------
 $script:psDl = $null
 $script:dlRunspace = $null
@@ -2640,6 +4744,437 @@ function Install-Update {
     $script:psDl.Runspace = $script:dlRunspace
     [void]$script:psDl.AddScript($dl.ToString()).AddArgument($sync).AddArgument($u.AssetUrl).AddArgument($dst)
     [void]$script:psDl.BeginInvoke()
+}
+
+# --- DDC/CI worker ---------------------------------------------------
+# DDC calls take 50ms-2s each, so they run in their own runspace fed by a
+# command queue. Only this runspace touches the PHYSICAL_MONITOR handles.
+# Commands: @{Cmd='Enum'} re-enumerates and publishes a snapshot into
+# $sync.Ddc; @{Cmd='SetBri'|'SetCon'|'SetVcp'; Mon=<index|-1 for all>;
+# Value=<n>; Code=<vcp>} applies a value.
+$script:psDdc = $null
+$script:ddcRunspace = $null
+$ddcWorker = {
+    param($sync)
+    $mons = @()                                       # live handles, index-aligned with the snapshot
+    $physSets = New-Object System.Collections.ArrayList
+    try {
+        while (-not $sync.Exit) {
+            $cmds = @()
+            while ($sync.DdcQueue.Count -gt 0) { $cmds += $sync.DdcQueue.Dequeue() }
+            if ($cmds.Count -gt 0) {
+                # Coalesce: only the newest Set per target matters, one Enum at most.
+                $seen = @{}; $run = @(); $verify = @{}
+                for ($i = $cmds.Count - 1; $i -ge 0; $i--) {
+                    $c = $cmds[$i]
+                    $key = if ($c.Cmd -eq 'Enum') { 'Enum' } else { '{0}:{1}:{2}' -f $c.Cmd, $c.Mon, $c.Code }
+                    if (-not $seen.ContainsKey($key)) { $seen[$key] = $true; $run = ,$c + $run }
+                }
+                foreach ($c in $run) {
+                    try {
+                        switch ([string]$c.Cmd) {
+                            'Enum' {
+                                $sync.Ddc.Busy = $true
+                                foreach ($p in $physSets) { try { [void][VentoNative.Ddc]::DestroyPhysicalMonitors([uint32]$p.N, $p.Arr) } catch { } }
+                                $physSets.Clear(); $mons = @()
+                                $out = @()
+                                # dxva2 hands back "Generic PnP Monitor" for most displays; the
+                                # EDID name Windows keeps is the one the user recognises.
+                                $edidNames = @()
+                                try {
+                                    foreach ($mi0 in @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop)) {
+                                        $nm0 = -join (@($mi0.UserFriendlyName) | Where-Object { $_ -gt 0 } | ForEach-Object { [char]$_ })
+                                        $edidNames += ,([string]$nm0).Trim()
+                                    }
+                                } catch { $edidNames = @() }
+                                $slot = 0
+                                foreach ($hm in [VentoNative.Ddc]::GetHMonitors()) {
+                                    $n = [uint32]0
+                                    if (-not [VentoNative.Ddc]::GetNumberOfPhysicalMonitorsFromHMONITOR($hm, [ref]$n) -or $n -eq 0) { continue }
+                                    $arr = New-Object 'VentoNative.PHYSICAL_MONITOR[]' $n
+                                    if (-not [VentoNative.Ddc]::GetPhysicalMonitorsFromHMONITOR($hm, $n, $arr)) { continue }
+                                    [void]$physSets.Add(@{ N = $n; Arr = $arr })
+                                    $bounds = $null
+                                    try { $bounds = [VentoNative.Ddc]::GetBounds($hm) } catch { }
+                                    foreach ($pm in $arr) {
+                                        $r = @{ Desc = [string]$pm.szPhysicalMonitorDescription; Ok = $false
+                                                Presets = @(); PreCur = $null; ConCur = $null
+                                                Inputs = @(); InCur = $null; VolCur = $null; MuteCur = $null
+                                                SharpCur = $null; RCur = $null; GCur = $null; BCur = $null
+                                                Hz = $null; PowerOff = $null; PowerCur = $null; PowerHard = $false
+                                                Modes = @(); ModeCur = $null
+                                                HasColorReset = $false; HasLevelReset = $false; HasFactoryReset = $false
+                                                Tech = ''; SubPixel = ''; UsageHours = $null; Mccs = ''
+                                                MapX = 0; MapY = 0; MapW = 0; MapH = 0; Primary = $false }
+                                        if ($bounds -and $bounds.Length -ge 5) {
+                                            $r.MapX = [int]$bounds[0]; $r.MapY = [int]$bounds[1]
+                                            $r.MapW = [int]$bounds[2]; $r.MapH = [int]$bounds[3]
+                                            $r.Primary = ([int]$bounds[4] -ne 0)
+                                        }
+                                        $h = $pm.hPhysicalMonitor
+                                        $mi = [uint32]0; $cu = [uint32]0; $ma = [uint32]0
+                                        if ([VentoNative.Ddc]::GetMonitorBrightness($h, [ref]$mi, [ref]$cu, [ref]$ma)) {
+                                            $r.Ok = $true; $r.BriCur = [int]$cu; $r.BriMax = [int]$ma
+                                            $mi = [uint32]0; $cu = [uint32]0; $ma = [uint32]0
+                                            if ([VentoNative.Ddc]::GetMonitorContrast($h, [ref]$mi, [ref]$cu, [ref]$ma)) {
+                                                $r.ConCur = [int]$cu; $r.ConMax = [int]$ma
+                                            }
+                                            # The capabilities string is the contract: only codes the
+                                            # display advertises are read, and only those get controls.
+                                            $caps = ''
+                                            $len = [uint32]0
+                                            if ([VentoNative.Ddc]::GetCapabilitiesStringLength($h, [ref]$len) -and $len -gt 1) {
+                                                $sb = New-Object System.Text.StringBuilder ([int]$len)
+                                                if ([VentoNative.Ddc]::CapabilitiesRequestAndCapabilitiesReply($h, $sb, $len)) { $caps = $sb.ToString() }
+                                            }
+                                            # Pull the balanced vcp(...) block, then every "XX" or
+                                            # "XX(v v v)" token inside it.
+                                            $allowed = @{}
+                                            $vi = $caps.IndexOf('vcp(')
+                                            if ($vi -ge 0) {
+                                                $depth = 0; $st = $vi + 4; $en = -1
+                                                for ($j = $vi + 3; $j -lt $caps.Length; $j++) {
+                                                    if ($caps[$j] -eq '(') { $depth++ }
+                                                    elseif ($caps[$j] -eq ')') { $depth--; if ($depth -eq 0) { $en = $j; break } }
+                                                }
+                                                if ($en -gt $st) {
+                                                    $block = $caps.Substring($st, $en - $st)
+                                                    foreach ($mm in [regex]::Matches($block, '([0-9A-Fa-f]{2})\s*(?:\(([^)]*)\))?')) {
+                                                        $code = [Convert]::ToInt32($mm.Groups[1].Value, 16)
+                                                        $vals = @()
+                                                        if ($mm.Groups[2].Success) {
+                                                            foreach ($tok in ($mm.Groups[2].Value -split '\s+')) {
+                                                                if ($tok -match '^[0-9A-Fa-f]{1,2}$') { $vals += [Convert]::ToInt32($tok, 16) }
+                                                            }
+                                                        }
+                                                        $allowed[$code] = $vals
+                                                    }
+                                                }
+                                            }
+                                            $readVcp = {
+                                                param($code)
+                                                $vt = [uint32]0; $vc = [uint32]0; $vm = [uint32]0
+                                                if ([VentoNative.Ddc]::GetVCPFeatureAndVCPFeatureReply($h, [byte]$code, [ref]$vt, [ref]$vc, [ref]$vm)) {
+                                                    return @([int]$vc, [int]$vm)
+                                                }
+                                                return $null
+                                            }
+                                            # The capability string lies in both directions - displays
+                                            # advertise features they ignore, and accept ones they never
+                                            # listed - so a control is offered only when the display
+                                            # actually answers a read with a value inside its own range.
+                                            $probe = {
+                                                param($code)
+                                                $v = & $readVcp $code
+                                                if (-not $v) { return $null }
+                                                if ($v[1] -le 0 -or $v[1] -gt 65535) { return $null }
+                                                if ($v[0] -lt 0 -or $v[0] -gt $v[1]) { return $null }
+                                                return $v
+                                            }
+                                            # colour preset (0x14): the allowed list has to come from
+                                            # caps; there is no way to enumerate it over the wire.
+                                            $v = & $readVcp 0x14
+                                            if ($v) {
+                                                $r.PreCur = $v[0]
+                                                $codes = @()
+                                                if ($allowed.ContainsKey(0x14)) { $codes = @($allowed[0x14]) }
+                                                if ($codes.Count -eq 0) { $codes = @(1, 2, 5, 6, 8) }
+                                                $r.Presets = $codes
+                                            }
+                                            # input source (0x60): only ever offer inputs the display
+                                            # named, since landing on a dead one can black it out.
+                                            if ($allowed.ContainsKey(0x60)) {
+                                                $v = & $readVcp 0x60
+                                                if ($v) {
+                                                    $r.InCur = $v[0]
+                                                    $ins = @($allowed[0x60])
+                                                    if ($ins.Count -gt 1) { $r.Inputs = $ins }
+                                                }
+                                            }
+                                            # speaker volume (0x62) + mute (0x8D)
+                                            $v = & $probe 0x62
+                                            if ($v) { $r.VolCur = $v[0]; $r.VolMax = $v[1] }
+                                            $v = & $readVcp 0x8D
+                                            if ($v -and $v[0] -ge 1 -and $v[0] -le 2) { $r.MuteCur = $v[0] }
+                                            # A read that succeeds is not proof a control works: the
+                                            # XG2705 answers sharpness reads and then drops every write.
+                                            # So the writable controls are tried once - nudge by one,
+                                            # read back, restore - and only offered if the value moved.
+                                            $writable = {
+                                                param($code, $cur, $max)
+                                                if ($max -le 0) { return $false }
+                                                $try = if ($cur -lt $max) { $cur + 1 } else { $cur - 1 }
+                                                [void][VentoNative.Ddc]::SetVCPFeature($h, [byte]$code, [uint32]$try)
+                                                Start-Sleep -Milliseconds 120
+                                                $chk = & $readVcp $code
+                                                $moved = ($chk -and [int]$chk[0] -eq $try)
+                                                if ($moved) {
+                                                    [void][VentoNative.Ddc]::SetVCPFeature($h, [byte]$code, [uint32]$cur)
+                                                    Start-Sleep -Milliseconds 80
+                                                }
+                                                return $moved
+                                            }
+                                            # sharpness (0x87)
+                                            $v = & $probe 0x87
+                                            if ($v -and (& $writable 0x87 $v[0] $v[1])) { $r.SharpCur = $v[0]; $r.SharpMax = $v[1] }
+                                            # video gain R/G/B (0x16 / 0x18 / 0x1A)
+                                            $vr = & $probe 0x16; $vg = & $probe 0x18; $vb = & $probe 0x1A
+                                            if ($vr -and $vg -and $vb) {
+                                                $r.RCur = $vr[0]; $r.RMax = $vr[1]
+                                                $r.GCur = $vg[0]; $r.GMax = $vg[1]
+                                                $r.BCur = $vb[0]; $r.BMax = $vb[1]
+                                            }
+                                            # vertical frequency (0xAE), reported in 0.01 Hz
+                                            $v = & $readVcp 0xAE
+                                            if ($v) {
+                                                $hz = [double]$v[0] / 100.0
+                                                if ($hz -gt 20 -and $hz -lt 500) { $r.Hz = $hz }
+                                            }
+                                            # Power mode (0xD6). 0x04 is DPMS Off, which wakes as soon
+                                            # as video returns; 0x05 is a real power-down that MCCS warns
+                                            # "may require user intervention at the display" to undo. So
+                                            # 0x04 wins whenever the display offers it.
+                                            if ($allowed.ContainsKey(0xD6)) {
+                                                $pv = @($allowed[0xD6])
+                                                foreach ($cand in @(4, 3, 2, 5)) { if ($pv -contains $cand) { $r.PowerOff = $cand; break } }
+                                                $r.PowerHard = ([int]$r.PowerOff -eq 5)
+                                                $v = & $readVcp 0xD6
+                                                if ($v) { $r.PowerCur = [int]$v[0] }
+                                            }
+                                            # Picture mode (0xDC) is offered only when the display can
+                                            # report it back. A mode that can be written but never read
+                                            # is unverifiable - on the XG2705 all eight writes changed
+                                            # nothing measurable - and a control that may be doing
+                                            # nothing has no place on the panel.
+                                            if ($allowed.ContainsKey(0xDC)) {
+                                                $v = & $readVcp 0xDC
+                                                if ($v) {
+                                                    $modes = @($allowed[0xDC])
+                                                    if ($modes.Count -gt 1) { $r.Modes = $modes; $r.ModeCur = [int]$v[0] }
+                                                }
+                                            }
+                                            # Colour temperature (0x0B/0x0C) is deliberately not offered.
+                                            # Both displays here advertise it, accept the write and then
+                                            # ignore it, reading back out-of-range values - a control that
+                                            # does nothing is worse than no control. The colour preset
+                                            # chips and the RGB gains cover the same ground and do work.
+                                            if ($allowed.ContainsKey(0xB2)) {
+                                                $v = & $readVcp 0xB2
+                                                if ($v) {
+                                                    $r.SubPixel = switch ([int]$v[0]) {
+                                                        1 { 'RGB stripe' } 2 { 'RGB horizontal' } 3 { 'BGR stripe' }
+                                                        4 { 'BGR horizontal' } 5 { 'quad pixel' } 6 { 'quad pixel' }
+                                                        7 { 'delta triad' } 8 { 'mosaic' } default { '' }
+                                                    }
+                                                }
+                                            }
+                                            # Name, best source first: the model the display states in
+                                            # its own capability string, then the EDID name Windows has,
+                                            # then dxva2's generic description.
+                                            if ($caps -match 'model\(([^)]+)\)') {
+                                                $mdl = ([string]$Matches[1]).Trim()
+                                                if ($mdl) { $r.Desc = $mdl }
+                                            }
+                                            if (($r.Desc -match '^Generic|^Default|^PnP' -or -not ([string]$r.Desc).Trim()) -and
+                                                $slot -lt $edidNames.Count -and $edidNames[$slot]) {
+                                                $r.Desc = $edidNames[$slot]
+                                            }
+                                            $r.HasColorReset   = $allowed.ContainsKey(0x08)
+                                            $r.HasLevelReset   = $allowed.ContainsKey(0x05)
+                                            $r.HasFactoryReset = $allowed.ContainsKey(0x04)
+                                            # Read-only identity, for the panel's info line. Only
+                                            # values that decode reliably are kept: the horizontal
+                                            # frequency (0xAC) came back in vendor-scaled units on
+                                            # real hardware, so it is not shown.
+                                            if ($allowed.ContainsKey(0xB6)) {
+                                                $v = & $readVcp 0xB6
+                                                if ($v) {
+                                                    $r.Tech = switch ([int]$v[0]) {
+                                                        1 { 'CRT' } 2 { 'CRT' } 3 { 'LCD' } 4 { 'LCoS' }
+                                                        5 { 'plasma' } 6 { 'OLED' } 7 { 'EL' } 8 { 'MEM' } default { '' }
+                                                    }
+                                                }
+                                            }
+                                            # Display usage time: hours live in the low 16 bits.
+                                            if ($allowed.ContainsKey(0xC0)) {
+                                                $v = & $readVcp 0xC0
+                                                if ($v -and [int]$v[0] -gt 0) { $r.UsageHours = [int]$v[0] }
+                                            }
+                                            if ($allowed.ContainsKey(0xDF)) {
+                                                $v = & $readVcp 0xDF
+                                                # major in the high byte, minor in the low byte
+                                                if ($v) { $r.Mccs = '{0}.{1}' -f ([int]$v[0] -shr 8), ([int]$v[0] -band 0xFF) }
+                                            }
+                                        }
+                                        $mons += ,@{ H = $h; Ok = $r.Ok }
+                                        $out += ,$r
+                                        $slot++
+                                    }
+                                }
+                                $sync.Ddc.Monitors = $out
+                                $sync.Ddc.Busy = $false
+                                $sync.Ddc.Gen++
+                            }
+                            default {
+                                if ($mons.Count -eq 0) { break }
+                                $idx = if ([int]$c.Mon -lt 0) { 0..($mons.Count - 1) } else { ,([int]$c.Mon) }
+                                foreach ($i in $idx) {
+                                    if ($i -lt 0 -or $i -ge $mons.Count -or -not $mons[$i].Ok) { continue }
+                                    # Displays accept commands they then ignore, so every write is
+                                    # read back. What the panel shows is what the display really
+                                    # did, not what it was asked to do.
+                                    $vcode = switch ([string]$c.Cmd) { 'SetBri' { 0x10 } 'SetCon' { 0x12 } default { [int]$c.Code } }
+                                    switch ([string]$c.Cmd) {
+                                        'SetBri' { [void][VentoNative.Ddc]::SetMonitorBrightness($mons[$i].H, [uint32][int]$c.Value) }
+                                        'SetCon' { [void][VentoNative.Ddc]::SetMonitorContrast($mons[$i].H, [uint32][int]$c.Value) }
+                                        'SetVcp' {
+                                            # Hard deny-list, independent of whatever the UI asks for.
+                                            # 0xE0-0xFF is the manufacturer-private range (service
+                                            # menus, panel timings, even theft-deterrence PIN locks),
+                                            # and 0x15/0x4D/0x4E/0x4F are VESA-reserved codes some
+                                            # firmware squats on. Writing into either has bricked
+                                            # displays in the wild, so Vento never does.
+                                            $code = [int]$c.Code
+                                            if ($code -lt 0xE0 -and @(0x15, 0x4D, 0x4E, 0x4F) -notcontains $code) {
+                                                [void][VentoNative.Ddc]::SetVCPFeature($mons[$i].H, [byte]$code, [uint32][int]$c.Value)
+                                            } else { $vcode = -1 }
+                                        }
+                                    }
+                                    # Remember what to verify once the whole batch is out.
+                                    if ($vcode -ge 0) { $verify['{0}:{1}' -f $i, $vcode] = @{ Mon = $i; Code = $vcode; Value = [int]$c.Value } }
+                                }
+                            }
+                        }
+                    } catch { }
+                }
+                # Verification happens once per batch, after every write in it
+                # went out. Reading between writes would put ~120 ms of I2C
+                # traffic between the two displays' updates; this way both get
+                # their new value ~60 ms apart and the read-backs follow.
+                foreach ($k in @($verify.Keys)) {
+                    $v = $verify[$k]
+                    $i = [int]$v.Mon; $vcode = [int]$v.Code
+                    if ($i -ge @($sync.Ddc.Monitors).Count) { continue }
+                    try {
+                        $vt = [uint32]0; $vc = [uint32]0; $vm = [uint32]0
+                        $rd = [VentoNative.Ddc]::GetVCPFeatureAndVCPFeatureReply($mons[$i].H, [byte]$vcode, [ref]$vt, [ref]$vc, [ref]$vm)
+                        $snap = @($sync.Ddc.Monitors)[$i]
+                        if ($rd) {
+                            $actual = [int]$vc
+                            switch ($vcode) {
+                                0x10 { $snap.BriCur = $actual }
+                                0x12 { $snap.ConCur = $actual }
+                                0x14 { $snap.PreCur = $actual }
+                                0x60 { $snap.InCur  = $actual }
+                                0x62 { $snap.VolCur = $actual }
+                                0x87 { $snap.SharpCur = $actual }
+                                0x16 { $snap.RCur = $actual }
+                                0x18 { $snap.GCur = $actual }
+                                0x1A { $snap.BCur = $actual }
+                            }
+                            $sync.Ddc.LastWrite = @{ Mon = $i; Code = $vcode; Asked = [int]$v.Value; Actual = $actual
+                                                     Took = ($actual -eq [int]$v.Value); Known = $true }
+                        } else {
+                            $sync.Ddc.LastWrite = @{ Mon = $i; Code = $vcode; Asked = [int]$v.Value; Actual = $null
+                                                     Took = $true; Known = $false }
+                        }
+                        $sync.Ddc.WGen++
+                    } catch { }
+                }
+            }
+            # Idle poll: 15 ms keeps a dragged blade's next value from waiting
+            # behind a long sleep; the CPU cost of an empty check is nil.
+            Start-Sleep -Milliseconds 15
+        }
+    }
+    finally {
+        foreach ($p in $physSets) { try { [void][VentoNative.Ddc]::DestroyPhysicalMonitors([uint32]$p.N, $p.Arr) } catch { } }
+    }
+}
+function Start-DdcWorker {
+    if ($script:psDdc) { return }
+    if (-not ('VentoNative.Ddc' -as [type])) { return }
+    $script:ddcRunspace = [runspacefactory]::CreateRunspace()
+    $script:ddcRunspace.Open()
+    $script:psDdc = [powershell]::Create()
+    $script:psDdc.Runspace = $script:ddcRunspace
+    [void]$script:psDdc.AddScript($ddcWorker.ToString()).AddArgument($sync)
+    [void]$script:psDdc.BeginInvoke()
+}
+
+# --- Windows notifications -------------------------------------------
+# A tray balloon is the old mechanism: Windows 10 and 11 flash it for a few
+# seconds and it never reaches the notification centre, so an update that
+# lands while nobody is at the desk is simply missed. Vento posts a real
+# toast instead - it survives in the Action Center, carries its own buttons,
+# and respects Do Not Disturb. The balloon stays as the fallback for
+# machines or policies where toasts refuse.
+$script:toastAumid = 'Blakfy.Vento'
+$script:toastReady = $null      # $null = not tried yet
+$script:toastNotifier = $null
+$script:toastKeep = @()         # keeps handlers alive until Windows is done
+
+function Initialize-Toast {
+    if ($null -ne $script:toastReady) { return $script:toastReady }
+    $script:toastReady = $false
+    try {
+        # Toasts are attributed to an AppUserModelID. A desktop app registers
+        # one under HKCU so notifications show "Vento" and its icon instead of
+        # being dropped for an unknown sender.
+        $key = Join-Path 'HKCU:\SOFTWARE\Classes\AppUserModelId' $script:toastAumid
+        if (-not (Test-Path $key)) { [void](New-Item -Path $key -Force) }
+        [void](New-ItemProperty -Path $key -Name 'DisplayName' -Value 'Vento' -PropertyType String -Force)
+        $png = Join-Path $script:AppRoot 'assets\logo.png'
+        if (Test-Path $png) { [void](New-ItemProperty -Path $key -Name 'IconUri' -Value $png -PropertyType String -Force) }
+        [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+        [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
+        $script:toastNotifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($script:toastAumid)
+        $script:toastReady = ($null -ne $script:toastNotifier)
+    } catch {
+        $script:toastReady = $false
+    }
+    return $script:toastReady
+}
+
+# $Buttons: ordered @(@{ Text = 'Install now'; Arg = 'install' }, ...)
+# $OnActivate: script block called on the UI thread with the chosen argument.
+function Show-Toast([string]$Title, [string]$Body, [string]$Tag, $Buttons, $OnActivate) {
+    if (-not (Initialize-Toast)) { return $false }
+    try {
+        $esc = { param($s) [System.Security.SecurityElement]::Escape([string]$s) }
+        $acts = ''
+        foreach ($b in @($Buttons)) {
+            $acts += '<action content="{0}" arguments="{1}" activationType="foreground"/>' -f
+                     (& $esc $b.Text), (& $esc $b.Arg)
+        }
+        if ($acts) { $acts = '<actions>' + $acts + '</actions>' }
+        $xmlStr = '<toast activationType="foreground" launch="open"><visual><binding template="ToastGeneric">' +
+                  ('<text>{0}</text><text>{1}</text>' -f (& $esc $Title), (& $esc $Body)) +
+                  '</binding></visual>' + $acts + '</toast>'
+        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $xml.LoadXml($xmlStr)
+        $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+        if ($Tag) { $toast.Tag = $Tag }
+        if ($OnActivate) {
+            $handler = {
+                param($s0, $e0)
+                $arg = 'open'
+                try { if ($e0 -and $e0.Arguments) { $arg = [string]$e0.Arguments } } catch { }
+                # Activation arrives on a WinRT thread; the UI is not ours to
+                # touch from there.
+                try { $window.Dispatcher.Invoke([action] { & $OnActivate $arg }) } catch { }
+            }.GetNewClosure()
+            # Add_Activated hands back a registration token; without [void] it
+            # would ride out of the function alongside the return value.
+            [void]$toast.Add_Activated($handler)
+            $script:toastKeep += ,$handler
+            if ($script:toastKeep.Count -gt 8) { $script:toastKeep = $script:toastKeep[-8..-1] }
+        }
+        $script:toastNotifier.Show($toast)
+        return $true
+    } catch {
+        return $false
+    }
 }
 
 # --- Window behaviour ------------------------------------------------
@@ -2688,10 +5223,633 @@ $window.Add_StateChanged({
     }
 })
 $window.Add_KeyDown({ param($s, $e)
-    if ($e.Key -eq 'Escape' -and $el.SettingsOverlay.Visibility -eq 'Visible') {
-        $el.SettingsOverlay.Visibility = 'Collapsed'
+    if ($e.Key -eq 'Escape') {
+        if ($el.SettingsOverlay.Visibility -eq 'Visible') { $el.SettingsOverlay.Visibility = 'Collapsed' }
+        elseif ($el.MonitorOverlay.Visibility -eq 'Visible') { $el.MonitorOverlay.Visibility = 'Collapsed' }
     }
 })
+
+# --- OSD overlay -----------------------------------------------------
+# A second top-level window: click-through, no taskbar/Alt-Tab presence,
+# never activated, always on top. Created lazily on first show and NEVER
+# owned by the main window (its StateChanged/Hide-ToTray handling would
+# drag the overlay along). Thermal brushes live in $window.Resources, so
+# the OSD keeps a static dark look plus one accent bar painted each tick.
+$script:osdShellXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Vento OSD" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" ShowActivated="False" Topmost="True" ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight" Focusable="False" IsHitTestVisible="False"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+  <Grid x:Name="OsdHost"/>
+</Window>
+'@
+
+$script:osd = $null
+$script:osdHost = $null
+$script:osdVals = @{}         # metric id -> value TextBlock, updated each tick
+$script:osdAccented = @()     # elements repainted when the thermal state moves
+$script:osdThermoDot = $null  # thermo layout: @{ Dot; Host } for the blade position
+$script:osdState = 'cool'
+$script:osdHeroId = $null
+$script:osdBrushCache = @{}
+
+# Base palettes; the thermal state walks each theme's own cool/warm/hot accents.
+$script:osdThemes = @{
+    sirocco = @{ Acc = '#6FB1FF'; Acc2 = '#4C8DFF'; Warm = '#F5A45C'; Hot = '#F2606B'; Panel = '#DC0A0D13'; Border = '#26FFFFFF'; Ink = '#EDF1F8'; Lab = '#8FA3BC' }
+    ember   = @{ Acc = '#FFB25C'; Acc2 = '#F08A3C'; Warm = '#FF8E4F'; Hot = '#F2606B'; Panel = '#DE130D09'; Border = '#38FFB25C'; Ink = '#F8F1E9'; Lab = '#BCA88F' }
+    venom   = @{ Acc = '#7CF29B'; Acc2 = '#3FD374'; Warm = '#E8E060'; Hot = '#F2606B'; Panel = '#DE08100B'; Border = '#337CF29B'; Ink = '#EAF8EE'; Lab = '#8FBC9E' }
+    violet  = @{ Acc = '#B18CFF'; Acc2 = '#8C5CF0'; Warm = '#F58CD0'; Hot = '#F2606B'; Panel = '#DE0E0A14'; Border = '#38B18CFF'; Ink = '#F2EDF8'; Lab = '#A393BC' }
+    crimson = @{ Acc = '#FF6B7E'; Acc2 = '#E0405C'; Warm = '#FF8E4F'; Hot = '#FFB25C'; Panel = '#DE13090B'; Border = '#38FF6B7E'; Ink = '#F8EDEE'; Lab = '#BC8F97' }
+    mono    = @{ Acc = '#FFFFFF'; Acc2 = '#C9D2DE'; Warm = '#FFFFFF'; Hot = '#F2606B'; Panel = '#D209090C'; Border = '#2EFFFFFF'; Ink = '#F2F4F7'; Lab = '#9AA3B0' }
+}
+# Display order; the first enabled metric is the "hero" (accent-colored, larger).
+$script:osdMetricDef = @(
+    @{ Id = 'cpu';  Key = 'osdCpu';     Col = 'osdColCpu';  Lab = 'CPU' },
+    @{ Id = 'gpu';  Key = 'osdGpu';     Col = 'osdColGpu';  Lab = 'GPU' },
+    @{ Id = 'load'; Key = 'osdGpuLoad'; Col = 'osdColLoad'; Lab = 'LOAD' },
+    @{ Id = 'ram';  Key = 'osdRam';     Col = 'osdColRam';  Lab = 'RAM' },
+    @{ Id = 'ssd';  Key = 'osdSsd';     Col = 'osdColSsd';  Lab = 'SSD' },
+    @{ Id = 'mb';   Key = 'osdMb';      Col = 'osdColMb';   Lab = 'BOARD' },
+    @{ Id = 'fan';  Key = 'osdFans';    Col = 'osdColFan';  Lab = 'FAN' }
+)
+
+function Get-OsdTheme {
+    $t = $script:osdThemes[[string]$script:settings.osdTheme]
+    if (-not $t) { $t = $script:osdThemes.sirocco }
+    $t
+}
+function Get-OsdBrush([string]$hex) {
+    if (-not $script:osdBrushCache.ContainsKey($hex)) {
+        $b = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($hex))
+        $b.Freeze()
+        $script:osdBrushCache[$hex] = $b
+    }
+    $script:osdBrushCache[$hex]
+}
+function Get-OsdAccent($t) {
+    switch ($script:osdState) { 'hot' { $t.Hot } 'warm' { $t.Warm } default { $t.Acc } }
+}
+function New-OsdGradient([string]$h1, [string]$h2, [bool]$vertical) {
+    $g = New-Object System.Windows.Media.LinearGradientBrush
+    $g.StartPoint = New-Object System.Windows.Point 0, 0
+    $g.EndPoint = $(if ($vertical) { New-Object System.Windows.Point 0, 1 } else { New-Object System.Windows.Point 1, 0 })
+    $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.ColorConverter]::ConvertFromString($h1)), 0))
+    $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.ColorConverter]::ConvertFromString($h2)), 1))
+    $g.Freeze()
+    $g
+}
+function New-OsdText([string]$text, [string]$hex, [double]$size, [string]$weight) {
+    $tb = New-Object System.Windows.Controls.TextBlock
+    $tb.Text = $text
+    $tb.Foreground = Get-OsdBrush $hex
+    $tb.FontSize = $size
+    $tb.FontWeight = $weight
+    $tb.VerticalAlignment = 'Center'
+    [System.Windows.Documents.Typography]::SetNumeralAlignment($tb, 'Tabular')
+    $tb
+}
+function New-OsdShadow {
+    $e = New-Object System.Windows.Media.Effects.DropShadowEffect
+    $e.ShadowDepth = 1; $e.BlurRadius = 7; $e.Opacity = 0.85
+    $e.Color = [System.Windows.Media.Colors]::Black
+    $e
+}
+function New-OsdPanel($t, [double]$radius) {
+    $b = New-Object System.Windows.Controls.Border
+    $b.Background = Get-OsdBrush $t.Panel
+    $b.BorderBrush = Get-OsdBrush $t.Border
+    $b.BorderThickness = New-Object System.Windows.Thickness 1
+    $b.CornerRadius = New-Object System.Windows.CornerRadius $radius
+    $b
+}
+# Value textblock for one metric: hero gets the accent (unless overridden) and a
+# bigger size; a per-metric color override always wins and stays fixed.
+function New-OsdVal($m, $t, [double]$size, [double]$heroSize) {
+    $ov = [string]$script:settings[$m.Col]
+    $isHero = ($m.Id -eq $script:osdHeroId)
+    $hex = if ($ov) { $ov } elseif ($isHero) { Get-OsdAccent $t } else { $t.Ink }
+    $tb = New-OsdText '--' $hex $(if ($isHero) { $heroSize } else { $size }) 'Bold'
+    $script:osdVals[$m.Id] = $tb
+    if (-not $ov -and $isHero) { $script:osdAccented += ,@{ El = $tb; Kind = 'fg' } }
+    $tb
+}
+
+function Build-OsdContent {
+    if (-not $script:osdHost) { return }
+    $s = $script:settings
+    $t = Get-OsdTheme
+    $script:osdVals = @{}
+    $script:osdAccented = @()
+    $script:osdThermoDot = $null
+    $ms = @($script:osdMetricDef | Where-Object { [bool]$s[$_.Key] })
+    if (-not $ms.Count) { $ms = @($script:osdMetricDef[0]) }
+    $script:osdHeroId = $ms[0].Id
+    $acc = Get-OsdAccent $t
+    $root = $null
+
+    switch ([string]$s.osdLayout) {
+        'strip' {
+            # NOTE: WPF does not clamp CornerRadius; an oversized value warps the
+            # border into an ellipse, so keep it at half the rendered height.
+            $root = New-OsdPanel $t 16
+            $root.Padding = New-Object System.Windows.Thickness 16, 8, 16, 8
+            $sp = New-Object System.Windows.Controls.StackPanel
+            $sp.Orientation = 'Horizontal'
+            $first = $true
+            foreach ($m in $ms) {
+                if (-not $first) {
+                    $sep = New-OsdText ([string][char]183) $t.Lab 12 'SemiBold'
+                    $sep.Margin = New-Object System.Windows.Thickness 10, 0, 10, 0
+                    $sep.Opacity = 0.55
+                    [void]$sp.Children.Add($sep)
+                }
+                $first = $false
+                $item = New-Object System.Windows.Controls.StackPanel
+                $item.Orientation = 'Horizontal'
+                if ($m.Id -eq $script:osdHeroId) {
+                    [void]$item.Children.Add((New-OsdVal $m $t 12.5 16))
+                    $lb = New-OsdText $m.Lab $t.Lab 9 'Bold'
+                    $lb.Margin = New-Object System.Windows.Thickness 3, 0, 0, 0
+                    [void]$item.Children.Add($lb)
+                } else {
+                    $lb = New-OsdText $m.Lab $t.Lab 9 'Bold'
+                    $lb.Margin = New-Object System.Windows.Thickness 0, 0, 4, 0
+                    [void]$item.Children.Add($lb)
+                    [void]$item.Children.Add((New-OsdVal $m $t 12.5 16))
+                }
+                [void]$sp.Children.Add($item)
+            }
+            $root.Child = $sp
+        }
+        'hero' {
+            $root = New-OsdPanel $t 10
+            $root.Padding = New-Object System.Windows.Thickness 16, 12, 16, 11
+            $col = New-Object System.Windows.Controls.StackPanel
+            $big = New-Object System.Windows.Controls.StackPanel
+            $big.Orientation = 'Horizontal'
+            $big.HorizontalAlignment = 'Right'
+            $hm = $ms[0]
+            [void]$big.Children.Add((New-OsdVal $hm $t 12 34))
+            $hl = New-OsdText $hm.Lab $t.Lab 10 'Bold'
+            $hl.Margin = New-Object System.Windows.Thickness 5, 0, 0, 5
+            $hl.VerticalAlignment = 'Bottom'
+            [void]$big.Children.Add($hl)
+            [void]$col.Children.Add($big)
+            $rest = @($ms | Select-Object -Skip 1)
+            if ($rest.Count) {
+                $rule = New-Object System.Windows.Shapes.Rectangle
+                $rule.Height = 1
+                $rule.Margin = New-Object System.Windows.Thickness 0, 9, 0, 8
+                $rule.Fill = New-OsdGradient ('#00' + $acc.TrimStart('#')) $acc $false
+                $script:osdAccented += ,@{ El = $rule; Kind = 'rule' }
+                [void]$col.Children.Add($rule)
+                $minis = New-Object System.Windows.Controls.StackPanel
+                $minis.Orientation = 'Horizontal'
+                $minis.HorizontalAlignment = 'Right'
+                $firstMini = $true
+                foreach ($m in $rest) {
+                    $item = New-Object System.Windows.Controls.StackPanel
+                    $item.Orientation = 'Horizontal'
+                    if (-not $firstMini) { $item.Margin = New-Object System.Windows.Thickness 13, 0, 0, 0 }
+                    $firstMini = $false
+                    $lb = New-OsdText $m.Lab $t.Lab 8.5 'Bold'
+                    $lb.Margin = New-Object System.Windows.Thickness 0, 0, 3, 0
+                    [void]$item.Children.Add($lb)
+                    [void]$item.Children.Add((New-OsdVal $m $t 12 12))
+                    [void]$minis.Children.Add($item)
+                }
+                [void]$col.Children.Add($minis)
+            }
+            $root.Child = $col
+        }
+        'pills' {
+            $root = New-Object System.Windows.Controls.StackPanel
+            $root.HorizontalAlignment = 'Right'
+            $first = $true
+            foreach ($m in $ms) {
+                $pill = New-OsdPanel $t 13
+                $pill.Padding = New-Object System.Windows.Thickness 12, 5, 12, 5
+                $pill.HorizontalAlignment = 'Right'
+                if (-not $first) { $pill.Margin = New-Object System.Windows.Thickness 0, 6, 0, 0 }
+                $first = $false
+                if ($m.Id -eq $script:osdHeroId) {
+                    $pill.Background = Get-OsdBrush ('#38' + $acc.TrimStart('#'))
+                    $pill.BorderBrush = Get-OsdBrush $acc
+                    $script:osdAccented += ,@{ El = $pill; Kind = 'pill' }
+                }
+                $row = New-Object System.Windows.Controls.StackPanel
+                $row.Orientation = 'Horizontal'
+                $lb = New-OsdText $m.Lab $t.Lab 9 'Bold'
+                $lb.Margin = New-Object System.Windows.Thickness 0, 0, 8, 0
+                [void]$row.Children.Add($lb)
+                [void]$row.Children.Add((New-OsdVal $m $t 14 15))
+                $pill.Child = $row
+                [void]$root.Children.Add($pill)
+            }
+        }
+        'ghost' {
+            $root = New-Object System.Windows.Controls.StackPanel
+            $root.HorizontalAlignment = 'Right'
+            $root.Effect = New-OsdShadow
+            $hm = $ms[0]
+            $big = New-Object System.Windows.Controls.StackPanel
+            $big.Orientation = 'Horizontal'
+            $big.HorizontalAlignment = 'Right'
+            [void]$big.Children.Add((New-OsdVal $hm $t 12.5 26))
+            $hl = New-OsdText $hm.Lab $t.Lab 10 'Bold'
+            $hl.Opacity = 0.7
+            $hl.Margin = New-Object System.Windows.Thickness 4, 0, 0, 3
+            $hl.VerticalAlignment = 'Bottom'
+            [void]$big.Children.Add($hl)
+            [void]$root.Children.Add($big)
+            $rest = @($ms | Select-Object -Skip 1)
+            if ($rest.Count) {
+                $row = New-Object System.Windows.Controls.StackPanel
+                $row.Orientation = 'Horizontal'
+                $row.HorizontalAlignment = 'Right'
+                $row.Margin = New-Object System.Windows.Thickness 0, 2, 0, 0
+                $firstR = $true
+                foreach ($m in $rest) {
+                    $item = New-Object System.Windows.Controls.StackPanel
+                    $item.Orientation = 'Horizontal'
+                    if (-not $firstR) { $item.Margin = New-Object System.Windows.Thickness 9, 0, 0, 0 }
+                    $firstR = $false
+                    $lb = New-OsdText $m.Lab $t.Lab 9 'Bold'
+                    $lb.Opacity = 0.7
+                    $lb.Margin = New-Object System.Windows.Thickness 0, 0, 3, 0
+                    [void]$item.Children.Add($lb)
+                    [void]$item.Children.Add((New-OsdVal $m $t 12.5 12.5))
+                    [void]$row.Children.Add($item)
+                }
+                [void]$root.Children.Add($row)
+            }
+        }
+        'micro' {
+            $root = New-Object System.Windows.Controls.StackPanel
+            $root.Orientation = 'Horizontal'
+            $root.HorizontalAlignment = 'Right'
+            $root.Opacity = 0.85
+            $root.Effect = New-OsdShadow
+            $first = $true
+            foreach ($m in $ms) {
+                $item = New-Object System.Windows.Controls.StackPanel
+                $item.Orientation = 'Horizontal'
+                if (-not $first) { $item.Margin = New-Object System.Windows.Thickness 9, 0, 0, 0 }
+                [void]$item.Children.Add((New-OsdVal $m $t 13 13))
+                if ($first) {
+                    $lb = New-OsdText $m.Lab $t.Lab 8 'SemiBold'
+                    $lb.Opacity = 0.55
+                    $lb.Margin = New-Object System.Windows.Thickness 2, 0, 0, 0
+                    [void]$item.Children.Add($lb)
+                }
+                $first = $false
+                [void]$root.Children.Add($item)
+            }
+        }
+        'thermo' {
+            $root = New-OsdPanel $t 10
+            $root.Padding = New-Object System.Windows.Thickness 10, 9, 13, 9
+            $h = New-Object System.Windows.Controls.StackPanel
+            $h.Orientation = 'Horizontal'
+            $edge = New-Object System.Windows.Controls.Border
+            $edge.Width = 7
+            $edge.CornerRadius = New-Object System.Windows.CornerRadius 4
+            $eg = New-Object System.Windows.Media.LinearGradientBrush
+            $eg.StartPoint = New-Object System.Windows.Point 0, 0
+            $eg.EndPoint = New-Object System.Windows.Point 0, 1
+            $eg.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.ColorConverter]::ConvertFromString($t.Hot)), 0))
+            $eg.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.ColorConverter]::ConvertFromString($t.Warm)), 0.45))
+            $eg.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.ColorConverter]::ConvertFromString($t.Acc)), 1))
+            $eg.Freeze()
+            $edge.Background = $eg
+            $edge.Margin = New-Object System.Windows.Thickness 0, 2, 10, 2
+            $edgeGrid = New-Object System.Windows.Controls.Grid
+            $dot = New-Object System.Windows.Shapes.Rectangle
+            $dot.Width = 11; $dot.Height = 3
+            $dot.RadiusX = 2; $dot.RadiusY = 2
+            $dot.Fill = Get-OsdBrush '#FFFFFF'
+            $dot.HorizontalAlignment = 'Center'
+            $dot.VerticalAlignment = 'Top'
+            $dot.Margin = New-Object System.Windows.Thickness 0, 6, 0, 0
+            [void]$edgeGrid.Children.Add($dot)
+            $edge.Child = $edgeGrid
+            $script:osdThermoDot = @{ Dot = $dot; Host = $edgeGrid }
+            [void]$h.Children.Add($edge)
+            $col = New-Object System.Windows.Controls.StackPanel
+            $firstRow = $true
+            foreach ($m in $ms) {
+                $row = New-Object System.Windows.Controls.Grid
+                [void]$row.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))
+                [void]$row.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))
+                $row.ColumnDefinitions[0].Width = New-Object System.Windows.GridLength 52
+                $row.ColumnDefinitions[1].Width = [System.Windows.GridLength]::Auto
+                if (-not $firstRow) { $row.Margin = New-Object System.Windows.Thickness 0, 3, 0, 0 }
+                $firstRow = $false
+                $lb = New-OsdText $m.Lab $t.Lab 9 'Bold'
+                [void]$row.Children.Add($lb)
+                $tb = New-OsdVal $m $t 14 19
+                [System.Windows.Controls.Grid]::SetColumn($tb, 1)
+                [void]$row.Children.Add($tb)
+                [void]$col.Children.Add($row)
+            }
+            [void]$h.Children.Add($col)
+            $root.Child = $h
+        }
+        default {   # blade
+            $root = New-OsdPanel $t 10
+            $root.Padding = New-Object System.Windows.Thickness 12, 9, 12, 9
+            $h = New-Object System.Windows.Controls.StackPanel
+            $h.Orientation = 'Horizontal'
+            $bar = New-Object System.Windows.Shapes.Rectangle
+            $bar.Width = 3
+            $bar.RadiusX = 1.5; $bar.RadiusY = 1.5
+            $bar.Fill = New-OsdGradient $acc $t.Acc2 $true
+            $bar.Margin = New-Object System.Windows.Thickness 0, 2, 9, 2
+            $script:osdAccented += ,@{ El = $bar; Kind = 'bar' }
+            [void]$h.Children.Add($bar)
+            $col = New-Object System.Windows.Controls.StackPanel
+            $firstRow = $true
+            foreach ($m in $ms) {
+                $row = New-Object System.Windows.Controls.Grid
+                [void]$row.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))
+                [void]$row.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))
+                $row.ColumnDefinitions[0].Width = New-Object System.Windows.GridLength 52
+                $row.ColumnDefinitions[1].Width = [System.Windows.GridLength]::Auto
+                if (-not $firstRow) { $row.Margin = New-Object System.Windows.Thickness 0, 3, 0, 0 }
+                $firstRow = $false
+                $lb = New-OsdText $m.Lab $t.Lab 9 'Bold'
+                [void]$row.Children.Add($lb)
+                $tb = New-OsdVal $m $t 14 19
+                [System.Windows.Controls.Grid]::SetColumn($tb, 1)
+                [void]$row.Children.Add($tb)
+                [void]$col.Children.Add($row)
+            }
+            [void]$h.Children.Add($col)
+            $root.Child = $h
+        }
+    }
+
+    $fontDir = Join-Path $script:AppRoot 'fonts'
+    $ff = New-Object System.Windows.Media.FontFamily(('file:///' + ($fontDir -replace '\\', '/') + '/#Sora, Segoe UI'))
+    $root.SetValue([System.Windows.Documents.TextElement]::FontFamilyProperty, $ff)
+    $k = [double]$s.osdScale / 100.0
+    $root.LayoutTransform = New-Object System.Windows.Media.ScaleTransform $k, $k
+    $script:osdHost.Children.Clear()
+    [void]$script:osdHost.Children.Add($root)
+}
+
+# Repaint accent-bound elements after a thermal state change.
+function Update-OsdAccent {
+    $t = Get-OsdTheme
+    $acc = Get-OsdAccent $t
+    foreach ($a in $script:osdAccented) {
+        switch ($a.Kind) {
+            'fg'   { $a.El.Foreground = Get-OsdBrush $acc }
+            'bar'  { $a.El.Fill = New-OsdGradient $acc $t.Acc2 $true }
+            'rule' { $a.El.Fill = New-OsdGradient ('#00' + $acc.TrimStart('#')) $acc $false }
+            'pill' { $a.El.Background = Get-OsdBrush ('#38' + $acc.TrimStart('#')); $a.El.BorderBrush = Get-OsdBrush $acc }
+        }
+    }
+}
+
+function New-Osd {
+    $script:osd = [System.Windows.Markup.XamlReader]::Parse($script:osdShellXaml)
+    $script:osdHost = $script:osd.FindName('OsdHost')
+    $script:osd.Add_SourceInitialized({
+        if (-not ('VentoNative.Osd' -as [type])) { return }
+        $h = (New-Object System.Windows.Interop.WindowInteropHelper $script:osd).Handle
+        if ($h -eq [IntPtr]::Zero) { return }
+        # WS_EX_TRANSPARENT (0x20) + WS_EX_TOOLWINDOW (0x80) + WS_EX_NOACTIVATE (0x8000000)
+        $ex = [long][VentoNative.Osd]::GetWindowLongPtr($h, -20)
+        [void][VentoNative.Osd]::SetWindowLongPtr($h, -20, [IntPtr]($ex -bor 0x20 -bor 0x80 -bor 0x8000000))
+    })
+    $script:osd.Add_SizeChanged({ Position-Osd })   # SizeToContent moves right/bottom anchors
+    # Drag + wheel only bite in edit mode, when the click-through style is off.
+    $script:osd.Add_MouseLeftButtonDown({
+        if (-not $script:osdEditing) { return }
+        try { $script:osd.DragMove() } catch { return }
+        $script:settings.osdFree = $true
+        $script:settings.osdX = [double]$script:osd.Left
+        $script:settings.osdY = [double]$script:osd.Top
+        $sync.Settings.osdFree = $true
+        $script:saveTimer.Stop(); $script:saveTimer.Start()
+    })
+    $script:osd.Add_MouseWheel({ param($s0, $e0)
+        if (-not $script:osdEditing) { return }
+        $step = if ($e0.Delta -gt 0) { 5 } else { -5 }
+        $script:settings.osdOpacity = [int](Limit ([int]$script:settings.osdOpacity + $step) 30 100)
+        $script:osd.Opacity = $script:settings.osdOpacity / 100.0
+        if ($el.SettingsOverlay.Visibility -eq 'Visible') { $el.S_OsdOpacity.Value = [double]$script:settings.osdOpacity }
+        $script:saveTimer.Stop(); $script:saveTimer.Start()
+    })
+    $script:osd.Opacity = ([int]$script:settings.osdOpacity) / 100.0
+    Build-OsdContent
+}
+
+function Update-OsdLayout {
+    if (-not $script:osd) { return }
+    Build-OsdContent
+    $script:osd.Opacity = ([int]$script:settings.osdOpacity) / 100.0
+    Position-Osd
+}
+
+function Position-Osd {
+    if (-not $script:osd -or -not $script:osd.IsVisible) { return }
+    $scr = [System.Windows.Forms.Screen]::PrimaryScreen
+    if ([bool]$script:settings.osdOnSecondary) {
+        $alt = [System.Windows.Forms.Screen]::AllScreens | Where-Object { -not $_.Primary } | Select-Object -First 1
+        if ($alt) { $scr = $alt }
+    }
+    # Screen.WorkingArea is physical pixels; window Left/Top are DIPs.
+    $k = 1.0
+    $src = [System.Windows.PresentationSource]::FromVisual($script:osd)
+    if ($src) { $k = $src.CompositionTarget.TransformFromDevice.M11 }
+    $wa = $scr.WorkingArea
+    $L = $wa.Left * $k; $T = $wa.Top * $k; $R = $wa.Right * $k; $B = $wa.Bottom * $k
+    $w = $script:osd.ActualWidth; $h = $script:osd.ActualHeight; $m = 12
+    # A dragged overlay stays where the user parked it, clamped so at least
+    # a grabbable sliver is always on some screen.
+    if ([bool]$script:settings.osdFree) {
+        $va = [System.Windows.Forms.SystemInformation]::VirtualScreen
+        $vL = $va.Left * $k; $vT = $va.Top * $k
+        $vR = ($va.Left + $va.Width) * $k; $vB = ($va.Top + $va.Height) * $k
+        $script:osd.Left = [math]::Min([math]::Max([double]$script:settings.osdX, $vL - $w + 60), $vR - 60)
+        $script:osd.Top  = [math]::Min([math]::Max([double]$script:settings.osdY, $vT), $vB - 40)
+        return
+    }
+    switch ([string]$script:settings.osdCorner) {
+        'tl' { $script:osd.Left = $L + $m;      $script:osd.Top = $T + $m }
+        'bl' { $script:osd.Left = $L + $m;      $script:osd.Top = $B - $h - $m }
+        'br' { $script:osd.Left = $R - $w - $m; $script:osd.Top = $B - $h - $m }
+        default { $script:osd.Left = $R - $w - $m; $script:osd.Top = $T + $m }   # 'tr'
+    }
+}
+
+function Show-Osd {
+    if (-not $script:osd) { try { New-Osd } catch { $script:osd = $null; return } }
+    if (-not $script:osd.IsVisible) { $script:osd.Show(); $script:osd.UpdateLayout(); Position-Osd }
+}
+function Hide-Osd { if ($script:osd -and $script:osd.IsVisible) { $script:osd.Hide() } }
+function Close-Osd { if ($script:osd) { try { Set-OsdEdit $false } catch { }; try { $script:osd.Close() } catch { }; $script:osd = $null } }
+
+# --- OSD edit mode ---------------------------------------------------
+# The overlay's own controls live on the overlay: unlock it and it grows a
+# dashed frame, drags with the mouse, and the wheel sets its opacity. Lock
+# it and the click-through style comes back.
+$script:osdEditing = $false
+$script:osdEditChrome = $null
+function Set-OsdEdit([bool]$on) {
+    if ($on -eq $script:osdEditing) { return }
+    $script:osdEditing = $on
+    if ($on) { Hide-OsdPin; Show-Osd }
+    if (-not $script:osd) { $script:osdEditing = $false; return }
+    $h = (New-Object System.Windows.Interop.WindowInteropHelper $script:osd).Handle
+    if ($h -ne [IntPtr]::Zero -and ('VentoNative.Osd' -as [type])) {
+        $ex = [long][VentoNative.Osd]::GetWindowLongPtr($h, -20)
+        # WS_EX_TRANSPARENT (0x20) off while editing so the mouse lands here.
+        $ex = if ($on) { $ex -band (-bnot 0x20) } else { $ex -bor 0x20 }
+        [void][VentoNative.Osd]::SetWindowLongPtr($h, -20, [IntPtr]$ex)
+    }
+    $script:osd.IsHitTestVisible = $on
+    if ($on) {
+        $chrome = New-Object System.Windows.Controls.Grid
+        $frame = New-Object System.Windows.Controls.Border
+        $frame.BorderThickness = New-Object System.Windows.Thickness 1.5
+        $bb = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#B06FB1FF'))
+        $bb.Freeze()
+        $frame.BorderBrush = $bb
+        $frame.CornerRadius = New-Object System.Windows.CornerRadius 12
+        $frame.IsHitTestVisible = $false
+        [void]$chrome.Children.Add($frame)
+        # DONE pill, top-right over the content
+        $pill = New-Object System.Windows.Controls.Border
+        $pill.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#F06FB1FF'))
+        $pill.CornerRadius = New-Object System.Windows.CornerRadius 9
+        $pill.Padding = New-Object System.Windows.Thickness 10, 4, 10, 4
+        $pill.HorizontalAlignment = 'Right'; $pill.VerticalAlignment = 'Top'
+        $pill.Margin = New-Object System.Windows.Thickness 0, 6, 6, 0
+        $pill.Cursor = [System.Windows.Input.Cursors]::Hand
+        $pt = New-Object System.Windows.Controls.TextBlock
+        $pt.Text = [string][char]0x2713 + ' DONE'
+        $pt.FontSize = 11; $pt.FontWeight = 'Bold'
+        $pt.Foreground = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#0B0E14'))
+        $pill.Child = $pt
+        $pill.Add_MouseLeftButtonDown({ param($s0, $e0) $e0.Handled = $true; Set-OsdEdit $false })
+        [void]$chrome.Children.Add($pill)
+        $hint = New-Object System.Windows.Controls.Border
+        $hint.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#D00A0E14'))
+        $hint.CornerRadius = New-Object System.Windows.CornerRadius 8
+        $hint.Padding = New-Object System.Windows.Thickness 10, 4, 10, 4
+        $hint.HorizontalAlignment = 'Center'; $hint.VerticalAlignment = 'Bottom'
+        $hint.Margin = New-Object System.Windows.Thickness 0, 0, 0, 6
+        $hint.IsHitTestVisible = $false
+        $ht = New-Object System.Windows.Controls.TextBlock
+        $ht.Text = 'drag to move  {0}  wheel = opacity' -f $script:mid
+        $ht.FontSize = 10
+        $ht.Foreground = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#C9D2E2'))
+        $hint.Child = $ht
+        [void]$chrome.Children.Add($hint)
+        $script:osdEditChrome = $chrome
+        [void]$script:osdHost.Children.Add($chrome)
+    } else {
+        if ($script:osdEditChrome) {
+            try { $script:osdHost.Children.Remove($script:osdEditChrome) } catch { }
+            $script:osdEditChrome = $null
+        }
+        $script:saveTimer.Stop(); $script:saveTimer.Start()
+    }
+    if ($script:miOsdMove) { $script:miOsdMove.Text = $(if ($on) { 'Lock overlay' } else { 'Move overlay' }) }
+}
+
+# --- Hover pin -------------------------------------------------------
+# A locked overlay cannot take a click, so the tick watches the OS cursor
+# instead: rest the mouse on the HUD and a small pin fades in (the window
+# turns clickable just for that moment); the pin opens edit mode. Games
+# hide or capture the cursor, so this never triggers mid-game.
+$script:osdPin = $null
+$script:osdHoverTicks = 0
+$script:osdAwayTicks = 0
+function Show-OsdPin {
+    if ($script:osdPin -or -not $script:osd) { return }
+    $h = (New-Object System.Windows.Interop.WindowInteropHelper $script:osd).Handle
+    if ($h -ne [IntPtr]::Zero -and ('VentoNative.Osd' -as [type])) {
+        $ex = [long][VentoNative.Osd]::GetWindowLongPtr($h, -20)
+        [void][VentoNative.Osd]::SetWindowLongPtr($h, -20, [IntPtr]($ex -band (-bnot 0x20)))
+    }
+    $script:osd.IsHitTestVisible = $true
+    # Only the pin itself takes hits; the readout stays inert.
+    if ($script:osdHost.Children.Count -gt 0) { $script:osdHost.Children[0].IsHitTestVisible = $false }
+    $pin = New-Object System.Windows.Controls.Border
+    $pin.Width = 26; $pin.Height = 26
+    $pin.CornerRadius = New-Object System.Windows.CornerRadius 13
+    $pin.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#E8101720'))
+    $pin.BorderThickness = New-Object System.Windows.Thickness 1
+    $pin.BorderBrush = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#B06FB1FF'))
+    $pin.HorizontalAlignment = 'Right'; $pin.VerticalAlignment = 'Top'
+    $pin.Margin = New-Object System.Windows.Thickness 0, 4, 4, 0
+    $pin.Cursor = [System.Windows.Input.Cursors]::Hand
+    $pin.ToolTip = 'Move or fade the overlay'
+    $g = New-Object System.Windows.Controls.TextBlock
+    $g.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
+    $g.FontSize = 12
+    $g.Text = [string][char]0xE718
+    $g.Foreground = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#6FB1FF'))
+    $g.HorizontalAlignment = 'Center'; $g.VerticalAlignment = 'Center'
+    $pin.Child = $g
+    $pin.Add_MouseLeftButtonDown({ param($s0, $e0)
+        $e0.Handled = $true
+        Hide-OsdPin
+        Set-OsdEdit $true
+    })
+    $script:osdPin = $pin
+    [void]$script:osdHost.Children.Add($pin)
+}
+function Hide-OsdPin {
+    if (-not $script:osdPin) { return }
+    try { $script:osdHost.Children.Remove($script:osdPin) } catch { }
+    $script:osdPin = $null
+    if ($script:osdHost.Children.Count -gt 0) { $script:osdHost.Children[0].IsHitTestVisible = $true }
+    if ($script:osdEditing) { return }   # edit mode keeps the window clickable
+    if ($script:osd) {
+        $script:osd.IsHitTestVisible = $false
+        $h = (New-Object System.Windows.Interop.WindowInteropHelper $script:osd).Handle
+        if ($h -ne [IntPtr]::Zero -and ('VentoNative.Osd' -as [type])) {
+            $ex = [long][VentoNative.Osd]::GetWindowLongPtr($h, -20)
+            [void][VentoNative.Osd]::SetWindowLongPtr($h, -20, [IntPtr]($ex -bor 0x20))
+        }
+    }
+}
+function Update-OsdHover {
+    if (-not $script:osd -or -not $script:osd.IsVisible -or $script:osdEditing) {
+        if ($script:osdPin) { Hide-OsdPin }
+        $script:osdHoverTicks = 0
+        return
+    }
+    $over = $false
+    try {
+        $p = [System.Windows.Forms.Control]::MousePosition
+        $src = [System.Windows.PresentationSource]::FromVisual($script:osd)
+        if ($src) {
+            $kd = $src.CompositionTarget.TransformToDevice.M11
+            $x0 = $script:osd.Left * $kd; $y0 = $script:osd.Top * $kd
+            $x1 = $x0 + $script:osd.ActualWidth * $kd; $y1 = $y0 + $script:osd.ActualHeight * $kd
+            $over = ($p.X -ge $x0 -and $p.X -le $x1 -and $p.Y -ge $y0 -and $p.Y -le $y1)
+        }
+    } catch { }
+    if ($over) {
+        $script:osdHoverTicks++
+        $script:osdAwayTicks = 0
+        if ($script:osdHoverTicks -ge 2 -and -not $script:osdPin) { Show-OsdPin }
+    } else {
+        $script:osdHoverTicks = 0
+        if ($script:osdPin) {
+            $script:osdAwayTicks++
+            if ($script:osdAwayTicks -ge 2) { Hide-OsdPin }
+        }
+    }
+}
 
 # --- Tray menu -------------------------------------------------------
 $script:notify = New-Object System.Windows.Forms.NotifyIcon
@@ -2712,6 +5870,21 @@ foreach ($m in 'quiet','normal','performance','curve','auto') {
     $mi.add_Click({ param($s, $e) Set-UserMode ([string]$s.Tag) })
 }
 [void]$menu.Items.Add('-')
+$script:miOsd = $menu.Items.Add('Overlay (OSD)')
+$script:osdModePrev = $null
+$script:miOsd.add_Click({
+    $s = $script:settings
+    if ([string]$s.osdMode -eq 'off') {
+        $s.osdMode = $(if ($script:osdModePrev) { $script:osdModePrev } else { 'auto' })
+    } else {
+        $script:osdModePrev = [string]$s.osdMode
+        $s.osdMode = 'off'
+    }
+    $sync.Settings.osdMode = $s.osdMode
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+})
+$script:miOsdMove = $menu.Items.Add('Move overlay')
+$script:miOsdMove.add_Click({ Set-OsdEdit (-not $script:osdEditing) })
 $script:miUpdate = $menu.Items.Add('Install update')
 $script:miUpdate.Visible = $false
 $script:miUpdate.add_Click({ Install-Update })
@@ -2958,6 +6131,7 @@ $script:timer.Add_Tick({
         else                    { $btn.Background = $script:brushClear;      $btn.Foreground = $script:brushDim }
     }
     foreach ($k in @($script:trayMode.Keys)) { $script:trayMode[$k].Checked = ($k -eq $mode) }
+    $script:miOsd.Checked = ([string]$script:settings.osdMode -ne 'off')
     # defer panel rebuilds while a slider is held, so a worker-driven mode
     # switch can't retarget the thumb the user is dragging
     if ($mode -ne $script:panelMode -and -not $el.ModeSlots.IsMouseCaptureWithin) { Update-ModePanel $mode }
@@ -2968,7 +6142,7 @@ $script:timer.Add_Tick({
             $el.StatusText.Text = $script:L.Downloading
         } elseif ($d.GameBoost) {
             $el.StatusDot.Fill = $script:brushYellow
-            $el.StatusText.Text = $script:L.GameActive
+            $el.StatusText.Text = $(if ([string]$d.GameMode -eq 'curve') { $script:L.GameActiveCurve } else { $script:L.GameActive })
         } elseif ($d.CoolDown) {
             $el.StatusDot.Fill = $script:brushYellow
             $el.StatusText.Text = $script:L.CoolDown -f [int][math]::Ceiling([double]$d.CoolLeft / 1000), $script:modeNames[[string]$d.CoolTo]
@@ -2990,8 +6164,13 @@ $script:timer.Add_Tick({
 
     if ($d.Warning -and $d.Warning -ne $script:lastWarn) {
         $script:lastWarn = $d.Warning
-        $script:lastBalloon = 'warn'
-        $script:notify.ShowBalloonTip(4000, 'Vento', $d.Warning, [System.Windows.Forms.ToolTipIcon]::Warning)
+        # A heat warning is worth keeping in the notification centre, not
+        # flashing for four seconds while the user is in a game.
+        $shown = Show-Toast 'Vento - temperature warning' ([string]$d.Warning) 'warn' $null { param($arg) Show-Main }
+        if (-not $shown) {
+            $script:lastBalloon = 'warn'
+            $script:notify.ShowBalloonTip(4000, 'Vento', $d.Warning, [System.Windows.Forms.ToolTipIcon]::Warning)
+        }
     }
     if (-not $d.Warning) { $script:lastWarn = $null }
 
@@ -3002,8 +6181,20 @@ $script:timer.Add_Tick({
         $el.UpdatePillText.Text = 'UPDATE {0}' -f $sync.Update.Version
         $el.UpdatePill.Visibility = 'Visible'
         if ($window.IsVisible) { Show-UpdateBanner }
-        $script:lastBalloon = 'update'
-        $script:notify.ShowBalloonTip(6000, 'Vento', ($script:L.UpdateBalloon -f $sync.Update.Version), [System.Windows.Forms.ToolTipIcon]::Info)
+        $ver = [string]$sync.Update.Version
+        $shown = Show-Toast ('Vento {0} is available' -f $ver) `
+                            'Install it now and Vento restarts itself when it is done.' `
+                            'update' `
+                            @(@{ Text = 'Install now'; Arg = 'install' }, @{ Text = 'Later'; Arg = 'later' }) `
+                            {
+                                param($arg)
+                                Show-Main
+                                if ($arg -eq 'install') { Install-Update }
+                            }
+        if (-not $shown) {
+            $script:lastBalloon = 'update'
+            $script:notify.ShowBalloonTip(6000, 'Vento', ($script:L.UpdateBalloon -f $ver), [System.Windows.Forms.ToolTipIcon]::Info)
+        }
     }
     if ($sync.DlState -eq 'downloading' -and $el.UpdatePill.Visibility -eq 'Visible') {
         $el.UpdatePillText.Text = 'DOWNLOADING...'
@@ -3048,6 +6239,81 @@ $script:timer.Add_Tick({
         Update-FanSpark $script:histFanCase $el.CaseFanSpark $el.FanSparkHost $script:fanMax $el.CaseFanSparkFill
     }
 
+    # --- OSD overlay ---
+    $osdWant = if ($script:osdEditing) { $true } else {
+        switch ([string]$script:settings.osdMode) {
+            'on'  { $true }
+            'off' { $false }
+            default { [bool]$d.GameDetected -or [bool]$d.GameBoost }
+        }
+    }
+    if ($osdWant) {
+        Show-Osd
+        if ($script:osd) {
+            # Thermal state from the hottest-sensor margin computed above; each
+            # theme walks its own cool/warm/hot accents.
+            $newState = 'cool'
+            if ($null -ne $margin) {
+                if ($margin -gt 2.5) { $newState = 'hot' } elseif ($margin -gt 0) { $newState = 'warm' }
+            }
+            if ($newState -ne $script:osdState) { $script:osdState = $newState; Update-OsdAccent }
+            $ovals = @{
+                cpu  = $(if ($null -ne $d.CpuTemp) { '{0}{1}' -f [int]$d.CpuTemp, $script:deg } else { '--' })
+                gpu  = $(if ($null -ne $d.GpuTemp) { '{0}{1}' -f [int]$d.GpuTemp, $script:deg } else { '--' })
+                load = $(if ($null -ne $d.GpuLoad) { '{0}%' -f [int]$d.GpuLoad } else { '--' })
+                ram  = $(if ($null -ne $d.RamLoad -and $null -ne $d.RamTemp) { '{0}% {1} {2}{3}' -f [int]$d.RamLoad, $script:mid, [int]$d.RamTemp, $script:deg }
+                         elseif ($null -ne $d.RamLoad) { '{0}%' -f [int]$d.RamLoad } else { '--' })
+                ssd  = $(if ($null -ne $d.SsdTemp) { '{0}{1}' -f [int]$d.SsdTemp, $script:deg } else { '--' })
+                mb   = $(if ($null -ne $d.MbTemp)  { '{0}{1}' -f [int]$d.MbTemp,  $script:deg } else { '--' })
+                fan  = '{0} {1} {2}' -f $(if ($null -ne $d.CpuFan) { $d.CpuFan } else { '--' }),
+                                        $script:mid,
+                                        $(if ($null -ne $d.CaseFan) { $d.CaseFan } else { '--' })
+            }
+            foreach ($id in @($script:osdVals.Keys)) { $script:osdVals[$id].Text = $ovals[$id] }
+            if ($script:osdThermoDot) {
+                $hh = $script:osdThermoDot.Host.ActualHeight
+                if ($hh -gt 10) {
+                    $pct = switch ($script:osdState) { 'hot' { 0.12 } 'warm' { 0.45 } default { 0.74 } }
+                    $script:osdThermoDot.Dot.Margin = New-Object System.Windows.Thickness 0, ([math]::Max(1.0, ($hh - 3) * $pct)), 0, 0
+                }
+            }
+            # Borderless games reorder the z stack; re-assert topmost every ~5s.
+            if (($script:histTick % 10) -eq 0 -and ('VentoNative.Osd' -as [type]) -and $script:osd.IsVisible) {
+                $h = (New-Object System.Windows.Interop.WindowInteropHelper $script:osd).Handle
+                if ($h -ne [IntPtr]::Zero) { [void][VentoNative.Osd]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x13) }
+            }
+        }
+        Update-OsdHover
+    } else { Hide-Osd }
+
+    # --- Monitor panel refresh: a new DDC snapshot bumps Gen ---
+    if ($el.MonitorOverlay.Visibility -eq 'Visible' -and $sync.Ddc.Gen -ne $script:monGen) {
+        $script:monGen = $sync.Ddc.Gen
+        Update-MonitorPanel
+    }
+    # A write that the display quietly ignored is worth saying out loud - the
+    # alternative is a control that looks like it works and does not.
+    if ($el.MonitorOverlay.Visibility -eq 'Visible' -and $sync.Ddc.WGen -ne $script:monWGen) {
+        $script:monWGen = $sync.Ddc.WGen
+        Show-MonWriteResult $sync.Ddc.LastWrite
+    }
+    # Night schedule: checked about once a minute, and it re-checks after
+    # sleep/wake because it compares against the wall clock, not a countdown.
+    if ([bool]$script:settings.monNight) {
+        $nowMin = [int][math]::Floor(([datetime]::Now - [datetime]::Today).TotalMinutes)
+        if ($nowMin -ne $script:nightLastMin) {
+            $script:nightLastMin = $nowMin
+            # The schedule can only drive displays the DDC worker has enumerated.
+            if (@($sync.Ddc.Monitors).Count -eq 0) {
+                if ($script:psDdc -and -not $sync.Ddc.Busy) { $sync.DdcQueue.Enqueue(@{ Cmd = 'Enum' }) }
+                else { Start-DdcWorker }
+            } else {
+                Test-NightShift
+                if ($el.MonitorOverlay.Visibility -eq 'Visible') { Build-MonTimeline }
+            }
+        }
+    }
+
     $tip = 'Vento'
     if ($null -ne $d.CpuTemp) { $tip += ('  CPU {0}{1}C' -f [int]$d.CpuTemp, $script:deg) }
     if ($null -ne $d.GpuTemp) { $tip += ('  GPU {0}{1}C' -f [int]$d.GpuTemp, $script:deg) }
@@ -3078,6 +6344,9 @@ finally {
     if ($script:saveTimer -and $script:saveTimer.IsEnabled) {
         try { $script:saveTimer.Stop(); Export-Settings $script:settings } catch { }
     }
+    # The OSD is a second top-level window; in the hosted DispatcherFrame path
+    # nothing else would close it and it could strand the process.
+    try { Close-Osd } catch { }
     # Worker shutdown lives here, not after Run: even if the UI dies from an
     # unhandled exception, the worker's finally must hand fans back to the BIOS.
     if ($sync) {
@@ -3092,6 +6361,8 @@ finally {
     if ($script:updRunspace) { try { $script:updRunspace.Dispose() } catch { } }
     if ($script:psDl) { try { $script:psDl.Dispose() } catch { } }
     if ($script:dlRunspace) { try { $script:dlRunspace.Dispose() } catch { } }
+    if ($script:psDdc) { try { $script:psDdc.Dispose() } catch { } }
+    if ($script:ddcRunspace) { try { $script:ddcRunspace.Dispose() } catch { } }
     if ($script:notify) {
         try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
     }

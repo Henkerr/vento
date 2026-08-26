@@ -6,6 +6,83 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.5.0 — 2026-08-21
+
+The assistant release: Vento steps beyond the fans.
+
+### Added
+- **In-game overlay (OSD), fully yours.** A click-through, always-on-top readout with seven
+  layouts (Blade, Strip, Hero, Pills, Ghost, Micro, Thermo Edge), six themes (Sirocco Ice,
+  Ember, Venom, Violet Drive, Crimson, Mono) that walk their own cool/warm/hot accents with
+  the thermal state, and per-metric custom colors on top. Metrics are toggleable — CPU/GPU/
+  SSD/board temperatures, GPU load, RAM usage, fan speeds. Pick the corner, scale it 75–200%,
+  park it on the secondary monitor, or flip it from the tray menu. Shows automatically while
+  a game is running ("While gaming"), always, or never. Every choice is remembered. Works
+  over borderless and windowed games; true exclusive fullscreen hides any overlay.
+- **Monitor control over DDC/CI.** A new MONITORS panel (title-bar button next to Settings)
+  drives every connected display over the same channel its own buttons use. Values are read
+  fresh from the monitors on every open, and only the controls a display actually advertises
+  are shown.
+  - **Your desk, drawn to scale.** The displays appear in the panel exactly as they sit on
+    the desktop — right sizes, right positions, the primary marked. Each screen carries its
+    own brightness: the number large in the middle, its blade docked along the bottom edge.
+    Click a screen to point the rest of the panel at it; IDENTIFY blinks them so the numbers
+    on the map can be matched to the panels on the desk.
+  - **Contrast, color presets and input source** for the selected display, with the live
+    refresh rate and active input read from the monitor itself.
+  - **An ADVANCED sheet** for the deeper controls: the display's own picture modes
+    (Productivity, Movie, Games, Professional and whatever else it offers), a continuous
+    color-temperature slider in kelvin, per-channel RGB gain, sharpness, speaker volume and
+    mute, restore factory colors or levels, a guarded factory reset, and switching the
+    display off from software.
+  - **Display profiles.** DAY, NIGHT, CINEMA and GAME apply a brightness/contrast/color-preset
+    recipe in one tap — to every display or only the selected one, your choice — each with its
+    own identity color that tints the panel while it is active. Add your own with + NEW: name
+    it, pick any color, and it stores what the displays are showing right now; right-click any
+    profile to rename, recolor, re-capture or delete it.
+    The built-in recipes are not invented numbers: brightness tracks the room (~120–150 cd/m²
+    lit, 80–100 cd/m² dark, and 100 cd/m² for film, the ITU-R BT.2035 reference viewing
+    environment), contrast stays at the factory value because raising it past default clips
+    highlight detail, and 6500 K is the D65 white point sRGB, Rec.709 and DCI-P3-D65 all
+    master to. NIGHT's warmer 5000 K is a deliberate comfort choice.
+  - **Night shift.** A schedule band shows the whole day as a 24-hour timeline with the night
+    window lit and a blade at the current time. Inside the window Vento applies the night
+    profile; on the way out it restores whatever was active before.
+  - A sync switch still makes one set of sliders drive every display at once, and the footer
+    reports what the display says about itself — panel type, hours powered on, MCCS version,
+    and how many controls it exposes.
+  - **Safety.** Vento only ever writes control codes a display advertises, and never writes
+    into the manufacturer-private range, where vendors keep service menus and, on some models,
+    panel locks. Switching input reverts itself after twelve seconds unless you keep it, so a
+    display that lands on a dead port comes back on its own. Turning a display off prefers the
+    sleep that wakes with video; when a display only offers a hard power-down, the button says
+    so. Factory reset asks first.
+- **Game action is now a choice.** When a game is detected, Vento can switch to Performance
+  (as before), follow the temperature Curve, or do nothing — picked in Settings. Old
+  `gameBoost` settings migrate automatically (on → Performance, off → Do nothing).
+
+- **The overlay moves and fades on your terms.** "Move overlay" in the tray menu (or MOVE
+  FREELY in Settings) unlocks the HUD in place: it grows a dashed frame, drags anywhere with
+  the mouse — any screen, any spot — and the scroll wheel sets its opacity while you watch.
+  Tap its ✓ DONE pill and it locks back to click-through. The dragged position sticks across
+  restarts; picking a corner in Settings snaps it back. Opacity also lives in Settings as a
+  slider (30–100%) that previews live on the real overlay. And the overlay carries its own
+  handle: rest the mouse on it for a moment and a small pin fades in — click it and you are
+  moving. Games hide or capture the cursor, so the pin never appears mid-game.
+- **RAM temperature, where the sticks report one.** Modules with an SPD thermal sensor
+  (every DDR5 stick, some DDR4) now feed the overlay's RAM readout: it shows usage and the
+  hottest module together. Sticks without a sensor simply keep the plain usage number.
+- **Real Windows notifications.** A new version and a temperature warning now arrive as
+  proper toasts: they wait in the notification centre instead of flashing for a few seconds,
+  and the update toast carries an **Install now** button that starts the update straight from
+  the notification. Machines where toasts are unavailable fall back to the old tray balloon.
+
+### Changed
+- Game detection itself now runs independently of the chosen action, so the overlay's
+  "While gaming" mode works even when the fans are left alone.
+
+---
+
 ## 1.4.2 — 2026-08-14
 
 ### Fixed
