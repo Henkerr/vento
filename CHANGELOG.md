@@ -6,6 +6,22 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.6.0 — 2026-08-28
+
+Frames.
+
+### Added
+- **Frame rate (FPS) in the overlay.** A new metric shows the real per-game frame rate,
+  measured the way PresentMon does — a live ETW trace of the display present stream, counted
+  per process. No bundled tools and no vendor SDK, so it works on any GPU; verified against
+  NVIDIA's own counter in-game to the frame. The number follows the focused game (or the
+  busiest thing presenting behind a borderless overlay) and never counts Vento itself. Turn
+  it on under Settings › Overlay; it leads the overlay as its hero metric. If another tracing
+  tool has claimed all of Windows' trace sessions, or an anti-cheat blocks the trace, FPS
+  quietly reads `--` rather than failing.
+
+---
+
 ## 1.5.0 — 2026-08-21
 
 The assistant release: Vento steps beyond the fans.

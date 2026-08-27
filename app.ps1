@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.5.0'
+$script:AppVersion = '1.6.0'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -200,6 +200,154 @@ try {
     Add-Type -Namespace VentoNative -Name Osd -MemberDefinition '[DllImport("user32.dll", EntryPoint="GetWindowLongPtrW", SetLastError=true)] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex); [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong); [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);'
 } catch { }
 
+# Per-process frame rate, the way PresentMon does it: a real-time ETW session
+# on the DXGI / D3D9 / DxgKrnl providers, counting Present events per process.
+# No bundled binaries, no vendor SDK, works on any GPU. Needs admin (Vento is
+# elevated). The struct layout here is exact - EVENT_TRACE_LOGFILEW is 448
+# bytes on x64; the callback offsets are why a naive definition sees nothing.
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Threading;
+namespace VentoNative {
+public static class Fps {
+  const uint WNODE_FLAG_TRACED_GUID = 0x00020000, EVENT_TRACE_REAL_TIME_MODE = 0x00000100;
+  const uint EVENT_TRACE_CONTROL_STOP = 1, EVENT_CONTROL_CODE_ENABLE_PROVIDER = 1;
+  const uint PROCESS_TRACE_MODE_REAL_TIME = 0x100, PROCESS_TRACE_MODE_RAW_TIMESTAMP = 0x1000, PROCESS_TRACE_MODE_EVENT_RECORD = 0x10000000;
+  const uint EVENT_FILTER_TYPE_EVENT_ID = 0x80000200, ENABLE_TRACE_PARAMETERS_VERSION_2 = 2;
+  const byte TRACE_LEVEL_VERBOSE = 5; const ushort EVENT_HEADER_FLAG_32_BIT_HEADER = 0x0020;
+  static readonly ulong INVALID = IntPtr.Size == 8 ? 0xFFFFFFFFFFFFFFFFUL : 0xFFFFFFFFUL;
+  static readonly Guid DXGI = new Guid("CA11C036-0102-4A2D-A6AD-F03CFED5D3C9");
+  static readonly Guid D3D9 = new Guid("783ACA0A-790E-4D7F-8451-AA850511C6B9");
+  static readonly Guid DXGK = new Guid("802EC45A-1E99-4B83-9920-87C98277BA9D");
+  static readonly long DXGI0 = BitConverter.ToInt64(DXGI.ToByteArray(),0), DXGI1 = BitConverter.ToInt64(DXGI.ToByteArray(),8);
+  static readonly long D3D90 = BitConverter.ToInt64(D3D9.ToByteArray(),0), D3D91 = BitConverter.ToInt64(D3D9.ToByteArray(),8);
+  static readonly long DXGK0 = BitConverter.ToInt64(DXGK.ToByteArray(),0), DXGK1 = BitConverter.ToInt64(DXGK.ToByteArray(),8);
+
+  [StructLayout(LayoutKind.Sequential)] struct WNODE_HEADER { public uint BufferSize, ProviderId; public ulong HistoricalContext, TimeStamp; public Guid Guid; public uint ClientContext, Flags; }
+  [StructLayout(LayoutKind.Sequential)] struct EVENT_TRACE_PROPERTIES { public WNODE_HEADER Wnode; public uint BufferSize, MinimumBuffers, MaximumBuffers, MaximumFileSize, LogFileMode, FlushTimer, EnableFlags; public int AgeLimit; public uint NumberOfBuffers, FreeBuffers, EventsLost, BuffersWritten, LogBuffersLost, RealTimeBuffersLost; public IntPtr LoggerThreadId; public uint LogFileNameOffset, LoggerNameOffset; }
+  [StructLayout(LayoutKind.Sequential)] struct EVENT_FILTER_DESCRIPTOR { public ulong Ptr; public uint Size, Type; }
+  [StructLayout(LayoutKind.Sequential)] struct ENABLE_TRACE_PARAMETERS { public uint Version, EnableProperty, ControlFlags; public Guid SourceId; public IntPtr EnableFilterDesc; public uint FilterDescCount; }
+  [StructLayout(LayoutKind.Sequential)] struct SYSTEMTIME { public ushort Year, Month, DayOfWeek, Day, Hour, Minute, Second, Milliseconds; }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct TIME_ZONE_INFORMATION { public int Bias; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string StandardName; public SYSTEMTIME StandardDate; public int StandardBias; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DaylightName; public SYSTEMTIME DaylightDate; public int DaylightBias; }
+  [StructLayout(LayoutKind.Sequential)] struct TRACE_LOGFILE_HEADER { public uint BufferSize, Version, ProviderVersion, NumberOfProcessors; public long EndTime; public uint TimerResolution, MaximumFileSize, LogFileMode, BuffersWritten; public Guid LogInstanceGuid; public IntPtr LoggerName, LogFileName; public TIME_ZONE_INFORMATION TimeZone; public long BootTime, PerfFreq, StartTime; public uint ReservedFlags, BuffersLost; }
+  [StructLayout(LayoutKind.Sequential)] struct EVENT_TRACE_HEADER { public ushort Size, FieldTypeFlags; public uint Version, ThreadId, ProcessId; public long TimeStamp; public Guid Guid; public ulong ProcessorTime; }
+  [StructLayout(LayoutKind.Sequential)] struct EVENT_TRACE { public EVENT_TRACE_HEADER Header; public uint InstanceId, ParentInstanceId; public Guid ParentGuid; public IntPtr MofData; public uint MofLength, ClientContext; }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct EVENT_TRACE_LOGFILEW {
+    [MarshalAs(UnmanagedType.LPWStr)] public string LogFileName; [MarshalAs(UnmanagedType.LPWStr)] public string LoggerName;
+    public long CurrentTime; public uint BuffersRead, ProcessTraceMode; public EVENT_TRACE CurrentEvent; public TRACE_LOGFILE_HEADER LogfileHeader;
+    public IntPtr BufferCallback; public uint BufferSize, Filled, EventsLost; public IntPtr EventRecordCallback; public uint IsKernelTrace; public IntPtr Context; }
+
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)] static extern uint StartTraceW(out ulong h, string name, IntPtr props);
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)] static extern uint ControlTraceW(ulong h, string name, IntPtr props, uint code);
+  [DllImport("advapi32.dll", ExactSpelling = true)] static extern uint EnableTraceEx2(ulong h, ref Guid prov, uint code, byte lvl, ulong any, ulong all, uint timeout, ref ENABLE_TRACE_PARAMETERS p);
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)] static extern ulong OpenTraceW(ref EVENT_TRACE_LOGFILEW lf);
+  [DllImport("advapi32.dll", ExactSpelling = true)] static extern uint ProcessTrace(ulong[] h, uint n, IntPtr s, IntPtr e);
+  [DllImport("advapi32.dll", ExactSpelling = true)] static extern uint CloseTrace(ulong h);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [UnmanagedFunctionPointer(CallingConvention.Winapi)] delegate void EventCb(IntPtr rec);
+
+  static ulong s_session, s_trace = 0; static IntPtr s_props = IntPtr.Zero; static Thread s_thread;
+  static EventCb s_cb; static long s_freq = System.Diagnostics.Stopwatch.Frequency;
+  class St { public long Bucket, LastTs; public int Cur, Last; }
+  static readonly object s_lk = new object();
+  static readonly Dictionary<int, St> s_rt = new Dictionary<int, St>();
+  static readonly Dictionary<int, St> s_kr = new Dictionary<int, St>();
+  public static string Status = "off";
+
+  static IntPtr NewProps(string name, out int total) {
+    int size = Marshal.SizeOf(typeof(EVENT_TRACE_PROPERTIES)); total = size + 2 * 1024 * 2;
+    IntPtr p = Marshal.AllocHGlobal(total); for (int i = 0; i < total; i++) Marshal.WriteByte(p, i, 0);
+    var s = new EVENT_TRACE_PROPERTIES();
+    s.Wnode.BufferSize = (uint)total; s.Wnode.Flags = WNODE_FLAG_TRACED_GUID; s.Wnode.ClientContext = 1;
+    s.LogFileMode = EVENT_TRACE_REAL_TIME_MODE; s.FlushTimer = 1; s.BufferSize = 16; s.MinimumBuffers = 4; s.MaximumBuffers = 32;
+    s.LoggerNameOffset = (uint)size; s.LogFileNameOffset = 0;
+    Marshal.StructureToPtr(s, p, false); return p;
+  }
+  static void Enable(Guid prov, ulong anyKw, ushort[] ids) {
+    int n = 4 + 2 * ids.Length; IntPtr blob = Marshal.AllocHGlobal(n);
+    Marshal.WriteByte(blob, 0, 1); Marshal.WriteByte(blob, 1, 0); Marshal.WriteInt16(blob, 2, (short)ids.Length);
+    for (int i = 0; i < ids.Length; i++) Marshal.WriteInt16(blob, 4 + 2 * i, (short)ids[i]);
+    var fd = new EVENT_FILTER_DESCRIPTOR { Ptr = (ulong)blob.ToInt64(), Size = (uint)n, Type = EVENT_FILTER_TYPE_EVENT_ID };
+    IntPtr pfd = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(EVENT_FILTER_DESCRIPTOR))); Marshal.StructureToPtr(fd, pfd, false);
+    var ep = new ENABLE_TRACE_PARAMETERS { Version = ENABLE_TRACE_PARAMETERS_VERSION_2, EnableFilterDesc = pfd, FilterDescCount = 1 };
+    EnableTraceEx2(s_session, ref prov, EVENT_CONTROL_CODE_ENABLE_PROVIDER, TRACE_LEVEL_VERBOSE, anyKw, 0, 0, ref ep);
+    Marshal.FreeHGlobal(pfd); Marshal.FreeHGlobal(blob);
+  }
+  public static uint Start(string name) {
+    try {
+      int total; s_props = NewProps(name, out total);
+      ControlTraceW(0, name, s_props, EVENT_TRACE_CONTROL_STOP);
+      Marshal.FreeHGlobal(s_props); s_props = NewProps(name, out total);
+      uint st = StartTraceW(out s_session, name, s_props);
+      if (st != 0) { Status = "start=" + st; return st; }
+      Enable(DXGI, 0x8000000000000002UL, new ushort[] { 42, 55 });
+      Enable(D3D9, 0x8000000000000002UL, new ushort[] { 1 });
+      Enable(DXGK, 0x4000000008000001UL, new ushort[] { 184 });
+      var lf = new EVENT_TRACE_LOGFILEW(); lf.LoggerName = name;
+      lf.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
+      s_cb = OnEvent; lf.EventRecordCallback = Marshal.GetFunctionPointerForDelegate(s_cb);
+      s_trace = OpenTraceW(ref lf);
+      if (s_trace == INVALID) { Status = "open=" + Marshal.GetLastWin32Error(); return 1; }
+      if (lf.LogfileHeader.PerfFreq > 0) s_freq = lf.LogfileHeader.PerfFreq;
+      s_thread = new Thread(Loop); s_thread.IsBackground = true; s_thread.Start();
+      Status = "on"; return 0;
+    } catch (Exception e) { Status = "exc:" + e.Message; return 2; }
+  }
+  static void Loop() { try { ProcessTrace(new ulong[] { s_trace }, 1, IntPtr.Zero, IntPtr.Zero); } catch { } }
+  static void OnEvent(IntPtr rec) {
+    ushort hflags = (ushort)Marshal.ReadInt16(rec, 4); int pid = Marshal.ReadInt32(rec, 12); long ts = Marshal.ReadInt64(rec, 16);
+    long g0 = Marshal.ReadInt64(rec, 24), g1 = Marshal.ReadInt64(rec, 32); ushort id = (ushort)Marshal.ReadInt16(rec, 40);
+    if (g0 == DXGI0 && g1 == DXGI1) {
+      if (id != 42 && id != 55) return;
+      IntPtr ud = Marshal.ReadIntPtr(rec, 96);
+      if (ud != IntPtr.Zero) { int off = (hflags & EVENT_HEADER_FLAG_32_BIT_HEADER) != 0 ? 4 : 8; try { if ((Marshal.ReadInt32(ud, off) & 1) != 0) return; } catch { } }
+      Count(s_rt, pid, ts);
+    } else if (g0 == D3D90 && g1 == D3D91) { if (id == 1) Count(s_rt, pid, ts); }
+    else if (g0 == DXGK0 && g1 == DXGK1) { if (id == 184) Count(s_kr, pid, ts); }
+  }
+  static void Count(Dictionary<int, St> m, int pid, long ts) {
+    long b = ts / s_freq;
+    lock (s_lk) { St s; if (!m.TryGetValue(pid, out s)) { s = new St(); s.Bucket = b; m[pid] = s; }
+      if (b != s.Bucket) { s.Last = (b == s.Bucket + 1) ? s.Cur : 0; s.Bucket = b; s.Cur = 0; } s.Cur++; s.LastTs = ts; }
+  }
+  static int GetFps(int pid) {
+    long now = System.Diagnostics.Stopwatch.GetTimestamp();
+    lock (s_lk) { St s;
+      if (s_rt.TryGetValue(pid, out s) && now - s.LastTs < 2 * s_freq) return s.Last;
+      if (s_kr.TryGetValue(pid, out s) && now - s.LastTs < 2 * s_freq) return s.Last; return 0; }
+  }
+  static int TopPid(int excludeSelf) {
+    long now = System.Diagnostics.Stopwatch.GetTimestamp(); int best = 0, bestPid = 0;
+    lock (s_lk) {
+      foreach (var kv in s_rt) { if (kv.Key == excludeSelf) continue; if (now - kv.Value.LastTs > 2 * s_freq) continue; if (kv.Value.Last > best) { best = kv.Value.Last; bestPid = kv.Key; } }
+      if (bestPid == 0) foreach (var kv in s_kr) { if (kv.Key == excludeSelf) continue; if (now - kv.Value.LastTs > 2 * s_freq) continue; if (kv.Value.Last > best) { best = kv.Value.Last; bestPid = kv.Key; } }
+    }
+    return bestPid;
+  }
+  // The number Vento shows: the focused window's rate, or the busiest
+  // presenter (the game behind a borderless overlay), never Vento itself.
+  public static int Current(int selfPid) {
+    uint fpid; GetWindowThreadProcessId(GetForegroundWindow(), out fpid);
+    int f = 0;
+    if (fpid != 0 && (int)fpid != selfPid) f = GetFps((int)fpid);
+    if (f == 0) { int tp = TopPid(selfPid); if (tp != 0) f = GetFps(tp); }
+    return f;
+  }
+  public static void Stop() {
+    try { if (s_trace != 0 && s_trace != INVALID) { CloseTrace(s_trace); s_trace = 0; } } catch { }
+    try { if (s_session != 0) { ControlTraceW(s_session, null, s_props, EVENT_TRACE_CONTROL_STOP); s_session = 0; } } catch { }
+    if (s_thread != null) { s_thread.Join(5000); s_thread = null; }
+    if (s_props != IntPtr.Zero) { Marshal.FreeHGlobal(s_props); s_props = IntPtr.Zero; }
+    Status = "off";
+  }
+}}
+'@
+} catch { }
+
 # --- Single instance -------------------------------------------------
 $created = $false
 $script:mutex = New-Object System.Threading.Mutex($true, 'Global\VentoSingleInstance', [ref]$created)
@@ -283,11 +431,13 @@ function Get-DefaultSettings {
         osdCpu           = $true       # overlay metrics
         osdGpu           = $true
         osdGpuLoad       = $true
+        osdFps           = $false      # per-process frame rate (ETW)
         osdRam           = $false      # memory usage %
         osdFans          = $true
         osdSsd           = $false
         osdMb            = $false
-        osdColCpu        = ''          # per-metric color overrides ('' = theme decides)
+        osdColFps        = ''          # per-metric color overrides ('' = theme decides)
+        osdColCpu        = ''
         osdColGpu        = ''
         osdColLoad       = ''
         osdColRam        = ''
@@ -387,7 +537,7 @@ function Import-Settings {
         $s.osdFree          = [bool]$s.osdFree
         $s.osdX             = [double](Limit $s.osdX -20000 20000)
         $s.osdY             = [double](Limit $s.osdY -20000 20000)
-        foreach ($k in 'osdCpu','osdGpu','osdGpuLoad','osdRam','osdFans','osdSsd','osdMb') { $s[$k] = [bool]$s[$k] }
+        foreach ($k in 'osdCpu','osdGpu','osdGpuLoad','osdRam','osdFans','osdSsd','osdMb','osdFps') { $s[$k] = [bool]$s[$k] }
         $s.monSync          = [bool]$s.monSync
         $s.monNight         = [bool]$s.monNight
         $s.monAdvOpen       = [bool]$s.monAdvOpen
@@ -438,7 +588,7 @@ function Import-Settings {
     if (@('tr','tl','bl','br') -notcontains [string]$s.osdCorner) { $s.osdCorner = 'tr' }
     if (@('blade','strip','hero','pills','ghost','micro','thermo') -notcontains [string]$s.osdLayout) { $s.osdLayout = 'blade' }
     if (@('sirocco','ember','venom','violet','crimson','mono') -notcontains [string]$s.osdTheme) { $s.osdTheme = 'sirocco' }
-    foreach ($k in 'osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan') {
+    foreach ($k in 'osdColFps','osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan') {
         $v = [string]$s[$k]
         if ($v) { try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($v) } catch { $v = '' } }
         $s[$k] = $v
@@ -2242,6 +2392,7 @@ $xaml = @'
                       <CheckBox x:Name="S_OsdSecond" Style="{StaticResource SetCheck}" Content="Show on the secondary monitor"/>
                       <TextBlock Style="{StaticResource SetLabel}" Text="Show in the overlay" Margin="0,10,0,0"/>
                       <WrapPanel Margin="0,2,0,0">
+                        <CheckBox x:Name="S_OsdFps"  Style="{StaticResource SetCheck}" Content="Frame rate (FPS)" Width="220"/>
                         <CheckBox x:Name="S_OsdCpu"  Style="{StaticResource SetCheck}" Content="CPU temperature" Width="220"/>
                         <CheckBox x:Name="S_OsdGpu"  Style="{StaticResource SetCheck}" Content="GPU temperature" Width="220"/>
                         <CheckBox x:Name="S_OsdLoad" Style="{StaticResource SetCheck}" Content="GPU load" Width="220"/>
@@ -2252,6 +2403,7 @@ $xaml = @'
                       </WrapPanel>
                       <TextBlock Style="{StaticResource SetLabel}" Text="Metric colors - click to pick one; unpainted metrics follow the theme" Margin="0,10,0,0"/>
                       <WrapPanel Margin="0,4,0,0">
+                        <Button x:Name="O_ColFps"   Style="{StaticResource SegBtn}" Content="FPS"   MinWidth="58" Margin="0,2,4,2"/>
                         <Button x:Name="O_ColCpu"   Style="{StaticResource SegBtn}" Content="CPU"   MinWidth="58" Margin="0,2,4,2"/>
                         <Button x:Name="O_ColGpu"   Style="{StaticResource SegBtn}" Content="GPU"   MinWidth="58" Margin="0,2,4,2"/>
                         <Button x:Name="O_ColLoad"  Style="{StaticResource SegBtn}" Content="LOAD"  MinWidth="58" Margin="0,2,4,2"/>
@@ -2738,8 +2890,8 @@ foreach ($name in @(
     'OsdCornerShell','O_CorTL','O_CorTR','O_CorBL','O_CorBR',
     'S_OsdScale','V_OsdScale','S_OsdSecond',
     'S_OsdOpacity','V_OsdOpacity','BtnOsdMove','BtnOsdResetPos','OsdPosNote',
-    'S_OsdCpu','S_OsdGpu','S_OsdLoad','S_OsdRam','S_OsdFans','S_OsdSsd','S_OsdMb',
-    'O_ColCpu','O_ColGpu','O_ColLoad','O_ColRam','O_ColSsd','O_ColMb','O_ColFan','O_ColReset',
+    'S_OsdFps','S_OsdCpu','S_OsdGpu','S_OsdLoad','S_OsdRam','S_OsdFans','S_OsdSsd','S_OsdMb',
+    'O_ColFps','O_ColCpu','O_ColGpu','O_ColLoad','O_ColRam','O_ColSsd','O_ColMb','O_ColFan','O_ColReset',
     'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool',
     'S_CpuMax','S_GpuMax','S_Interval','S_StartMin','S_CloseTray','S_Updates','S_AutoStart',
     'V_QuietCase','V_NormalCase','V_PerfCase','V_PerfCpu',
@@ -3325,10 +3477,10 @@ $script:osdCornerPick = 'tr'
 $script:osdLayoutPick = 'blade'
 $script:osdThemePick  = 'sirocco'
 $script:osdColorStage = @{}      # metric color overrides staged while the panel is open
-$script:osdCheckMap = @(@('S_OsdCpu','osdCpu'), @('S_OsdGpu','osdGpu'), @('S_OsdLoad','osdGpuLoad'),
+$script:osdCheckMap = @(@('S_OsdFps','osdFps'), @('S_OsdCpu','osdCpu'), @('S_OsdGpu','osdGpu'), @('S_OsdLoad','osdGpuLoad'),
                         @('S_OsdRam','osdRam'),
                         @('S_OsdFans','osdFans'), @('S_OsdSsd','osdSsd'), @('S_OsdMb','osdMb'))
-$script:osdColBtnMap = @(@('O_ColCpu','osdColCpu'), @('O_ColGpu','osdColGpu'), @('O_ColLoad','osdColLoad'),
+$script:osdColBtnMap = @(@('O_ColFps','osdColFps'), @('O_ColCpu','osdColCpu'), @('O_ColGpu','osdColGpu'), @('O_ColLoad','osdColLoad'),
                          @('O_ColRam','osdColRam'), @('O_ColSsd','osdColSsd'), @('O_ColMb','osdColMb'),
                          @('O_ColFan','osdColFan'))
 
@@ -5266,6 +5418,7 @@ $script:osdThemes = @{
 }
 # Display order; the first enabled metric is the "hero" (accent-colored, larger).
 $script:osdMetricDef = @(
+    @{ Id = 'fps';  Key = 'osdFps';     Col = 'osdColFps';  Lab = 'FPS' },
     @{ Id = 'cpu';  Key = 'osdCpu';     Col = 'osdColCpu';  Lab = 'CPU' },
     @{ Id = 'gpu';  Key = 'osdGpu';     Col = 'osdColGpu';  Lab = 'GPU' },
     @{ Id = 'load'; Key = 'osdGpuLoad'; Col = 'osdColLoad'; Lab = 'LOAD' },
@@ -5690,6 +5843,22 @@ function Position-Osd {
 function Show-Osd {
     if (-not $script:osd) { try { New-Osd } catch { $script:osd = $null; return } }
     if (-not $script:osd.IsVisible) { $script:osd.Show(); $script:osd.UpdateLayout(); Position-Osd }
+}
+# The FPS tracer is started once, the first time an FPS-enabled overlay needs
+# it, and kept alive for the session so it survives across game launches. If
+# the ETW session can't start (another tracer holds all 8 slots, or an
+# anti-cheat blocked it), FPS quietly reads "--".
+$script:fpsTried = $false
+$script:fpsOn = $false
+function Ensure-FpsTracer {
+    if ($script:fpsTried) { return }
+    $script:fpsTried = $true
+    if (-not ('VentoNative.Fps' -as [type])) { return }
+    try { $script:fpsOn = ([VentoNative.Fps]::Start('Vento-PresentTrace') -eq 0) } catch { $script:fpsOn = $false }
+}
+function Stop-FpsTracer {
+    if ($script:fpsOn -and ('VentoNative.Fps' -as [type])) { try { [VentoNative.Fps]::Stop() } catch { } }
+    $script:fpsOn = $false
 }
 function Hide-Osd { if ($script:osd -and $script:osd.IsVisible) { $script:osd.Hide() } }
 function Close-Osd { if ($script:osd) { try { Set-OsdEdit $false } catch { }; try { $script:osd.Close() } catch { }; $script:osd = $null } }
@@ -6257,7 +6426,18 @@ $script:timer.Add_Tick({
                 if ($margin -gt 2.5) { $newState = 'hot' } elseif ($margin -gt 0) { $newState = 'warm' }
             }
             if ($newState -ne $script:osdState) { $script:osdState = $newState; Update-OsdAccent }
+            # FPS comes from the ETW present tracer, started lazily the first
+            # time the overlay actually needs it.
+            $fpsTxt = '--'
+            if ([bool]$script:settings.osdFps) {
+                Ensure-FpsTracer
+                if ($script:fpsOn) {
+                    $f = [VentoNative.Fps]::Current($PID)
+                    if ($f -gt 0) { $fpsTxt = '{0}' -f $f }
+                }
+            }
             $ovals = @{
+                fps  = $fpsTxt
                 cpu  = $(if ($null -ne $d.CpuTemp) { '{0}{1}' -f [int]$d.CpuTemp, $script:deg } else { '--' })
                 gpu  = $(if ($null -ne $d.GpuTemp) { '{0}{1}' -f [int]$d.GpuTemp, $script:deg } else { '--' })
                 load = $(if ($null -ne $d.GpuLoad) { '{0}%' -f [int]$d.GpuLoad } else { '--' })
@@ -6363,6 +6543,7 @@ finally {
     if ($script:dlRunspace) { try { $script:dlRunspace.Dispose() } catch { } }
     if ($script:psDdc) { try { $script:psDdc.Dispose() } catch { } }
     if ($script:ddcRunspace) { try { $script:ddcRunspace.Dispose() } catch { } }
+    Stop-FpsTracer   # tears down the real-time ETW session so it doesn't outlive the app
     if ($script:notify) {
         try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
     }
