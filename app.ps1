@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.6.0'
+$script:AppVersion = '1.6.1'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -812,6 +812,7 @@ $worker = {
         $clock = [System.Diagnostics.Stopwatch]::StartNew()
         $lastLoopMs = [long]0
         $lastPassMs = [long](-1)
+        $lastWall = [DateTime]::UtcNow
         while (-not $sync.Exit) {
             # real elapsed time this iteration - Start-Sleep overshoots, so
             # fixed increments would drift
@@ -819,6 +820,20 @@ $worker = {
             $tickMs = [int][math]::Max(0, [math]::Min(5000, $nowMs - $lastLoopMs))
             $lastLoopMs = $nowMs
             $s = $sync.Settings
+            # Resume from sleep/hibernate: the SuperIO drops our software fan
+            # control back to its BIOS default (often full speed), and nothing
+            # re-applies a fixed mode until the mode changes. A wall-clock jump
+            # between ticks is the tell - re-apply the active mode, exactly what
+            # a manual mode re-select does. Wall clock, not the stopwatch, since
+            # QPC can pause across S3.
+            $wallNow = [DateTime]::UtcNow
+            if (($wallNow - $lastWall).TotalSeconds -gt 25) {
+                Set-Mode $sync.Data.ActiveMode
+                if ($boostOn -and $sync.Data.ActiveMode -eq 'quiet' -and $s.boostEnabled) { Set-CaseSpeed $s.boostCase }
+                $lastCurve = -100
+                $sinceUpdate = 999999
+            }
+            $lastWall = $wallNow
             $pending = $sync.PendingMode
             if ($pending) {
                 # Clear only if unchanged so a click landing mid-cycle isn't lost

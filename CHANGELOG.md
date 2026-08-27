@@ -6,6 +6,20 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.6.1 — 2026-08-28
+
+### Fixed
+- **Fans stayed loud after waking from sleep.** On resume the motherboard hands its fan
+  channels back to the BIOS (often full speed), and Vento only re-applied a fixed mode when
+  the mode changed — so Quiet stayed loud until you toggled the mode. Vento now notices the
+  wake and re-applies the active mode on its own.
+
+### Changed
+- The README now covers everything Vento does — the overlay and FPS, display control, and
+  notifications — not just the fans.
+
+---
+
 ## 1.6.0 — 2026-08-28
 
 Frames.
