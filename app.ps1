@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.6.2'
+$script:AppVersion = '1.7.0'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -197,7 +197,13 @@ try {
 # from Alt-Tab) plus a periodic topmost re-assert - borderless games like to
 # reorder the z stack.
 try {
-    Add-Type -Namespace VentoNative -Name Osd -MemberDefinition '[DllImport("user32.dll", EntryPoint="GetWindowLongPtrW", SetLastError=true)] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex); [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong); [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);'
+    Add-Type -Namespace VentoNative -Name Osd -MemberDefinition '[DllImport("user32.dll", EntryPoint="GetWindowLongPtrW", SetLastError=true)] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex); [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong); [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags); [DllImport("user32.dll", SetLastError=true)] public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);'
+} catch { }
+
+# Global hotkeys: system-wide keys that fire even while a game has focus.
+# RegisterHotKey posts WM_HOTKEY to the main window; a HwndSource hook routes it.
+try {
+    Add-Type -Namespace VentoNative -Name Hotkey -MemberDefinition '[DllImport("user32.dll", SetLastError=true)] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk); [DllImport("user32.dll", SetLastError=true)] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);'
 } catch { }
 
 # Per-process frame rate, the way PresentMon does it: a real-time ETW session
@@ -428,6 +434,15 @@ function Get-DefaultSettings {
         osdFree          = $false      # overlay parked where the user dragged it
         osdX             = 0           # free position, DIPs
         osdY             = 0
+        osdCapSafe       = $false      # hide the overlay from screen capture / recording / share
+        # Global hotkeys - '' is unbound. Stored as 'Ctrl+Alt+<Key>', the last
+        # token being a System.Windows.Input.Key enum name so it round-trips.
+        hkOsd            = ''          # toggle the overlay
+        hkQuiet          = ''          # switch to Quiet
+        hkNormal         = ''          # switch to Normal
+        hkPerf           = ''          # switch to Performance
+        hkAuto           = ''          # switch to Auto
+        hkProfile        = ''          # cycle to the next Vento profile
         osdCpu           = $true       # overlay metrics
         osdGpu           = $true
         osdGpuLoad       = $true
@@ -473,6 +488,16 @@ function Get-DefaultSettings {
             @{ Name = 'NIGHT';  Color = '#8F86FF'; Bri = 15; Con = 70; Preset = 4; Builtin = $true },
             @{ Name = 'CINEMA'; Color = '#FF7A8A'; Bri = 25; Con = 70; Preset = 5; Builtin = $true },
             @{ Name = 'GAME';   Color = '#7FE0A0'; Bri = 50; Con = 70; Preset = 5; Builtin = $true }
+        )
+        # Vento profiles - the whole machine in one name. Each sets a fan mode,
+        # the overlay, and a display profile (by name, so they ride on the same
+        # display scenes above). Switched from the tray and a hotkey. Colours
+        # echo the matching display profile so the two systems read as one.
+        ventoProfile     = ''          # active Vento profile ('' = none picked)
+        ventoProfiles    = @(
+            @{ Name = 'GAMING'; Color = '#7FE0A0'; Fan = 'performance'; Overlay = 'on';  Display = 'GAME';   Builtin = $true },
+            @{ Name = 'MOVIE';  Color = '#FF7A8A'; Fan = 'quiet';       Overlay = 'off'; Display = 'CINEMA'; Builtin = $true },
+            @{ Name = 'WORK';   Color = '#FFC46F'; Fan = 'normal';      Overlay = 'off'; Display = 'DAY';    Builtin = $true }
         )
     }
 }
@@ -535,6 +560,9 @@ function Import-Settings {
         $s.osdOnSecondary   = [bool]$s.osdOnSecondary
         $s.osdOpacity       = [int](Limit $s.osdOpacity 30 100)
         $s.osdFree          = [bool]$s.osdFree
+        $s.osdCapSafe       = [bool]$s.osdCapSafe
+        # Kept as plain strings; a junk value simply fails to register later.
+        foreach ($k in 'hkOsd','hkQuiet','hkNormal','hkPerf','hkAuto','hkProfile') { $s[$k] = [string]$s[$k] }
         $s.osdX             = [double](Limit $s.osdX -20000 20000)
         $s.osdY             = [double](Limit $s.osdY -20000 20000)
         foreach ($k in 'osdCpu','osdGpu','osdGpuLoad','osdRam','osdFans','osdSsd','osdMb','osdFps') { $s[$k] = [bool]$s[$k] }
@@ -578,6 +606,33 @@ function Import-Settings {
         }
         $s.monProfiles = @($norm)
     } catch { $s.monProfiles = (Get-DefaultSettings).monProfiles }
+    # Vento profiles - normalised the same way, in their own guard.
+    try {
+        $vdef = (Get-DefaultSettings).ventoProfiles
+        $vnorm = @()
+        foreach ($p in @($s.ventoProfiles)) {
+            if ($null -eq $p) { continue }
+            $h = @{}
+            if ($p -is [hashtable]) { foreach ($k in $p.Keys) { $h[$k] = $p[$k] } }
+            else { foreach ($pp in $p.PSObject.Properties) { $h[$pp.Name] = $pp.Value } }
+            $nm = ([string]$h.Name).Trim()
+            if (-not $nm) { continue }
+            $col = [string]$h.Color
+            try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($col) } catch { $col = '#6FB1FF' }
+            $fan = [string]$h.Fan
+            if (@('quiet','normal','performance','curve','auto') -notcontains $fan) { $fan = 'normal' }
+            $ov = [string]$h.Overlay
+            if (@('on','off','auto') -notcontains $ov) { $ov = 'auto' }
+            $vnorm += ,@{ Name = $nm; Color = $col; Fan = $fan; Overlay = $ov; Display = [string]$h.Display; Builtin = [bool]$h.Builtin }
+        }
+        foreach ($d in $vdef) {
+            $hit = $false
+            foreach ($p in $vnorm) { if ($p.Name -eq $d.Name) { $hit = $true; break } }
+            if (-not $hit) { $vnorm += ,$d }
+        }
+        $s.ventoProfiles = @($vnorm)
+    } catch { $s.ventoProfiles = (Get-DefaultSettings).ventoProfiles }
+    $s.ventoProfile      = [string]$s.ventoProfile
     $s.monProfile        = [string]$s.monProfile
     $s.monNightProfile   = [string]$s.monNightProfile
     if (@('all', 'one') -notcontains [string]$s.monProfileScope) { $s.monProfileScope = 'all' }
@@ -2445,6 +2500,7 @@ $xaml = @'
                         </StackPanel>
                       </Grid>
                       <CheckBox x:Name="S_OsdSecond" Style="{StaticResource SetCheck}" Content="Show on the secondary monitor"/>
+                      <CheckBox x:Name="S_OsdCapSafe" Style="{StaticResource SetCheck}" Content="Hide from screen capture (streams, recordings, share)"/>
                       <TextBlock Style="{StaticResource SetLabel}" Text="Show in the overlay" Margin="0,10,0,0"/>
                       <WrapPanel Margin="0,2,0,0">
                         <CheckBox x:Name="S_OsdFps"  Style="{StaticResource SetCheck}" Content="Frame rate (FPS)" Width="220"/>
@@ -2544,6 +2600,75 @@ $xaml = @'
                       <CheckBox x:Name="S_CloseTray" Style="{StaticResource SetCheck}" Content="Close button hides to tray"/>
                       <CheckBox x:Name="S_Updates" Style="{StaticResource SetCheck}" Content="Notify me when a new version is available"/>
                       <CheckBox x:Name="S_AutoStart" Style="{StaticResource SetCheck}" Content="Start with Windows (scheduled task, no UAC prompt)"/>
+
+                      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="SHORTCUTS" Foreground="#4C8DFF" x:Name="SecShortcuts" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <TextBlock Style="{StaticResource CardSub}" Text="Global keys that work anywhere, even in a game. Click a field and press the combination - a modifier (Ctrl / Alt / Shift / Win) is required. Esc cancels, Delete clears." Margin="0,2,0,0" TextWrapping="Wrap"/>
+                      <TextBlock x:Name="HkConflict" Style="{StaticResource CardSub}" Foreground="#F26D78" Text="" Margin="0,5,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+                      <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Toggle overlay"/>
+                        <Button Grid.Column="1" x:Name="H_Osd" Style="{StaticResource SubtleBtn}" Content="Not set" HorizontalAlignment="Left" MinWidth="184"/>
+                      </Grid>
+                      <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Quiet mode"/>
+                        <Button Grid.Column="1" x:Name="H_Quiet" Style="{StaticResource SubtleBtn}" Content="Not set" HorizontalAlignment="Left" MinWidth="184"/>
+                      </Grid>
+                      <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Normal mode"/>
+                        <Button Grid.Column="1" x:Name="H_Normal" Style="{StaticResource SubtleBtn}" Content="Not set" HorizontalAlignment="Left" MinWidth="184"/>
+                      </Grid>
+                      <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Performance mode"/>
+                        <Button Grid.Column="1" x:Name="H_Perf" Style="{StaticResource SubtleBtn}" Content="Not set" HorizontalAlignment="Left" MinWidth="184"/>
+                      </Grid>
+                      <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Auto mode"/>
+                        <Button Grid.Column="1" x:Name="H_Auto" Style="{StaticResource SubtleBtn}" Content="Not set" HorizontalAlignment="Left" MinWidth="184"/>
+                      </Grid>
+                      <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SetLabel}" Text="Cycle Vento profile"/>
+                        <Button Grid.Column="1" x:Name="H_Profile" Style="{StaticResource SubtleBtn}" Content="Not set" HorizontalAlignment="Left" MinWidth="184"/>
+                      </Grid>
+
+                      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+                        <Rectangle Style="{StaticResource AccentTick}"/>
+                        <TextBlock Style="{StaticResource CardTitle}" Text="PROFILES" Foreground="#4C8DFF" x:Name="SecProfiles" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <TextBlock Style="{StaticResource CardSub}" Text="One name for the whole machine - a fan mode, the overlay, and a display scene together. Click to apply; right-click to edit. Switch anytime from the tray or the cycle shortcut." Margin="0,2,0,0" TextWrapping="Wrap"/>
+                      <WrapPanel x:Name="VentoSceneHost" Margin="0,10,0,0"/>
+                      <Border x:Name="VentoEditLayer" Visibility="Collapsed" Background="#0A0F17" BorderBrush="#243247" BorderThickness="1" CornerRadius="12" Padding="14" Margin="0,4,0,2">
+                        <StackPanel>
+                          <TextBlock x:Name="VentoEditTitle" Style="{StaticResource CardTitle}" Text="NEW PROFILE" Foreground="#EDF1F8"/>
+                          <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="120"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource SetLabel}" Text="Name" VerticalAlignment="Center"/>
+                            <Border Grid.Column="1" Background="#0C1119" CornerRadius="8" BorderBrush="#2B3447" BorderThickness="1">
+                              <TextBox x:Name="VP_Name" Background="Transparent" BorderThickness="0" Foreground="#EDF1F8" FontSize="14" FontWeight="SemiBold" Padding="12,8" CaretBrush="#6FB1FF" MaxLength="22"/>
+                            </Border>
+                          </Grid>
+                          <TextBlock Style="{StaticResource SetLabel}" Text="Colour" Margin="0,10,0,0"/>
+                          <WrapPanel x:Name="VP_Swatches" Margin="0,6,0,0"/>
+                          <TextBlock Style="{StaticResource SetLabel}" Text="Fans" Margin="0,4,0,0"/>
+                          <WrapPanel x:Name="VP_FanHost" Margin="0,6,0,0"/>
+                          <TextBlock Style="{StaticResource SetLabel}" Text="Overlay" Margin="0,4,0,0"/>
+                          <WrapPanel x:Name="VP_OvHost" Margin="0,6,0,0"/>
+                          <TextBlock Style="{StaticResource SetLabel}" Text="Display scene" Margin="0,4,0,0"/>
+                          <WrapPanel x:Name="VP_DispHost" Margin="0,6,0,0"/>
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                            <Button x:Name="BtnVpDelete" Style="{StaticResource GhostBtn}" Content="Delete" Width="96"/>
+                            <Button x:Name="BtnVpCancel" Style="{StaticResource GhostBtn}" Content="Cancel" Width="96" Margin="8,0,0,0"/>
+                            <Button x:Name="BtnVpSave" Style="{StaticResource PrimaryBtn}" Content="Save" Width="96" Margin="8,0,0,0"/>
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
                     </StackPanel>
                   </ScrollViewer>
                   <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
@@ -2915,7 +3040,9 @@ foreach ($name in @(
     'AxR0','AxR1','AxR2',
     'BtnQuiet','BtnNormal','BtnPerf','BtnCurve','BtnAuto',
     'StatusDot','StatusText','WarnText','TitleBar','BtnSettings','BtnMin','BtnClose','LogoOuter',
-    'SettingsOverlay','SecFans','SecBoost','SecCurve','SecGame','SecOsd','SecSafety','SecTargets','SecGeneral',
+    'SettingsOverlay','SecFans','SecBoost','SecCurve','SecGame','SecOsd','SecSafety','SecTargets','SecGeneral','SecShortcuts',
+    'HkConflict','H_Osd','H_Quiet','H_Normal','H_Perf','H_Auto','H_Profile',
+    'SecProfiles','VentoSceneHost','VentoEditLayer','VentoEditTitle','VP_Name','VP_Swatches','VP_FanHost','VP_OvHost','VP_DispHost','BtnVpDelete','BtnVpCancel','BtnVpSave',
     'MonitorOverlay','BtnMonitors','MonStatus','MonSceneDot','MonSceneText',
     'MonMapCanvas','MonMapTag','MonMapHint',
     'MonSelName','MonSelMeta','BtnMonSync','BtnMonIdentify','BtnMonAdv',
@@ -2943,7 +3070,7 @@ foreach ($name in @(
     'OsdThemeShell','O_ThSirocco','O_ThEmber','O_ThVenom','O_ThViolet','O_ThCrimson','O_ThMono',
     'OsdPreviewFrame','OsdPreviewHost',
     'OsdCornerShell','O_CorTL','O_CorTR','O_CorBL','O_CorBR',
-    'S_OsdScale','V_OsdScale','S_OsdSecond',
+    'S_OsdScale','V_OsdScale','S_OsdSecond','S_OsdCapSafe',
     'S_OsdOpacity','V_OsdOpacity','BtnOsdMove','BtnOsdResetPos','OsdPosNote',
     'S_OsdFps','S_OsdCpu','S_OsdGpu','S_OsdLoad','S_OsdRam','S_OsdFans','S_OsdSsd','S_OsdMb',
     'O_ColFps','O_ColCpu','O_ColGpu','O_ColLoad','O_ColRam','O_ColSsd','O_ColMb','O_ColFan','O_ColReset',
@@ -3286,7 +3413,7 @@ function Apply-Thermal($mix) {
     foreach ($sp in 'CpuSparkFill', 'GpuSparkFill', 'SsdSparkFill', 'MbSparkFill') { $el[$sp].Fill = $spFill }
 
     # settings + mode panel accents
-    foreach ($sec in 'SecFans', 'SecBoost', 'SecCurve', 'SecGame', 'SecOsd', 'SecSafety', 'SecTargets', 'SecGeneral') { $el[$sec].Foreground = $script:brushAccent }
+    foreach ($sec in 'SecFans', 'SecBoost', 'SecCurve', 'SecGame', 'SecOsd', 'SecSafety', 'SecTargets', 'SecGeneral', 'SecShortcuts', 'SecProfiles') { $el[$sec].Foreground = $script:brushAccent }
     # slider fills: dark -> bright accent, so the bar "charges up" toward the
     # blade (user call: karanliktan parlaga)
     $sgb = New-Object System.Windows.Media.LinearGradientBrush
@@ -3702,7 +3829,16 @@ function Open-Settings {
     $script:osdColorStage = @{}
     foreach ($row in $script:osdColBtnMap) { if ([string]$s[$row[1]]) { $script:osdColorStage[$row[1]] = [string]$s[$row[1]] } }
     $el.S_OsdSecond.IsChecked = [bool]$s.osdOnSecondary
+    $el.S_OsdCapSafe.IsChecked = [bool]$s.osdCapSafe
     foreach ($p in $script:osdCheckMap) { $el[$p[0]].IsChecked = [bool]$s[$p[1]] }
+    $script:hkCapturing = $null
+    foreach ($hkA in $script:hotkeyActions) {
+        $script:hotkeyStage[$hkA.Set] = [string]$s[$hkA.Set]
+        $el[$hkA.Btn].Content = Format-HotkeyText ([string]$s[$hkA.Set])
+    }
+    $el.HkConflict.Visibility = 'Collapsed'
+    $el.VentoEditLayer.Visibility = 'Collapsed'
+    Build-VentoScenes
     Update-GameActionButtons
     Update-OsdPickers
     $el.S_StartMin.IsChecked     = [bool]$s.startMinimized
@@ -3729,6 +3865,8 @@ function Save-Settings {
     $s.osdLayout      = [string]$script:osdLayoutPick
     $s.osdTheme       = [string]$script:osdThemePick
     $s.osdOnSecondary = [bool]$el.S_OsdSecond.IsChecked
+    $s.osdCapSafe     = [bool]$el.S_OsdCapSafe.IsChecked
+    foreach ($hkA in $script:hotkeyActions) { $s[$hkA.Set] = [string]$script:hotkeyStage[$hkA.Set] }
     foreach ($p in $script:osdCheckMap) { $s[$p[1]] = [bool]$el[$p[0]].IsChecked }
     foreach ($row in $script:osdColBtnMap) { $s[$row[1]] = [string]$script:osdColorStage[$row[1]] }
     $want = [bool]$el.S_AutoStart.IsChecked
@@ -3746,7 +3884,13 @@ function Save-Settings {
     $sync.SettingsChanged = $true
     if ($script:panelMode) { Update-ModePanel $script:panelMode }
     Update-OsdLayout
+    $hkConf = Register-Hotkeys
     $el.SettingsOverlay.Visibility = 'Collapsed'
+    if ($hkConf -and $hkConf.Count) {
+        [void][System.Windows.MessageBox]::Show(
+            ("These shortcuts are already in use by another app and could not be set:`n`n{0}" -f ($hkConf -join ', ')),
+            'Vento', 'OK', 'Warning')
+    }
 }
 
 $el.BtnSetSave.Add_Click({ Save-Settings })
@@ -3771,6 +3915,178 @@ $el.BtnOsdResetPos.Add_Click({
     $el.OsdPosNote.Text = ''
     Position-Osd
 })
+# --- Global hotkeys --------------------------------------------------
+# Each action has a settings key (the binding string) and a capture button.
+$script:hotkeyActions = @(
+    @{ Id = 'osd';    Set = 'hkOsd';    Btn = 'H_Osd';    Label = 'Toggle overlay' }
+    @{ Id = 'quiet';  Set = 'hkQuiet';  Btn = 'H_Quiet';  Label = 'Quiet mode' }
+    @{ Id = 'normal'; Set = 'hkNormal'; Btn = 'H_Normal'; Label = 'Normal mode' }
+    @{ Id = 'perf';    Set = 'hkPerf';    Btn = 'H_Perf';    Label = 'Performance mode' }
+    @{ Id = 'auto';    Set = 'hkAuto';    Btn = 'H_Auto';    Label = 'Auto mode' }
+    @{ Id = 'profile'; Set = 'hkProfile'; Btn = 'H_Profile'; Label = 'Cycle Vento profile' }
+)
+$script:hkIds       = @{}            # WM_HOTKEY id -> action id
+$script:hkHwnd      = [IntPtr]::Zero
+$script:hkHook      = $null
+$script:hkCapturing = $null          # the button currently listening for a combo
+$script:hotkeyStage = @{}            # set-key -> binding, staged while the panel is open
+
+# 'Ctrl+Alt+F9' -> @{ Mods=<MOD_* flags>; Vk=<virtual key> }, or $null for junk.
+function Parse-Hotkey([string]$str) {
+    if (-not $str) { return $null }
+    $mods = 0x4000   # MOD_NOREPEAT: one fire per press, not key autorepeat
+    $keyName = $null
+    foreach ($p in ($str -split '\+')) {
+        $t = $p.Trim(); if (-not $t) { continue }
+        switch ($t.ToLowerInvariant()) {
+            'ctrl'  { $mods = $mods -bor 0x0002 }
+            'alt'   { $mods = $mods -bor 0x0001 }
+            'shift' { $mods = $mods -bor 0x0004 }
+            'win'   { $mods = $mods -bor 0x0008 }
+            default { $keyName = $t }
+        }
+    }
+    if (-not $keyName) { return $null }
+    try {
+        $key = [System.Windows.Input.Key][Enum]::Parse([System.Windows.Input.Key], $keyName, $true)
+        $vk  = [System.Windows.Input.KeyInterop]::VirtualKeyFromKey($key)
+        if ($vk -le 0) { return $null }
+        return @{ Mods = $mods; Vk = $vk }
+    } catch { return $null }
+}
+
+# Key-enum names -> a friendly label ('D9' -> '9').
+function Format-HotkeyText([string]$str) {
+    if (-not $str) { return 'Not set' }
+    $out = @()
+    foreach ($p in ($str -split '\+')) {
+        $t = $p.Trim(); if (-not $t) { continue }
+        if ($t -match '^D([0-9])$') { $out += $Matches[1] }
+        else {
+            switch ($t.ToLowerInvariant()) {
+                'ctrl'  { $out += 'Ctrl' }
+                'alt'   { $out += 'Alt' }
+                'shift' { $out += 'Shift' }
+                'win'   { $out += 'Win' }
+                default { $out += $t }
+            }
+        }
+    }
+    return ($out -join ' + ')
+}
+
+function Refresh-HkButton($btn) {
+    if ($btn) { $btn.Content = Format-HotkeyText ([string]$script:hotkeyStage[[string]$btn.Tag]) }
+}
+
+# Overlay on/off, shared by the tray item and the hotkey.
+function Toggle-Overlay {
+    $s = $script:settings
+    if ([string]$s.osdMode -eq 'off') {
+        $s.osdMode = $(if ($script:osdModePrev) { $script:osdModePrev } else { 'auto' })
+    } else {
+        $script:osdModePrev = [string]$s.osdMode
+        $s.osdMode = 'off'
+    }
+    $sync.Settings.osdMode = $s.osdMode
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+}
+
+function Invoke-HotkeyAction([string]$id) {
+    try {
+        switch ($id) {
+            'osd'    { Toggle-Overlay }
+            'quiet'  { Set-UserMode 'quiet' }
+            'normal' { Set-UserMode 'normal' }
+            'perf'    { Set-UserMode 'performance' }
+            'auto'    { Set-UserMode 'auto' }
+            'profile' { Cycle-VentoProfile }
+        }
+    } catch { }
+}
+
+# (Re)bind every configured hotkey to the main window. Returns the labels that
+# Windows refused (already owned by another app, or a duplicate combo).
+function Register-Hotkeys {
+    if (-not ('VentoNative.Hotkey' -as [type])) { return @() }
+    $h = [IntPtr]::Zero
+    try { $h = (New-Object System.Windows.Interop.WindowInteropHelper $window).EnsureHandle() } catch { return @() }
+    if ($h -eq [IntPtr]::Zero) { return @() }
+    # Route WM_HOTKEY through a hook on the live handle, attached once.
+    if ($script:hkHwnd -ne $h) {
+        $src = [System.Windows.Interop.HwndSource]::FromHwnd($h)
+        if ($src) {
+            if ($script:hkHook) { try { $src.RemoveHook($script:hkHook) } catch { } }
+            $script:hkHook = [System.Windows.Interop.HwndSourceHook]{
+                # args: hwnd, msg, wParam, lParam, handled
+                if ([int]$args[1] -eq 0x0312) {
+                    $hid = ([IntPtr]$args[2]).ToInt32()
+                    if ($script:hkIds.ContainsKey($hid)) { Invoke-HotkeyAction $script:hkIds[$hid] }
+                }
+                return [IntPtr]::Zero
+            }
+            $src.AddHook($script:hkHook)
+            $script:hkHwnd = $h
+        }
+    }
+    foreach ($oid in @($script:hkIds.Keys)) { [void][VentoNative.Hotkey]::UnregisterHotKey($h, $oid) }
+    $script:hkIds = @{}
+    $conflicts = @()
+    $id = 1
+    foreach ($act in $script:hotkeyActions) {
+        $p = Parse-Hotkey ([string]$script:settings[$act.Set])
+        if (-not $p) { continue }
+        if ([VentoNative.Hotkey]::RegisterHotKey($h, $id, [uint32]$p.Mods, [uint32]$p.Vk)) {
+            $script:hkIds[$id] = $act.Id; $id++
+        } else {
+            $conflicts += $act.Label
+        }
+    }
+    return $conflicts
+}
+
+# Capture wiring: click a field, then press the combination.
+foreach ($hkAct in $script:hotkeyActions) {
+    $hkBtn = $el[$hkAct.Btn]
+    if (-not $hkBtn) { continue }
+    $hkBtn.Tag = $hkAct.Set   # read back in the handlers - avoids a closure capture
+    $hkBtn.Add_Click({ param($s0, $e0)
+        if ($script:hkCapturing -and $script:hkCapturing -ne $s0) { Refresh-HkButton $script:hkCapturing }
+        $script:hkCapturing = $s0
+        $s0.Content = 'Press keys...'
+        [void]$s0.Focus()
+    })
+    $hkBtn.Add_PreviewKeyDown({ param($s0, $e0)
+        if ($script:hkCapturing -ne $s0) { return }
+        $e0.Handled = $true
+        $key = $e0.Key
+        if ($key -eq [System.Windows.Input.Key]::System) { $key = $e0.SystemKey }
+        $name = $key.ToString()
+        if (@('LeftCtrl','RightCtrl','LeftAlt','RightAlt','LeftShift','RightShift','LWin','RWin','System','None') -contains $name) { return }
+        if ($key -eq [System.Windows.Input.Key]::Escape) { $script:hkCapturing = $null; Refresh-HkButton $s0; return }
+        if ($key -eq [System.Windows.Input.Key]::Back -or $key -eq [System.Windows.Input.Key]::Delete) {
+            $script:hotkeyStage[[string]$s0.Tag] = ''; $script:hkCapturing = $null; $s0.Content = 'Not set'; return
+        }
+        $m = [int][System.Windows.Input.Keyboard]::Modifiers
+        if ($m -eq 0) { $s0.Content = 'Add a modifier...'; return }   # keep listening
+        $parts = @()
+        if ($m -band [int][System.Windows.Input.ModifierKeys]::Control) { $parts += 'Ctrl' }
+        if ($m -band [int][System.Windows.Input.ModifierKeys]::Alt)     { $parts += 'Alt' }
+        if ($m -band [int][System.Windows.Input.ModifierKeys]::Shift)   { $parts += 'Shift' }
+        if ($m -band [int][System.Windows.Input.ModifierKeys]::Windows) { $parts += 'Win' }
+        $parts += $name
+        $norm = $parts -join '+'
+        if (-not (Parse-Hotkey $norm)) { $s0.Content = 'Unsupported key'; return }
+        $script:hotkeyStage[[string]$s0.Tag] = $norm
+        $script:hkCapturing = $null
+        $s0.Content = Format-HotkeyText $norm
+    })
+    # Leaving the field mid-capture puts the saved label back.
+    $hkBtn.Add_LostKeyboardFocus({ param($s0, $e0)
+        if ($script:hkCapturing -eq $s0) { $script:hkCapturing = $null; Refresh-HkButton $s0 }
+    })
+}
+
 $el.UpdatePill.Add_MouseLeftButtonUp({ Install-Update })
 
 # --- Update banner ---------------------------------------------------
@@ -3965,6 +4281,346 @@ function Apply-MonProfile($p, [switch]$Silent) {
     if (-not $Silent) { $script:saveTimer.Stop(); $script:saveTimer.Start() }
     Update-MonitorPanel
 }
+
+# --- Vento profiles: the whole machine under one name ----------------
+# A Vento profile sets a fan mode, the overlay state, and a display profile
+# (referenced by name, so it rides on the display scenes above rather than
+# duplicating them). Switched from the tray submenu and the cycle hotkey.
+function Get-VentoProfiles {
+    $out = @()
+    foreach ($p in @($script:settings.ventoProfiles)) {
+        if ($null -eq $p) { continue }
+        $h = @{}
+        if ($p -is [hashtable]) { foreach ($k in $p.Keys) { $h[$k] = $p[$k] } }
+        else { foreach ($pp in $p.PSObject.Properties) { $h[$pp.Name] = $pp.Value } }
+        if (-not $h.Name) { continue }
+        $h.Name    = [string]$h.Name
+        $h.Color   = [string]$h.Color
+        $h.Fan     = [string]$h.Fan
+        $h.Overlay = [string]$h.Overlay
+        $h.Display = [string]$h.Display
+        $h.Builtin = [bool]$h.Builtin
+        try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($h.Color) } catch { $h.Color = '#6FB1FF' }
+        $out += ,$h
+    }
+    return $out
+}
+function Get-VentoProfile([string]$name) {
+    foreach ($p in (Get-VentoProfiles)) { if ($p.Name -eq $name) { return $p } }
+    return $null
+}
+function Save-VentoProfiles($arr) {
+    $script:settings.ventoProfiles = @($arr)
+    $sync.Settings.ventoProfiles = @($arr)
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+}
+function Apply-VentoProfile([string]$name) {
+    $p = Get-VentoProfile $name
+    if (-not $p) { return }
+    if (@('quiet','normal','performance','curve','auto') -contains [string]$p.Fan) { Set-UserMode ([string]$p.Fan) }
+    if (@('on','off','auto') -contains [string]$p.Overlay) {
+        $script:settings.osdMode = [string]$p.Overlay
+        $sync.Settings.osdMode = [string]$p.Overlay
+        if ([string]$p.Overlay -ne 'off') { $script:osdModePrev = [string]$p.Overlay }
+    }
+    # The display profile lands on every screen, whatever the panel's scope is.
+    if ([string]$p.Display) {
+        $mp = Get-MonProfile ([string]$p.Display)
+        if ($mp) {
+            $prevScope = [string]$script:settings.monProfileScope
+            $script:settings.monProfileScope = 'all'
+            try { Apply-MonProfile $mp -Silent } finally { $script:settings.monProfileScope = $prevScope }
+        }
+    }
+    $script:settings.ventoProfile = [string]$p.Name
+    $sync.Settings.ventoProfile = [string]$p.Name
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    Update-TrayProfiles
+    if ($el.SettingsOverlay -and $el.SettingsOverlay.Visibility -eq 'Visible') { Build-VentoScenes }
+}
+# The cycle hotkey: step to the next profile in the list.
+function Cycle-VentoProfile {
+    $ps = @(Get-VentoProfiles)
+    if (-not $ps.Count) { return }
+    $cur = [string]$script:settings.ventoProfile
+    $idx = -1
+    for ($i = 0; $i -lt $ps.Count; $i++) { if ($ps[$i].Name -eq $cur) { $idx = $i; break } }
+    Apply-VentoProfile ([string]$ps[($idx + 1) % $ps.Count].Name)
+}
+# Rebuild the tray "Profiles" submenu (checkmark on the active one).
+function Update-TrayProfiles {
+    if (-not $script:trayProfileMenu) { return }
+    $script:trayProfileMenu.DropDownItems.Clear()
+    $active = [string]$script:settings.ventoProfile
+    foreach ($vp in (Get-VentoProfiles)) {
+        $mi = New-Object System.Windows.Forms.ToolStripMenuItem ([string]$vp.Name)
+        $mi.Tag = [string]$vp.Name
+        $mi.Checked = ($vp.Name -eq $active)
+        $mi.add_Click({ param($s0, $e0) Apply-VentoProfile ([string]$s0.Tag) })
+        [void]$script:trayProfileMenu.DropDownItems.Add($mi)
+    }
+}
+
+# --- Vento profile management UI (Settings > PROFILES) ---------------
+$script:vpEditName = ''
+$script:vpColor    = '#6FB1FF'
+$script:vpFan      = 'normal'
+$script:vpOverlay  = 'auto'
+$script:vpDisplay  = ''
+
+# Tiles echo the display scenes: identity colour, click to apply, right-click
+# to edit, an ACTIVE pill on the current one, plus a + NEW tile.
+function Build-VentoScenes {
+    if (-not $el.VentoSceneHost) { return }
+    $host0 = $el.VentoSceneHost
+    $host0.Children.Clear()
+    $active = [string]$script:settings.ventoProfile
+    $tileW = 128.0; $tileH = 86.0
+    $fanShort = @{ quiet = 'QUIET'; normal = 'NORMAL'; performance = 'PERF'; curve = 'CURVE'; auto = 'AUTO' }
+    $ovShort  = @{ on = 'HUD ON'; off = 'HUD OFF'; auto = 'HUD AUTO' }
+    foreach ($p in (Get-VentoProfiles)) {
+        $col = ConvertTo-MonColor $p.Color
+        $on = ($p.Name -eq $active)
+        $tile = New-Object System.Windows.Controls.Border
+        $tile.CornerRadius = New-Object System.Windows.CornerRadius 10
+        $tile.Width = $tileW; $tile.Height = $tileH
+        $tile.Margin = New-Object System.Windows.Thickness 0, 0, 8, 8
+        $tile.Padding = New-Object System.Windows.Thickness 11, 9, 11, 9
+        $tile.BorderThickness = New-Object System.Windows.Thickness 1
+        $tile.Cursor = [System.Windows.Input.Cursors]::Hand
+        if ($on) {
+            $tile.Background = New-MonBrush $col 0x1F
+            $tile.BorderBrush = New-MonBrush $col 0xCC
+            $fx = New-Object System.Windows.Media.Effects.DropShadowEffect
+            $fx.ShadowDepth = 0; $fx.BlurRadius = 20; $fx.Opacity = 0.55; $fx.Color = $col
+            $tile.Effect = $fx
+        } else {
+            $tile.Background = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x0C, 0x12, 0x1C))
+            $tile.BorderBrush = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x1E, 0x27, 0x36))
+        }
+        $tile.Tag = $p.Name
+        $tile.Add_MouseLeftButtonDown({ param($s0, $e0) Apply-VentoProfile ([string]$s0.Tag) })
+        $tile.Add_MouseRightButtonUp({ param($s0, $e0) Open-VentoSheet ([string]$s0.Tag) })
+        $tile.ToolTip = 'Click to apply, right-click to edit or delete'
+        $sp = New-Object System.Windows.Controls.StackPanel
+        $head = New-Object System.Windows.Controls.StackPanel
+        $head.Orientation = 'Horizontal'
+        $chip = New-Object System.Windows.Controls.Border
+        $chip.Width = 22; $chip.Height = 22
+        $chip.CornerRadius = New-Object System.Windows.CornerRadius 7
+        $chip.Background = New-MonBrush $col 0x2E
+        $gl = New-Object System.Windows.Controls.TextBlock
+        $gl.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
+        $gl.FontSize = 11
+        $gl.Text = [char]0xE945
+        $gl.Foreground = New-MonBrush $col
+        $gl.HorizontalAlignment = 'Center'; $gl.VerticalAlignment = 'Center'
+        $chip.Child = $gl
+        [void]$head.Children.Add($chip)
+        $nm = New-Object System.Windows.Controls.TextBlock
+        $nm.Text = $p.Name.ToUpperInvariant()
+        $nm.FontSize = 12; $nm.FontWeight = 'Bold'
+        $nm.Margin = New-Object System.Windows.Thickness 8, 0, 0, 0
+        $nm.VerticalAlignment = 'Center'
+        $nm.TextTrimming = 'CharacterEllipsis'
+        $nm.Foreground = if ($on) { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xED, 0xF1, 0xF8)) } else { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xC9, 0xD2, 0xE2)) }
+        [void]$head.Children.Add($nm)
+        [void]$sp.Children.Add($head)
+        $rc = New-Object System.Windows.Controls.TextBlock
+        $fs = if ($fanShort.ContainsKey([string]$p.Fan)) { $fanShort[[string]$p.Fan] } else { ([string]$p.Fan).ToUpperInvariant() }
+        $os = if ($ovShort.ContainsKey([string]$p.Overlay)) { $ovShort[[string]$p.Overlay] } else { '' }
+        $rc.Text = (('{0}  {1}  {2}' -f $fs, $os, ([string]$p.Display).ToUpperInvariant())).Trim()
+        $rc.FontSize = 9; $rc.FontWeight = 'SemiBold'
+        $rc.Margin = New-Object System.Windows.Thickness 0, 8, 0, 0
+        $rc.TextTrimming = 'CharacterEllipsis'
+        $rc.Foreground = New-MonBrush $col 0xCC
+        [void]$sp.Children.Add($rc)
+        if ($on) {
+            $pill = New-Object System.Windows.Controls.Border
+            $pill.Background = New-MonBrush $col 0x33
+            $pill.CornerRadius = New-Object System.Windows.CornerRadius 6
+            $pill.Padding = New-Object System.Windows.Thickness 7, 2, 7, 2
+            $pill.HorizontalAlignment = 'Left'
+            $pill.Margin = New-Object System.Windows.Thickness 0, 6, 0, 0
+            $pt = New-Object System.Windows.Controls.TextBlock
+            $pt.Text = 'ACTIVE'; $pt.FontSize = 8; $pt.FontWeight = 'Bold'
+            $pt.Foreground = New-MonBrush $col
+            $pill.Child = $pt
+            [void]$sp.Children.Add($pill)
+        }
+        $tile.Child = $sp
+        [void]$host0.Children.Add($tile)
+    }
+    $nt = New-Object System.Windows.Controls.Border
+    $nt.CornerRadius = New-Object System.Windows.CornerRadius 10
+    $nt.Width = $tileW; $nt.Height = $tileH
+    $nt.Margin = New-Object System.Windows.Thickness 0, 0, 8, 8
+    $nt.BorderThickness = New-Object System.Windows.Thickness 1
+    $nt.BorderBrush = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x2B, 0x34, 0x47))
+    $nt.Background = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x0A, 0x0F, 0x17))
+    $nt.Cursor = [System.Windows.Input.Cursors]::Hand
+    $nt.Add_MouseLeftButtonDown({ Open-VentoSheet })
+    $ns = New-Object System.Windows.Controls.StackPanel
+    $ns.HorizontalAlignment = 'Center'; $ns.VerticalAlignment = 'Center'
+    $nl = New-Object System.Windows.Controls.TextBlock
+    $nl.Text = '+ NEW'; $nl.FontSize = 12; $nl.FontWeight = 'Bold'
+    $nl.HorizontalAlignment = 'Center'
+    $nl.Foreground = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x8F, 0xA3, 0xBC))
+    [void]$ns.Children.Add($nl)
+    $nt.Child = $ns
+    [void]$host0.Children.Add($nt)
+}
+
+# A small selectable chip for the editor's fan / overlay / display / colour rows.
+function New-VpChip([string]$text, [string]$tag, [bool]$sel, $col) {
+    $b = New-Object System.Windows.Controls.Border
+    $b.CornerRadius = New-Object System.Windows.CornerRadius 8
+    $b.Padding = New-Object System.Windows.Thickness 11, 6, 11, 6
+    $b.Margin = New-Object System.Windows.Thickness 0, 0, 7, 7
+    $b.BorderThickness = New-Object System.Windows.Thickness 1
+    $b.Cursor = [System.Windows.Input.Cursors]::Hand
+    $b.Tag = $tag
+    if ($sel) {
+        $b.Background = New-MonBrush $col 0x28
+        $b.BorderBrush = New-MonBrush $col 0xCC
+    } else {
+        $b.Background = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x0C, 0x12, 0x1C))
+        $b.BorderBrush = New-MonBrush ([System.Windows.Media.Color]::FromRgb(0x25, 0x2F, 0x40))
+    }
+    $t = New-Object System.Windows.Controls.TextBlock
+    $t.Text = $text; $t.FontSize = 11; $t.FontWeight = 'Bold'
+    $t.Foreground = if ($sel) { New-MonBrush ([System.Windows.Media.Colors]::White) } else { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xC9, 0xD2, 0xE2)) }
+    $b.Child = $t
+    return $b
+}
+
+# Fills the editor's swatch + fan + overlay + display pickers from the vp* state.
+function Build-VentoChips {
+    if (-not $el.VP_Swatches) { return }
+    $col = ConvertTo-MonColor $script:vpColor
+    $sw = $el.VP_Swatches; $sw.Children.Clear()
+    $picks = @('#7FE0A0', '#FF7A8A', '#FFC46F', '#8F86FF', '#6FB1FF', '#FF9E6F', '#6FE0FF', '#FF6FD8', '#B6FF6F')
+    if ($picks -notcontains $script:vpColor) { $picks += $script:vpColor }
+    foreach ($hex in $picks) {
+        $b = New-Object System.Windows.Controls.Border
+        $b.Width = 28; $b.Height = 28
+        $b.CornerRadius = New-Object System.Windows.CornerRadius 14
+        $b.Margin = New-Object System.Windows.Thickness 0, 0, 7, 7
+        $b.Background = New-MonBrush (ConvertTo-MonColor $hex)
+        $b.Cursor = [System.Windows.Input.Cursors]::Hand
+        $b.Tag = $hex
+        if ($hex -eq $script:vpColor) {
+            $b.BorderThickness = New-Object System.Windows.Thickness 2.5
+            $b.BorderBrush = New-MonBrush ([System.Windows.Media.Colors]::White)
+        }
+        $b.Add_MouseLeftButtonDown({ param($s0, $e0) $script:vpColor = [string]$s0.Tag; Build-VentoChips })
+        [void]$sw.Children.Add($b)
+    }
+    $c = New-Object System.Windows.Controls.Border
+    $c.Width = 28; $c.Height = 28
+    $c.CornerRadius = New-Object System.Windows.CornerRadius 14
+    $c.Margin = New-Object System.Windows.Thickness 0, 0, 7, 7
+    $c.Cursor = [System.Windows.Input.Cursors]::Hand
+    $rb = New-Object System.Windows.Media.LinearGradientBrush
+    $rb.StartPoint = New-Object System.Windows.Point 0, 0
+    $rb.EndPoint = New-Object System.Windows.Point 1, 1
+    foreach ($stop in @(@('#FF6F6F', 0.0), @('#FFC46F', 0.25), @('#7FE0A0', 0.5), @('#6FB1FF', 0.75), @('#C86FFF', 1.0))) {
+        $rb.GradientStops.Add((New-Object System.Windows.Media.GradientStop (ConvertTo-MonColor ([string]$stop[0])), ([double]$stop[1])))
+    }
+    $rb.Freeze()
+    $c.Background = $rb
+    $c.Add_MouseLeftButtonDown({ $picked = Show-ColorPicker $script:vpColor; if ($picked) { $script:vpColor = $picked }; Build-VentoChips })
+    [void]$sw.Children.Add($c)
+    $fh = $el.VP_FanHost; $fh.Children.Clear()
+    foreach ($f in @(@('quiet', 'Quiet'), @('normal', 'Normal'), @('performance', 'Performance'), @('curve', 'Curve'), @('auto', 'Auto'))) {
+        $chip = New-VpChip $f[1] $f[0] ($script:vpFan -eq $f[0]) $col
+        $chip.Add_MouseLeftButtonDown({ param($s0, $e0) $script:vpFan = [string]$s0.Tag; Build-VentoChips })
+        [void]$fh.Children.Add($chip)
+    }
+    $oh = $el.VP_OvHost; $oh.Children.Clear()
+    foreach ($o in @(@('on', 'On'), @('off', 'Off'), @('auto', 'While gaming'))) {
+        $chip = New-VpChip $o[1] $o[0] ($script:vpOverlay -eq $o[0]) $col
+        $chip.Add_MouseLeftButtonDown({ param($s0, $e0) $script:vpOverlay = [string]$s0.Tag; Build-VentoChips })
+        [void]$oh.Children.Add($chip)
+    }
+    $dh = $el.VP_DispHost; $dh.Children.Clear()
+    $none = New-VpChip 'None' '' ($script:vpDisplay -eq '') $col
+    $none.Add_MouseLeftButtonDown({ param($s0, $e0) $script:vpDisplay = ''; Build-VentoChips })
+    [void]$dh.Children.Add($none)
+    foreach ($mp in (Get-MonProfiles)) {
+        $mc = ConvertTo-MonColor $mp.Color
+        $chip = New-VpChip $mp.Name.ToUpperInvariant() $mp.Name ($script:vpDisplay -eq $mp.Name) $mc
+        $chip.Add_MouseLeftButtonDown({ param($s0, $e0) $script:vpDisplay = [string]$s0.Tag; Build-VentoChips })
+        [void]$dh.Children.Add($chip)
+    }
+}
+
+function Open-VentoSheet([string]$name = '') {
+    $script:vpEditName = $name
+    $p = if ($name) { Get-VentoProfile $name } else { $null }
+    if ($p) {
+        $script:vpColor = [string]$p.Color
+        $script:vpFan = [string]$p.Fan
+        $script:vpOverlay = [string]$p.Overlay
+        $script:vpDisplay = [string]$p.Display
+        $el.VP_Name.Text = $p.Name
+        $el.VentoEditTitle.Text = 'EDIT PROFILE'
+        $el.BtnVpDelete.Visibility = $(if ($p.Builtin) { 'Collapsed' } else { 'Visible' })
+    } else {
+        $script:vpColor = '#6FB1FF'
+        $script:vpFan = 'normal'
+        $script:vpOverlay = 'auto'
+        $script:vpDisplay = ''
+        $el.VP_Name.Text = 'My profile'
+        $el.VentoEditTitle.Text = 'NEW PROFILE'
+        $el.BtnVpDelete.Visibility = 'Collapsed'
+    }
+    Build-VentoChips
+    $el.VentoEditLayer.Visibility = 'Visible'
+    [void]$el.VP_Name.Focus()
+    $el.VP_Name.SelectAll()
+}
+$el.BtnVpCancel.Add_Click({ $el.VentoEditLayer.Visibility = 'Collapsed' })
+$el.BtnVpSave.Add_Click({
+    $name = ([string]$el.VP_Name.Text).Trim()
+    if (-not $name) { return }
+    $old = [string]$script:vpEditName
+    $prev = Get-VentoProfile $old
+    $p = @{
+        Name    = $name
+        Color   = [string]$script:vpColor
+        Fan     = [string]$script:vpFan
+        Overlay = [string]$script:vpOverlay
+        Display = [string]$script:vpDisplay
+        Builtin = $(if ($prev) { [bool]$prev.Builtin } else { $false })
+    }
+    $arr = @(Get-VentoProfiles | Where-Object { $_.Name -ne $name -and $_.Name -ne $old })
+    $arr += ,$p
+    Save-VentoProfiles $arr
+    if ($old -and $old -ne $name -and [string]$script:settings.ventoProfile -eq $old) {
+        $script:settings.ventoProfile = $name
+        $sync.Settings.ventoProfile = $name
+    }
+    $script:vpEditName = ''
+    $el.VentoEditLayer.Visibility = 'Collapsed'
+    Build-VentoScenes
+    Update-TrayProfiles
+})
+$el.BtnVpDelete.Add_Click({
+    $name = [string]$script:vpEditName
+    if (-not $name) { return }
+    $p = Get-VentoProfile $name
+    if (-not $p -or $p.Builtin) { return }
+    Save-VentoProfiles @(Get-VentoProfiles | Where-Object { $_.Name -ne $name })
+    if ([string]$script:settings.ventoProfile -eq $name) {
+        $script:settings.ventoProfile = ''
+        $sync.Settings.ventoProfile = ''
+    }
+    $script:vpEditName = ''
+    $el.VentoEditLayer.Visibility = 'Collapsed'
+    Build-VentoScenes
+    Update-TrayProfiles
+})
 
 # --- Panel painting --------------------------------------------------
 function Get-MonAccent {
@@ -5858,6 +6514,7 @@ function New-Osd {
         # WS_EX_TRANSPARENT (0x20) + WS_EX_TOOLWINDOW (0x80) + WS_EX_NOACTIVATE (0x8000000)
         $ex = [long][VentoNative.Osd]::GetWindowLongPtr($h, -20)
         [void][VentoNative.Osd]::SetWindowLongPtr($h, -20, [IntPtr]($ex -bor 0x20 -bor 0x80 -bor 0x8000000))
+        Set-OsdCapSafe   # apply the capture-hide state to the fresh handle
     })
     $script:osd.Add_SizeChanged({ Position-Osd })   # SizeToContent moves right/bottom anchors
     # Drag + wheel only bite in edit mode, when the click-through style is off.
@@ -5882,10 +6539,31 @@ function New-Osd {
     Build-OsdContent
 }
 
+# WDA_EXCLUDEFROMCAPTURE (0x11) keeps the window on screen but out of every
+# screen grab, recorder and share surface - a streamer's temps never leak to
+# the audience. It needs Windows 10 2004+; on older builds it fails and we fall
+# back to WDA_MONITOR (0x1), which still hides the content (renders black in the
+# capture). WDA_NONE (0) restores normal capturing. Best-effort: a failure just
+# means the overlay stays visible in captures, never a crash.
+function Set-OsdCapSafe {
+    if (-not $script:osd -or -not ('VentoNative.Osd' -as [type])) { return }
+    try {
+        $h = (New-Object System.Windows.Interop.WindowInteropHelper $script:osd).Handle
+        if ($h -eq [IntPtr]::Zero) { return }
+        if ([bool]$script:settings.osdCapSafe) {
+            $ok = [VentoNative.Osd]::SetWindowDisplayAffinity($h, [uint32]0x11)
+            if (-not $ok) { [void][VentoNative.Osd]::SetWindowDisplayAffinity($h, [uint32]0x1) }
+        } else {
+            [void][VentoNative.Osd]::SetWindowDisplayAffinity($h, [uint32]0x0)
+        }
+    } catch { }
+}
+
 function Update-OsdLayout {
     if (-not $script:osd) { return }
     Build-OsdContent
     $script:osd.Opacity = ([int]$script:settings.osdOpacity) / 100.0
+    Set-OsdCapSafe
     Position-Osd
 }
 
@@ -6120,19 +6798,13 @@ foreach ($m in 'quiet','normal','performance','curve','auto') {
     $mi.add_Click({ param($s, $e) Set-UserMode ([string]$s.Tag) })
 }
 [void]$menu.Items.Add('-')
+$script:trayProfileMenu = New-Object System.Windows.Forms.ToolStripMenuItem 'Profiles'
+[void]$menu.Items.Add($script:trayProfileMenu)
+Update-TrayProfiles
+[void]$menu.Items.Add('-')
 $script:miOsd = $menu.Items.Add('Overlay (OSD)')
 $script:osdModePrev = $null
-$script:miOsd.add_Click({
-    $s = $script:settings
-    if ([string]$s.osdMode -eq 'off') {
-        $s.osdMode = $(if ($script:osdModePrev) { $script:osdModePrev } else { 'auto' })
-    } else {
-        $script:osdModePrev = [string]$s.osdMode
-        $s.osdMode = 'off'
-    }
-    $sync.Settings.osdMode = $s.osdMode
-    $script:saveTimer.Stop(); $script:saveTimer.Start()
-})
+$script:miOsd.add_Click({ Toggle-Overlay })
 $script:miOsdMove = $menu.Items.Add('Move overlay')
 $script:miOsdMove.add_Click({ Set-OsdEdit (-not $script:osdEditing) })
 $script:miUpdate = $menu.Items.Add('Install update')
@@ -6150,6 +6822,9 @@ $script:notify.add_BalloonTipClicked({
 
 Init-Sirocco
 Update-ModePanel ([string]$sync.Data.ActiveMode)
+# Bind global hotkeys now the window (and its handle) exist. Any the OS refuses
+# are simply skipped; the settings panel reports them when the user next saves.
+[void](Register-Hotkeys)
 
 # --- Update check (GitHub releases, once per launch) -----------------
 $script:psUpd = $null

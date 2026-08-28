@@ -6,9 +6,25 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
-## 1.6.2 — 2026-08-28
+## 1.7.0 — 2026-08-28
 
-Steadier on every machine.
+One name for the whole machine.
+
+### Added
+- **Vento profiles.** A profile is your whole setup under one name — a fan mode, the
+  overlay, and a display scene, switched together. **GAMING**, **MOVIE** and **WORK** come
+  built in; make your own with any name and colour under Settings › Profiles. Switch from the
+  new **Profiles** submenu in the tray, or bind a key to cycle through them. Profiles reference
+  the display scenes you already have (DAY, GAME, …) rather than replacing them.
+- **Global shortcuts.** Bind keys that work anywhere, even inside a game — toggle the overlay,
+  jump straight to Quiet / Normal / Performance / Auto, or cycle your Vento profiles. Set them
+  under Settings › Shortcuts: click a field and press the combination (a modifier is required).
+- **Hide the overlay from screen capture.** A new option under Settings › Overlay keeps the
+  overlay on your screen but out of every recording, stream and screen share — your
+  temperatures and system info never leak to an audience. (Windows 10 2004 or newer.)
+
+### Changed
+- The tray menu now carries a **Profiles** submenu, next to the fan modes.
 
 ### Fixed
 - **The right GPU on multi-GPU machines.** On laptops with both an integrated and a discrete
