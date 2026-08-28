@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.6.1'
+$script:AppVersion = '1.6.2'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -696,7 +696,27 @@ $worker = {
             $sync.Data.CpuName = $cpuHw.Name
         }
 
-        $gpuHw = $pc.Hardware | Where-Object { $_.HardwareType.ToString() -like 'Gpu*' } | Select-Object -First 1
+        # Pick the GPU that matters: on hybrid laptops and iGPU-first desktops
+        # the integrated GPU often enumerates first but has no real temp/load,
+        # which would leave the GPU card blank and break game detection. Score
+        # each candidate by whether it reports a GPU Core temperature and load,
+        # preferring a discrete NVIDIA/AMD part, and take the best.
+        $gpuCands = @($pc.Hardware | Where-Object { $_.HardwareType.ToString() -like 'Gpu*' })
+        $gpuHw = $null
+        if ($gpuCands.Count -eq 1) { $gpuHw = $gpuCands[0] }
+        elseif ($gpuCands.Count -gt 1) {
+            $best = -1
+            foreach ($cand in $gpuCands) {
+                $sc = 0
+                $sens = @($cand.Sensors)
+                if ($sens | Where-Object { $_.SensorType.ToString() -eq 'Temperature' -and $_.Name -eq 'GPU Core' -and $null -ne $_.Value }) { $sc += 4 }
+                if ($sens | Where-Object { $_.SensorType.ToString() -eq 'Load' -and $_.Name -eq 'GPU Core' -and $null -ne $_.Value }) { $sc += 2 }
+                if ($cand.HardwareType.ToString() -match 'Nvidia|AmdGpu|Amd') { $sc += 1 }
+                if ($cand.Name -match 'GeForce|RTX|GTX|Radeon|RX ') { $sc += 1 }
+                if ($sc -gt $best) { $best = $sc; $gpuHw = $cand }
+            }
+            if (-not $gpuHw) { $gpuHw = $gpuCands[0] }
+        }
         $gpuTemp = $null; $gpuFans = @()
         if ($gpuHw) {
             $gpuTemp = $gpuHw.Sensors | Where-Object { $_.SensorType.ToString() -eq 'Temperature' -and $_.Name -eq 'GPU Core' } | Select-Object -First 1
@@ -813,7 +833,14 @@ $worker = {
         $lastLoopMs = [long]0
         $lastPassMs = [long](-1)
         $lastWall = [DateTime]::UtcNow
+        $tickErr = 0
         while (-not $sync.Exit) {
+          # A transient fault in a single tick (a sensor read, a fan write)
+          # must not end the worker - the outer catch would quit the app,
+          # which is exactly what should not happen mid-game. Keep looping;
+          # log the first of a burst so a real, persistent fault is still
+          # visible in error.log.
+          try {
             # real elapsed time this iteration - Start-Sleep overshoots, so
             # fixed increments would drift
             $nowMs = $clock.ElapsedMilliseconds
@@ -884,10 +911,14 @@ $worker = {
             }
             if ($sinceUpdate -ge [int]$s.updateIntervalMs) {
                 $sinceUpdate = 0
-                if ($sio)   { $sio.Update() }
-                if ($cpuHw) { $cpuHw.Update() }
-                if ($gpuHw) { $gpuHw.Update() }
-                if ($memHw) { $memHw.Update() }
+                # Each device is updated on its own: a GPU driver reset (TDR) or
+                # an SMBus clash with another tool can make one Update() throw,
+                # and that must degrade just that card for a tick, not take the
+                # whole app down (the outer catch used to exit on it).
+                if ($sio)   { try { $sio.Update() }   catch { } }
+                if ($cpuHw) { try { $cpuHw.Update() } catch { } }
+                if ($gpuHw) { try { $gpuHw.Update() } catch { } }
+                if ($memHw) { try { $memHw.Update() } catch { } }
                 foreach ($hw0 in $ramTempHw) { try { $hw0.Update() } catch { } }
                 # A drive whose Update() throws (USB enclosure unplugged) is
                 # retired: LHM never nulls Sensor.Value, so without this the
@@ -1049,6 +1080,15 @@ $worker = {
                     }
                 }
             }
+            $tickErr = 0
+          } catch {
+            # This runspace has no file access to the app folder; hand the
+            # throttled fault to the UI thread, which logs it. The loop lives.
+            $tickErr++
+            if ($tickErr -eq 1 -or ($tickErr % 100) -eq 0) {
+                $sync.TickError = "worker tick error #$tickErr`: " + ($_ | Out-String)
+            }
+          }
             Start-Sleep -Milliseconds 200
             $sinceUpdate += 200
         }
@@ -2919,6 +2959,21 @@ foreach ($name in @(
     'BtnSetSave','BtnSetCancel')) {
     $el[$name] = $window.FindName($name)
 }
+
+# Fit small screens. The window is a fixed 720x966 and can't be resized, so on
+# a laptop at 768p or a 1080p panel at 125% scaling its bottom lands off the
+# work area and can't be reached. When the work area is shorter, scale the
+# whole window down uniformly - no reflow, no scrollbars, just a smaller Vento.
+try {
+    $wa = [System.Windows.SystemParameters]::WorkArea   # DIPs
+    $needH = 986.0   # 966 window + the 10px shadow margin top/bottom
+    if ($wa.Height -lt $needH -and $window.Content) {
+        $k = [math]::Max(0.6, ($wa.Height - 8) / $needH)
+        $window.Content.Width = 720; $window.Content.Height = 966
+        $window.Content.LayoutTransform = New-Object System.Windows.Media.ScaleTransform $k, $k
+        $window.SizeToContent = 'WidthAndHeight'
+    }
+} catch { }
 
 # Reuse a pre-existing WPF Application (hosted runs, e.g. ISE) - the
 # constructor throws if one already lives in this AppDomain.
@@ -4896,10 +4951,21 @@ function Install-Update {
     $sync.DlState = 'downloading'
     $dst = Join-Path $env:TEMP $u.AssetName
     $dl = {
-        param($sync, $url, $dst)
+        param($sync, $url, $dst, $sha)
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -Uri $url -OutFile $dst -UseBasicParsing -TimeoutSec 300
+            # This installer is about to run elevated. When the release
+            # published a hash, refuse to run anything that doesn't match it -
+            # a tampered or truncated download never reaches the user.
+            if ($sha) {
+                $actual = (Get-FileHash -Path $dst -Algorithm SHA256).Hash.ToLower()
+                if ($actual -ne ([string]$sha).ToLower()) {
+                    try { Remove-Item $dst -Force } catch { }
+                    $sync.DlState = 'badhash'
+                    return
+                }
+            }
             $sync.SetupFile = $dst
         } catch {
             $sync.DlState = $null
@@ -4909,7 +4975,7 @@ function Install-Update {
     $script:dlRunspace.Open()
     $script:psDl = [powershell]::Create()
     $script:psDl.Runspace = $script:dlRunspace
-    [void]$script:psDl.AddScript($dl.ToString()).AddArgument($sync).AddArgument($u.AssetUrl).AddArgument($dst)
+    [void]$script:psDl.AddScript($dl.ToString()).AddArgument($sync).AddArgument($u.AssetUrl).AddArgument($dst).AddArgument($u.Sha256)
     [void]$script:psDl.BeginInvoke()
 }
 
@@ -6097,11 +6163,27 @@ if ($script:settings.checkUpdates -and $script:settings.updateRepo) {
             $latest = ([string]$r.tag_name).TrimStart('v').TrimStart('V')
             if ([version]$latest -gt [version]$current) {
                 $asset = $r.assets | Where-Object { $_.name -like '*.exe' } | Select-Object -First 1
+                # SHA256SUMS.txt (added in 1.6.2) lets the download be verified
+                # before it runs. Best-effort: if it is missing or unreadable
+                # the update still proceeds, it just isn't hash-checked.
+                $sha = $null
+                if ($asset) {
+                    $sumAsset = $r.assets | Where-Object { $_.name -match 'SHA256|\.sha256$' } | Select-Object -First 1
+                    if ($sumAsset) {
+                        try {
+                            $txt = (Invoke-WebRequest -Uri $sumAsset.browser_download_url -Headers @{ 'User-Agent' = 'Vento' } -UseBasicParsing -TimeoutSec 15).Content
+                            foreach ($line in ($txt -split "`n")) {
+                                if ($line -match ('([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($asset.name))) { $sha = $Matches[1].ToLower(); break }
+                            }
+                        } catch { }
+                    }
+                }
                 $sync.Update = @{
                     Version   = $latest
                     Url       = [string]$r.html_url
                     AssetUrl  = $(if ($asset) { [string]$asset.browser_download_url } else { $null })
                     AssetName = $(if ($asset) { [string]$asset.name } else { $null })
+                    Sha256    = $sha
                 }
             }
         } catch { }
@@ -6204,6 +6286,7 @@ function Set-ModelLabel($tb, [string]$raw) {
 }
 
 $script:lastWarn = $null
+$script:lastTickErr = $null
 $script:lastBalloon = $null
 $script:updateNotified = $false
 $script:timer = New-Object System.Windows.Threading.DispatcherTimer
@@ -6324,6 +6407,10 @@ $script:timer.Add_Tick({
         if ($sync.DlState -eq 'downloading') {
             $el.StatusDot.Fill = $script:brushAccent
             $el.StatusText.Text = $script:L.Downloading
+        } elseif ($sync.DlState -eq 'badhash') {
+            $el.StatusDot.Fill = $script:brushRed
+            $el.StatusText.Text = "Update download didn't verify - open the release page to update by hand"
+            if ($el.UpdatePill.Visibility -eq 'Visible') { $el.UpdatePillText.Text = 'UPDATE {0}' -f $sync.Update.Version }
         } elseif ($d.GameBoost) {
             $el.StatusDot.Fill = $script:brushYellow
             $el.StatusText.Text = $(if ([string]$d.GameMode -eq 'curve') { $script:L.GameActiveCurve } else { $script:L.GameActive })
@@ -6345,6 +6432,13 @@ $script:timer.Add_Tick({
         $el.StatusText.Text = $script:L.Starting
     }
     $el.WarnText.Text = if ($d.Warning) { $d.Warning } else { '' }
+
+    # A worker that hit a transient fault survived it (it no longer takes the
+    # app down); record the fault here where the app folder is reachable.
+    if ($sync.TickError -and $sync.TickError -ne $script:lastTickErr) {
+        $script:lastTickErr = $sync.TickError
+        try { $sync.TickError | Out-File -FilePath (Join-Path $script:AppRoot 'error.log') -Encoding utf8 -Append } catch { }
+    }
 
     if ($d.Warning -and $d.Warning -ne $script:lastWarn) {
         $script:lastWarn = $d.Warning

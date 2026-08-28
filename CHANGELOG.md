@@ -6,6 +6,31 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.6.2 — 2026-08-28
+
+Steadier on every machine.
+
+### Fixed
+- **The right GPU on multi-GPU machines.** On laptops with both an integrated and a discrete
+  chip — and on desktops with more than one card — Vento could latch onto the idle integrated
+  GPU and report its temperature instead of the card actually doing the work. It now scores
+  every GPU it finds (real temperature sensor, live load, discrete name) and reads the one
+  that's genuinely in use.
+- **A single bad sensor no longer stops monitoring.** Each device is now read on its own, and
+  a stray error on any one tick is caught and written to `error.log` instead of taking the
+  whole loop down — so one flaky reading can't freeze the temperatures and fan control for
+  everything else.
+- **Downloaded updates are verified before they run.** Each release now ships a SHA-256
+  checksum, and Vento checks the file it downloaded against it. If they don't match, the
+  download is refused and Vento points you to the release page to update by hand.
+
+### Changed
+- **Fits on short screens.** On small laptops and low-resolution displays where the window ran
+  past the bottom edge, Vento now scales itself down to fit the available height. Normal-height
+  screens are untouched.
+
+---
+
 ## 1.6.1 — 2026-08-28
 
 ### Fixed

@@ -33,8 +33,17 @@ jobs:
           $ver = '${{ github.ref_name }}'.TrimStart('v')
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" installer\vento.iss
 
+      - name: Checksum
+        shell: powershell
+        run: |
+          $exe = Get-ChildItem dist\*.exe | Select-Object -First 1
+          $h = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          "$h  $($exe.Name)" | Out-File -Encoding ascii dist\SHA256SUMS.txt
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.exe
+          files: |
+            dist/*.exe
+            dist/SHA256SUMS.txt
           generate_release_notes: true
