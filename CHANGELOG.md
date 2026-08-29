@@ -6,6 +6,30 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.7.1 — 2026-08-29
+
+Polish and fixes for the 1.7 features.
+
+### Changed
+- **Displays open faster.** Each monitor's map and sliders now appear the moment its
+  brightness is read, instead of waiting for the full control probe to finish — the panel
+  fills in the advertised controls a moment later rather than showing nothing for a few seconds.
+- **Shortcut keys are shown as keycaps.** The Shortcuts section now shows `Ctrl` `Alt` `Shift`
+  `Win` `Esc` `Del` as little keyboard keys instead of a wordy sentence.
+
+### Fixed
+- **Naming a profile after an existing one no longer deletes the other one.** Vento now asks
+  for a different name instead of silently overwriting. Built-in profiles (GAMING / MOVIE /
+  WORK) can be re-tuned but not renamed, so they can't be lost or duplicated.
+- **Applying a profile from the Settings panel no longer loses its overlay choice** when you
+  then press Save.
+- **Clearer shortcut messages** — a combination shared by two Vento shortcuts is now called out
+  separately from one already claimed by another app.
+- Hardening around the display read so a rescan can't stall the panel or drop the selected
+  display, and a mid-read fault can't wedge it on "Reading monitors…".
+
+---
+
 ## 1.7.0 — 2026-08-28
 
 One name for the whole machine.

@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.7.0'
+$script:AppVersion = '1.7.1'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -1322,6 +1322,23 @@ $xaml = @'
       <Setter Property="Margin" Value="0,4,0,0"/>
       <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
     </Style>
+    <Style x:Key="Kbd" TargetType="Border">
+      <Setter Property="CornerRadius" Value="5"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="BorderBrush" Value="#3A5573"/>
+      <Setter Property="Background" Value="#182534"/>
+      <Setter Property="Padding" Value="8,2,8,3"/>
+      <Setter Property="Margin" Value="0,0,5,0"/>
+      <Setter Property="MinWidth" Value="24"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style x:Key="KbdText" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="10.5"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="#D2DBEA"/>
+      <Setter Property="HorizontalAlignment" Value="Center"/>
+      <Setter Property="TextAlignment" Value="Center"/>
+    </Style>
     <Style x:Key="IconChip" TargetType="Border">
       <Setter Property="Width" Value="24"/>
       <Setter Property="Height" Value="24"/>
@@ -2605,7 +2622,18 @@ $xaml = @'
                         <Rectangle Style="{StaticResource AccentTick}"/>
                         <TextBlock Style="{StaticResource CardTitle}" Text="SHORTCUTS" Foreground="#4C8DFF" x:Name="SecShortcuts" Margin="7,0,0,0" VerticalAlignment="Center"/>
                       </StackPanel>
-                      <TextBlock Style="{StaticResource CardSub}" Text="Global keys that work anywhere, even in a game. Click a field and press the combination - a modifier (Ctrl / Alt / Shift / Win) is required. Esc cancels, Delete clears." Margin="0,2,0,0" TextWrapping="Wrap"/>
+                      <TextBlock Style="{StaticResource CardSub}" Text="Global keys that work anywhere, even in a game. Click a field, then press your combination:" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                      <WrapPanel Margin="0,8,0,2">
+                        <Border Style="{StaticResource Kbd}"><TextBlock Style="{StaticResource KbdText}" Text="Ctrl"/></Border>
+                        <Border Style="{StaticResource Kbd}"><TextBlock Style="{StaticResource KbdText}" Text="Alt"/></Border>
+                        <Border Style="{StaticResource Kbd}"><TextBlock Style="{StaticResource KbdText}" Text="Shift"/></Border>
+                        <Border Style="{StaticResource Kbd}"><TextBlock Style="{StaticResource KbdText}" Text="Win"/></Border>
+                        <TextBlock Style="{StaticResource CardSub}" Text="one of these, plus a key" VerticalAlignment="Center" Margin="3,0,18,0"/>
+                        <Border Style="{StaticResource Kbd}"><TextBlock Style="{StaticResource KbdText}" Text="Esc"/></Border>
+                        <TextBlock Style="{StaticResource CardSub}" Text="cancel" VerticalAlignment="Center" Margin="3,0,18,0"/>
+                        <Border Style="{StaticResource Kbd}"><TextBlock Style="{StaticResource KbdText}" Text="Del"/></Border>
+                        <TextBlock Style="{StaticResource CardSub}" Text="clear" VerticalAlignment="Center" Margin="3,0,0,0"/>
+                      </WrapPanel>
                       <TextBlock x:Name="HkConflict" Style="{StaticResource CardSub}" Foreground="#F26D78" Text="" Margin="0,5,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
                       <Grid Margin="0,8,0,0">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -3884,11 +3912,14 @@ function Save-Settings {
     $sync.SettingsChanged = $true
     if ($script:panelMode) { Update-ModePanel $script:panelMode }
     Update-OsdLayout
-    $hkConf = Register-Hotkeys
+    $hkR = Register-Hotkeys
     $el.SettingsOverlay.Visibility = 'Collapsed'
-    if ($hkConf -and $hkConf.Count) {
+    $msgs = @()
+    if ($hkR.Conflicts -and $hkR.Conflicts.Count) { $msgs += 'Already used by another app: ' + ($hkR.Conflicts -join ', ') }
+    if ($hkR.Dupes -and $hkR.Dupes.Count)         { $msgs += 'Sharing a combination with another Vento shortcut: ' + ($hkR.Dupes -join ', ') }
+    if ($msgs.Count) {
         [void][System.Windows.MessageBox]::Show(
-            ("These shortcuts are already in use by another app and could not be set:`n`n{0}" -f ($hkConf -join ', ')),
+            ("Some shortcuts could not be set:`n`n{0}" -f ($msgs -join "`n`n")),
             'Vento', 'OK', 'Warning')
     }
 }
@@ -3947,6 +3978,10 @@ function Parse-Hotkey([string]$str) {
         }
     }
     if (-not $keyName) { return $null }
+    # A bare number would parse as the Key enum's underlying value (Key '1' is
+    # Cancel, not the digit), binding the wrong physical key. Digit keys are
+    # stored as their enum names ('D1'..'D9'), so reject a numeric-only token.
+    if ($keyName -match '^\d+$') { return $null }
     try {
         $key = [System.Windows.Input.Key][Enum]::Parse([System.Windows.Input.Key], $keyName, $true)
         $vk  = [System.Windows.Input.KeyInterop]::VirtualKeyFromKey($key)
@@ -4018,10 +4053,12 @@ function Register-Hotkeys {
         if ($src) {
             if ($script:hkHook) { try { $src.RemoveHook($script:hkHook) } catch { } }
             $script:hkHook = [System.Windows.Interop.HwndSourceHook]{
-                # args: hwnd, msg, wParam, lParam, handled
+                # args: hwnd, msg, wParam, lParam, handled. [void] so an action
+                # that ever leaks output can't turn the delegate's return into a
+                # collection that fails to marshal back as IntPtr.
                 if ([int]$args[1] -eq 0x0312) {
                     $hid = ([IntPtr]$args[2]).ToInt32()
-                    if ($script:hkIds.ContainsKey($hid)) { Invoke-HotkeyAction $script:hkIds[$hid] }
+                    if ($script:hkIds.ContainsKey($hid)) { [void](Invoke-HotkeyAction $script:hkIds[$hid]) }
                 }
                 return [IntPtr]::Zero
             }
@@ -4031,18 +4068,22 @@ function Register-Hotkeys {
     }
     foreach ($oid in @($script:hkIds.Keys)) { [void][VentoNative.Hotkey]::UnregisterHotKey($h, $oid) }
     $script:hkIds = @{}
-    $conflicts = @()
+    $conflicts = @()   # the OS refused (another app owns it)
+    $dupes = @()       # two Vento actions asked for the same combo
+    $seen = @{}
     $id = 1
     foreach ($act in $script:hotkeyActions) {
         $p = Parse-Hotkey ([string]$script:settings[$act.Set])
         if (-not $p) { continue }
+        $ck = '{0}:{1}' -f $p.Mods, $p.Vk
+        if ($seen.ContainsKey($ck)) { $dupes += $act.Label; continue }
         if ([VentoNative.Hotkey]::RegisterHotKey($h, $id, [uint32]$p.Mods, [uint32]$p.Vk)) {
-            $script:hkIds[$id] = $act.Id; $id++
+            $script:hkIds[$id] = $act.Id; $id++; $seen[$ck] = $true
         } else {
             $conflicts += $act.Label
         }
     }
-    return $conflicts
+    return @{ Conflicts = $conflicts; Dupes = $dupes }
 }
 
 # Capture wiring: click a field, then press the combination.
@@ -4322,14 +4363,21 @@ function Apply-VentoProfile([string]$name) {
         $script:settings.osdMode = [string]$p.Overlay
         $sync.Settings.osdMode = [string]$p.Overlay
         if ([string]$p.Overlay -ne 'off') { $script:osdModePrev = [string]$p.Overlay }
+        # Keep the settings panel's staged overlay pick in step, or a later
+        # panel Save (which writes osdModePick back to osdMode) would silently
+        # undo the profile's overlay choice.
+        $script:osdModePick = [string]$p.Overlay
+        if ($el.SettingsOverlay -and $el.SettingsOverlay.Visibility -eq 'Visible') { Update-OsdPickers }
     }
     # The display profile lands on every screen, whatever the panel's scope is.
+    # A DDC failure here must not abort the rest of the apply (the pointer + tray
+    # update below) or surface unhandled on the dispatcher from a tray/tile click.
     if ([string]$p.Display) {
         $mp = Get-MonProfile ([string]$p.Display)
         if ($mp) {
             $prevScope = [string]$script:settings.monProfileScope
             $script:settings.monProfileScope = 'all'
-            try { Apply-MonProfile $mp -Silent } finally { $script:settings.monProfileScope = $prevScope }
+            try { Apply-MonProfile $mp -Silent } catch { } finally { $script:settings.monProfileScope = $prevScope }
         }
     }
     $script:settings.ventoProfile = [string]$p.Name
@@ -4564,8 +4612,11 @@ function Open-VentoSheet([string]$name = '') {
         $script:vpOverlay = [string]$p.Overlay
         $script:vpDisplay = [string]$p.Display
         $el.VP_Name.Text = $p.Name
-        $el.VentoEditTitle.Text = 'EDIT PROFILE'
+        $el.VentoEditTitle.Text = $(if ($p.Builtin) { 'EDIT PROFILE (built-in)' } else { 'EDIT PROFILE' })
         $el.BtnVpDelete.Visibility = $(if ($p.Builtin) { 'Collapsed' } else { 'Visible' })
+        # A built-in's name is its identity - the re-seed keys on it - so it
+        # cannot be renamed, only re-tuned. Its fields stay fully editable.
+        $el.VP_Name.IsReadOnly = [bool]$p.Builtin
     } else {
         $script:vpColor = '#6FB1FF'
         $script:vpFan = 'normal'
@@ -4574,6 +4625,7 @@ function Open-VentoSheet([string]$name = '') {
         $el.VP_Name.Text = 'My profile'
         $el.VentoEditTitle.Text = 'NEW PROFILE'
         $el.BtnVpDelete.Visibility = 'Collapsed'
+        $el.VP_Name.IsReadOnly = $false
     }
     Build-VentoChips
     $el.VentoEditLayer.Visibility = 'Visible'
@@ -4585,6 +4637,15 @@ $el.BtnVpSave.Add_Click({
     $name = ([string]$el.VP_Name.Text).Trim()
     if (-not $name) { return }
     $old = [string]$script:vpEditName
+    # A name already owned by a DIFFERENT profile would silently delete that
+    # profile (the save filter drops it) and, on a built-in, strip its flag.
+    # Reject the collision instead of destroying data.
+    if ($name -ne $old -and (Get-VentoProfile $name)) {
+        [void][System.Windows.MessageBox]::Show(
+            ("A profile named '{0}' already exists. Pick a different name." -f $name),
+            'Vento', 'OK', 'Warning')
+        return
+    }
     $prev = Get-VentoProfile $old
     $p = @{
         Name    = $name
@@ -5005,7 +5066,11 @@ function Update-MonitorPanel {
     $mons = @($sync.Ddc.Monitors)
     $script:monLoading = $true
     try {
-        if ($script:monSel -ge $mons.Count) { $script:monSel = 0 }
+        # Not while an enum is mid-flight: the progressive publish briefly holds
+        # fewer monitors than are really there, and resetting here would drop the
+        # user's selection to 0 on every rescan. An out-of-range index reads as
+        # $null in PS5.1 and the empty branch renders until the display arrives.
+        if ($script:monSel -ge $mons.Count -and -not $sync.Ddc.Busy) { $script:monSel = 0 }
         $el.MonStatus.Text = if ($sync.Ddc.Busy) { 'Reading monitors...' }
                              elseif ($mons.Count -eq 0) { 'No DDC/CI-capable display found' }
                              else { '{0} displays {1} DDC/CI live' -f $mons.Count, $script:mid }
@@ -5708,6 +5773,23 @@ $ddcWorker = {
                                             if ([VentoNative.Ddc]::GetMonitorContrast($h, [ref]$mi, [ref]$cu, [ref]$ma)) {
                                                 $r.ConCur = [int]$cu; $r.ConMax = [int]$ma
                                             }
+                                            # Show the display the moment its brightness is known: the
+                                            # map, the selected strip and the sliders appear at once,
+                                            # while the advertised controls fill in when the slow
+                                            # per-code probe finishes and the final publish lands.
+                                            # Name it from EDID now so it does not flash the generic
+                                            # dxva2 description first. This publishes a SHALLOW COPY of
+                                            # $r, never the live object: the worker keeps mutating $r
+                                            # (adding probe keys, resizing the table) for ~1s after
+                                            # this, and the UI thread can write onto a published
+                                            # monitor via Apply-MonProfile - two writers on one plain
+                                            # Hashtable would corrupt it. The copy is read-only to both.
+                                            if (($r.Desc -match '^Generic|^Default|^PnP' -or -not ([string]$r.Desc).Trim()) -and
+                                                $slot -lt $edidNames.Count -and $edidNames[$slot]) {
+                                                $r.Desc = $edidNames[$slot]
+                                            }
+                                            $sync.Ddc.Monitors = @($out + ,(@{} + $r))
+                                            $sync.Ddc.Gen++
                                             # The capabilities string is the contract: only codes the
                                             # display advertises are read, and only those get controls.
                                             $caps = ''
@@ -5934,7 +6016,12 @@ $ddcWorker = {
                                 }
                             }
                         }
-                    } catch { }
+                    } catch {
+                        # A throw mid-Enum (e.g. a display yanked during a probe) must
+                        # not leave Busy stuck true - that would wedge the panel on
+                        # "Reading monitors..." and block the night schedule's re-enum.
+                        $sync.Ddc.Busy = $false; $sync.Ddc.Gen++
+                    }
                 }
                 # Verification happens once per batch, after every write in it
                 # went out. Reading between writes would put ~120 ms of I2C
