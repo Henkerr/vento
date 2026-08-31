@@ -1061,7 +1061,13 @@ $worker = {
                         if ($load -ge $s.gameOnLoad) { $detHot += $passMs } else { $detHot = 0 }
                         if ($detHot -ge 10000) { $detOn = $true; $detHot = 0; $detIdle = 0 }
                     }
-                } elseif ($detOn) { $detOn = $false; $detHot = 0; $detIdle = 0 }
+                } elseif ($detOn) {
+                    # A null sample is a sensor hiccup (transient read fault, TDR),
+                    # not proof the game ended: let the same 60s idle release decide
+                    # instead of blanking the overlay mid-game on one bad read.
+                    $detIdle += $passMs
+                    if ($detIdle -ge 60000) { $detOn = $false; $detHot = 0; $detIdle = 0 }
+                }
                 $d.GameDetected = $detOn
                 # Near the safety limits, never (re)arm game boost - otherwise
                 # the guard's forced Auto and the boost would fight in a loop.
@@ -4423,7 +4429,7 @@ function Build-VentoScenes {
     $host0 = $el.VentoSceneHost
     $host0.Children.Clear()
     $active = [string]$script:settings.ventoProfile
-    $tileW = 128.0; $tileH = 86.0
+    $tileW = 128.0; $tileH = 94.0
     $fanShort = @{ quiet = 'QUIET'; normal = 'NORMAL'; performance = 'PERF'; curve = 'CURVE'; auto = 'AUTO' }
     $ovShort  = @{ on = 'HUD ON'; off = 'HUD OFF'; auto = 'HUD AUTO' }
     foreach ($p in (Get-VentoProfiles)) {
@@ -4474,22 +4480,36 @@ function Build-VentoScenes {
         $nm.Foreground = if ($on) { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xED, 0xF1, 0xF8)) } else { New-MonBrush ([System.Windows.Media.Color]::FromRgb(0xC9, 0xD2, 0xE2)) }
         [void]$head.Children.Add($nm)
         [void]$sp.Children.Add($head)
+        # Fan + HUD on one line, the display profile on its own second line: a
+        # long display name (CINEMA, or anything user-made) gets the full tile
+        # width instead of an ellipsis.
         $rc = New-Object System.Windows.Controls.TextBlock
         $fs = if ($fanShort.ContainsKey([string]$p.Fan)) { $fanShort[[string]$p.Fan] } else { ([string]$p.Fan).ToUpperInvariant() }
         $os = if ($ovShort.ContainsKey([string]$p.Overlay)) { $ovShort[[string]$p.Overlay] } else { '' }
-        $rc.Text = (('{0}  {1}  {2}' -f $fs, $os, ([string]$p.Display).ToUpperInvariant())).Trim()
+        $rc.Text = (('{0}  {1}' -f $fs, $os)).Trim()
         $rc.FontSize = 9; $rc.FontWeight = 'SemiBold'
-        $rc.Margin = New-Object System.Windows.Thickness 0, 8, 0, 0
+        $rc.Margin = New-Object System.Windows.Thickness 0, 7, 0, 0
         $rc.TextTrimming = 'CharacterEllipsis'
         $rc.Foreground = New-MonBrush $col 0xCC
         [void]$sp.Children.Add($rc)
+        $disp = ([string]$p.Display).ToUpperInvariant()
+        if ($disp) {
+            $rc2 = New-Object System.Windows.Controls.TextBlock
+            $rc2.Text = $disp
+            $rc2.FontSize = 9; $rc2.FontWeight = 'SemiBold'
+            $rc2.Margin = New-Object System.Windows.Thickness 0, 1, 0, 0
+            $rc2.TextTrimming = 'CharacterEllipsis'
+            $rc2.ToolTip = $disp
+            $rc2.Foreground = New-MonBrush $col 0x99
+            [void]$sp.Children.Add($rc2)
+        }
         if ($on) {
             $pill = New-Object System.Windows.Controls.Border
             $pill.Background = New-MonBrush $col 0x33
             $pill.CornerRadius = New-Object System.Windows.CornerRadius 6
             $pill.Padding = New-Object System.Windows.Thickness 7, 2, 7, 2
             $pill.HorizontalAlignment = 'Left'
-            $pill.Margin = New-Object System.Windows.Thickness 0, 6, 0, 0
+            $pill.Margin = New-Object System.Windows.Thickness 0, 4, 0, 0
             $pt = New-Object System.Windows.Controls.TextBlock
             $pt.Text = 'ACTIVE'; $pt.FontSize = 8; $pt.FontWeight = 'Bold'
             $pt.Foreground = New-MonBrush $col
@@ -5711,6 +5731,11 @@ $script:ddcRunspace = $null
 $ddcWorker = {
     param($sync)
     $mons = @()                                       # live handles, index-aligned with the snapshot
+    # Discovery results per display identity, kept for the worker's lifetime:
+    # a display's control set (caps string, which controls answer, which
+    # writes stick) does not change while it stays plugged in, so re-opening
+    # the panel only needs the current values, not the ~2s re-probe.
+    $ddcCache = @{}
     $physSets = New-Object System.Collections.ArrayList
     try {
         while (-not $sync.Exit) {
@@ -5734,19 +5759,27 @@ $ddcWorker = {
                                 $out = @()
                                 # dxva2 hands back "Generic PnP Monitor" for most displays; the
                                 # EDID name Windows keeps is the one the user recognises.
-                                $edidNames = @()
+                                $edidNames = @(); $edidIds = @()
                                 try {
                                     foreach ($mi0 in @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop)) {
                                         $nm0 = -join (@($mi0.UserFriendlyName) | Where-Object { $_ -gt 0 } | ForEach-Object { [char]$_ })
                                         $edidNames += ,([string]$nm0).Trim()
+                                        # name + serial: the cache key must tell two same-model
+                                        # displays apart even if enumeration order ever shifts
+                                        $sn0 = -join (@($mi0.SerialNumberID) | Where-Object { $_ -gt 0 } | ForEach-Object { [char]$_ })
+                                        $edidIds += ,(('{0}#{1}' -f ([string]$nm0).Trim(), ([string]$sn0).Trim()))
                                     }
-                                } catch { $edidNames = @() }
+                                } catch { $edidNames = @(); $edidIds = @() }
                                 $slot = 0
                                 foreach ($hm in [VentoNative.Ddc]::GetHMonitors()) {
                                     $n = [uint32]0
-                                    if (-not [VentoNative.Ddc]::GetNumberOfPhysicalMonitorsFromHMONITOR($hm, [ref]$n) -or $n -eq 0) { continue }
+                                    # A skipped hmonitor must still advance the slot counter:
+                                    # otherwise one transiently-failing display shifts every
+                                    # later display onto an earlier EDID name AND an earlier
+                                    # cache key, handing it the wrong cached control set.
+                                    if (-not [VentoNative.Ddc]::GetNumberOfPhysicalMonitorsFromHMONITOR($hm, [ref]$n) -or $n -eq 0) { $slot += [math]::Max(1, [int]$n); continue }
                                     $arr = New-Object 'VentoNative.PHYSICAL_MONITOR[]' $n
-                                    if (-not [VentoNative.Ddc]::GetPhysicalMonitorsFromHMONITOR($hm, $n, $arr)) { continue }
+                                    if (-not [VentoNative.Ddc]::GetPhysicalMonitorsFromHMONITOR($hm, $n, $arr)) { $slot += [int]$n; continue }
                                     [void]$physSets.Add(@{ N = $n; Arr = $arr })
                                     $bounds = $null
                                     try { $bounds = [VentoNative.Ddc]::GetBounds($hm) } catch { }
@@ -5790,6 +5823,93 @@ $ddcWorker = {
                                             }
                                             $sync.Ddc.Monitors = @($out + ,(@{} + $r))
                                             $sync.Ddc.Gen++
+                                            $readVcp = {
+                                                param($code)
+                                                $vt = [uint32]0; $vc = [uint32]0; $vm = [uint32]0
+                                                if ([VentoNative.Ddc]::GetVCPFeatureAndVCPFeatureReply($h, [byte]$code, [ref]$vt, [ref]$vc, [ref]$vm)) {
+                                                    return @([int]$vc, [int]$vm)
+                                                }
+                                                return $null
+                                            }
+                                            # The capability string lies in both directions - displays
+                                            # advertise features they ignore, and accept ones they never
+                                            # listed - so a control is offered only when the display
+                                            # actually answers a read with a value inside its own range.
+                                            $probe = {
+                                                param($code)
+                                                $v = & $readVcp $code
+                                                if (-not $v) { return $null }
+                                                if ($v[1] -le 0 -or $v[1] -gt 65535) { return $null }
+                                                if ($v[0] -lt 0 -or $v[0] -gt $v[1]) { return $null }
+                                                return $v
+                                            }
+                                            # Discovery is cached per display identity for the session:
+                                            # which controls answer and which writes stick cannot change
+                                            # while the display stays plugged in, so a re-open only
+                                            # re-reads the current values and skips the caps request,
+                                            # the write-nudge probes and the static identity codes.
+                                            $ckey = '{0}|{1}|{2}' -f $slot, [string]$pm.szPhysicalMonitorDescription,
+                                                    $(if ($slot -lt $edidIds.Count) { [string]$edidIds[$slot] } else { '' })
+                                            $cc = $ddcCache[$ckey]
+                                            if ($cc) {
+                                                $r.Desc = [string]$cc.Desc
+                                                # Every control is still gated on the display answering
+                                                # right now - a read that fails today hides the control
+                                                # today, cache or not.
+                                                if ($cc.HasPre) {
+                                                    $v = & $readVcp 0x14
+                                                    if ($v) { $r.PreCur = $v[0]; $r.Presets = @($cc.Presets) }
+                                                }
+                                                if ($cc.Has60) {
+                                                    $v = & $readVcp 0x60
+                                                    if ($v) {
+                                                        $r.InCur = $v[0]
+                                                        if (@($cc.Inputs).Count -gt 1) { $r.Inputs = @($cc.Inputs) }
+                                                    }
+                                                }
+                                                if ($cc.HasVol) {
+                                                    $v = & $probe 0x62
+                                                    if ($v) { $r.VolCur = $v[0]; $r.VolMax = $v[1] }
+                                                }
+                                                if ($cc.HasMute) {
+                                                    $v = & $readVcp 0x8D
+                                                    if ($v -and $v[0] -ge 1 -and $v[0] -le 2) { $r.MuteCur = $v[0] }
+                                                }
+                                                if ($cc.SharpOk) {
+                                                    $v = & $probe 0x87
+                                                    if ($v) { $r.SharpCur = $v[0]; $r.SharpMax = $v[1] }
+                                                }
+                                                if ($cc.HasRgb) {
+                                                    $vr = & $probe 0x16; $vg = & $probe 0x18; $vb = & $probe 0x1A
+                                                    if ($vr -and $vg -and $vb) {
+                                                        $r.RCur = $vr[0]; $r.RMax = $vr[1]
+                                                        $r.GCur = $vg[0]; $r.GMax = $vg[1]
+                                                        $r.BCur = $vb[0]; $r.BMax = $vb[1]
+                                                    }
+                                                }
+                                                $v = & $readVcp 0xAE
+                                                if ($v) {
+                                                    $hz = [double]$v[0] / 100.0
+                                                    if ($hz -gt 20 -and $hz -lt 500) { $r.Hz = $hz }
+                                                }
+                                                if ($null -ne $cc.PowerOff) {
+                                                    $r.PowerOff = [int]$cc.PowerOff; $r.PowerHard = [bool]$cc.PowerHard
+                                                    $v = & $readVcp 0xD6
+                                                    if ($v) { $r.PowerCur = [int]$v[0] }
+                                                }
+                                                if (@($cc.Modes).Count -gt 1) {
+                                                    $v = & $readVcp 0xDC
+                                                    if ($v) { $r.Modes = @($cc.Modes); $r.ModeCur = [int]$v[0] }
+                                                }
+                                                $r.HasColorReset   = [bool]$cc.HasColorReset
+                                                $r.HasLevelReset   = [bool]$cc.HasLevelReset
+                                                $r.HasFactoryReset = [bool]$cc.HasFactoryReset
+                                                $r.Tech = [string]$cc.Tech; $r.SubPixel = [string]$cc.SubPixel; $r.Mccs = [string]$cc.Mccs
+                                                if ($cc.HasC0) {
+                                                    $v = & $readVcp 0xC0
+                                                    if ($v -and [int]$v[0] -gt 0) { $r.UsageHours = [int]$v[0] }
+                                                }
+                                            } else {
                                             # The capabilities string is the contract: only codes the
                                             # display advertises are read, and only those get controls.
                                             $caps = ''
@@ -5822,26 +5942,6 @@ $ddcWorker = {
                                                     }
                                                 }
                                             }
-                                            $readVcp = {
-                                                param($code)
-                                                $vt = [uint32]0; $vc = [uint32]0; $vm = [uint32]0
-                                                if ([VentoNative.Ddc]::GetVCPFeatureAndVCPFeatureReply($h, [byte]$code, [ref]$vt, [ref]$vc, [ref]$vm)) {
-                                                    return @([int]$vc, [int]$vm)
-                                                }
-                                                return $null
-                                            }
-                                            # The capability string lies in both directions - displays
-                                            # advertise features they ignore, and accept ones they never
-                                            # listed - so a control is offered only when the display
-                                            # actually answers a read with a value inside its own range.
-                                            $probe = {
-                                                param($code)
-                                                $v = & $readVcp $code
-                                                if (-not $v) { return $null }
-                                                if ($v[1] -le 0 -or $v[1] -gt 65535) { return $null }
-                                                if ($v[0] -lt 0 -or $v[0] -gt $v[1]) { return $null }
-                                                return $v
-                                            }
                                             # colour preset (0x14): the allowed list has to come from
                                             # caps; there is no way to enumerate it over the wire.
                                             $v = & $readVcp 0x14
@@ -5865,8 +5965,8 @@ $ddcWorker = {
                                             # speaker volume (0x62) + mute (0x8D)
                                             $v = & $probe 0x62
                                             if ($v) { $r.VolCur = $v[0]; $r.VolMax = $v[1] }
-                                            $v = & $readVcp 0x8D
-                                            if ($v -and $v[0] -ge 1 -and $v[0] -le 2) { $r.MuteCur = $v[0] }
+                                            $vMute = & $readVcp 0x8D
+                                            if ($vMute -and $vMute[0] -ge 1 -and $vMute[0] -le 2) { $r.MuteCur = $vMute[0] }
                                             # A read that succeeds is not proof a control works: the
                                             # XG2705 answers sharpness reads and then drops every write.
                                             # So the writable controls are tried once - nudge by one,
@@ -5886,8 +5986,8 @@ $ddcWorker = {
                                                 return $moved
                                             }
                                             # sharpness (0x87)
-                                            $v = & $probe 0x87
-                                            if ($v -and (& $writable 0x87 $v[0] $v[1])) { $r.SharpCur = $v[0]; $r.SharpMax = $v[1] }
+                                            $vSharp = & $probe 0x87
+                                            if ($vSharp -and (& $writable 0x87 $vSharp[0] $vSharp[1])) { $r.SharpCur = $vSharp[0]; $r.SharpMax = $vSharp[1] }
                                             # video gain R/G/B (0x16 / 0x18 / 0x1A)
                                             $vr = & $probe 0x16; $vg = & $probe 0x18; $vb = & $probe 0x1A
                                             if ($vr -and $vg -and $vb) {
@@ -5975,6 +6075,42 @@ $ddcWorker = {
                                                 $v = & $readVcp 0xDF
                                                 # major in the high byte, minor in the low byte
                                                 if ($v) { $r.Mccs = '{0}.{1}' -f ([int]$v[0] -shr 8), ([int]$v[0] -band 0xFF) }
+                                            }
+                                            # Memorise this discovery ONLY when it looks clean. An empty
+                                            # caps string smells like a glitched read; and a control the
+                                            # display ADVERTISED that then answered nothing during the
+                                            # probe smells like a mid-probe fault (OSD menu open, I2C
+                                            # glitch, display dropping to sleep) - caching either would
+                                            # hide working controls for the whole session. A discovery
+                                            # that is not cached still publishes normally for this open,
+                                            # and the next Enum simply probes in full again - worst case
+                                            # equals the pre-cache behavior, never less. (A display that
+                                            # advertises a code and genuinely never answers it just never
+                                            # gets cached: same outcome as no cache at all.)
+                                            $suspect = ($allowed.ContainsKey(0x14) -and $null -eq $r.PreCur) -or
+                                                       ($allowed.ContainsKey(0x60) -and $null -eq $r.InCur) -or
+                                                       ($allowed.ContainsKey(0x62) -and $null -eq $r.VolCur) -or
+                                                       ($allowed.ContainsKey(0x8D) -and $null -eq $vMute) -or
+                                                       ($allowed.ContainsKey(0x87) -and $null -eq $vSharp) -or
+                                                       (($allowed.ContainsKey(0x16) -or $allowed.ContainsKey(0x18) -or $allowed.ContainsKey(0x1A)) -and
+                                                        ($null -eq $vr -or $null -eq $vg -or $null -eq $vb)) -or
+                                                       (@($allowed[0xDC]).Count -gt 1 -and $null -eq $r.ModeCur)
+                                            if ($caps -and -not $suspect) {
+                                                $ddcCache[$ckey] = @{
+                                                    Desc = [string]$r.Desc
+                                                    HasPre = ($null -ne $r.PreCur); Presets = @($r.Presets)
+                                                    Has60 = ($null -ne $r.InCur); Inputs = @($r.Inputs)
+                                                    HasVol = ($null -ne $r.VolCur); HasMute = ($null -ne $r.MuteCur)
+                                                    SharpOk = ($null -ne $r.SharpCur); HasRgb = ($null -ne $r.RCur)
+                                                    PowerOff = $r.PowerOff; PowerHard = [bool]$r.PowerHard
+                                                    Modes = @($r.Modes)
+                                                    HasColorReset = [bool]$r.HasColorReset
+                                                    HasLevelReset = [bool]$r.HasLevelReset
+                                                    HasFactoryReset = [bool]$r.HasFactoryReset
+                                                    Tech = [string]$r.Tech; SubPixel = [string]$r.SubPixel; Mccs = [string]$r.Mccs
+                                                    HasC0 = ($null -ne $r.UsageHours)
+                                                }
+                                            }
                                             }
                                         }
                                         $mons += ,@{ H = $h; Ok = $r.Ok }
@@ -6687,7 +6823,22 @@ function Position-Osd {
 }
 
 function Show-Osd {
-    if (-not $script:osd) { try { New-Osd } catch { $script:osd = $null; return } }
+    if (-not $script:osd) {
+        try { New-Osd; $script:osdFail = 0 } catch {
+            $script:osd = $null
+            # The tick retries this every 500ms forever; an overlay that never
+            # comes up should say why somewhere. First failure and then one
+            # per ~minute go to error.log, so the file can't balloon either.
+            $script:osdFail = [int]$script:osdFail + 1
+            if ($script:osdFail -eq 1 -or ($script:osdFail % 120) -eq 0) {
+                try {
+                    ('{0:yyyy-MM-dd HH:mm:ss} overlay create failed (try #{1}): {2}' -f [DateTime]::Now, $script:osdFail, $_) |
+                        Out-File -FilePath (Join-Path $script:AppRoot 'error.log') -Encoding utf8 -Append
+                } catch { }
+            }
+            return
+        }
+    }
     if (-not $script:osd.IsVisible) { $script:osd.Show(); $script:osd.UpdateLayout(); Position-Osd }
 }
 # The FPS tracer is started once, the first time an FPS-enabled overlay needs

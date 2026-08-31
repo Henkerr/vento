@@ -31,6 +31,12 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
+; The app holds this mutex while it runs, so the wizard tells the user to
+; close Vento instead of overwriting files in use. The in-app silent updater
+; is unaffected: it releases the mutex (Quit-App) before launching setup.
+AppMutex=Global\VentoSingleInstance
+; ETW FPS tracing, toasts and SetWindowDisplayAffinity all want Windows 10+.
+MinVersion=10.0
 
 [Tasks]
 Name: "startup"; Description: "&Start Vento automatically when Windows starts"
