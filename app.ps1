@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.7.1'
+$script:AppVersion = '1.7.2'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -888,6 +888,7 @@ $worker = {
         $lastLoopMs = [long]0
         $lastPassMs = [long](-1)
         $lastWall = [DateTime]::UtcNow
+        $reapplyAt = @()   # pending post-resume re-apply marks (stopwatch ms)
         $tickErr = 0
         while (-not $sync.Exit) {
           # A transient fault in a single tick (a sensor read, a fan write)
@@ -914,8 +915,23 @@ $worker = {
                 if ($boostOn -and $sync.Data.ActiveMode -eq 'quiet' -and $s.boostEnabled) { Set-CaseSpeed $s.boostCase }
                 $lastCurve = -100
                 $sinceUpdate = 999999
+                # One write at wake is not enough on real hardware (live-tested
+                # 2026-09-01: fans stayed loud in Quiet until a manual toggle).
+                # This first write can land while the board's EC/SuperIO is
+                # still running its own resume init, which then reverts the
+                # fans to BIOS full AFTER us. So re-assert a few more times as
+                # the machine settles - the writes are cheap and idempotent,
+                # and whoever writes last wins. The user's manual re-toggle
+                # always worked precisely because it came late enough.
+                $reapplyAt = @(($nowMs + 5000), ($nowMs + 15000), ($nowMs + 45000))
             }
             $lastWall = $wallNow
+            if ($reapplyAt.Count -gt 0 -and $nowMs -ge $reapplyAt[0]) {
+                $reapplyAt = @($reapplyAt | Select-Object -Skip 1)
+                Set-Mode $sync.Data.ActiveMode
+                if ($boostOn -and $sync.Data.ActiveMode -eq 'quiet' -and $s.boostEnabled) { Set-CaseSpeed $s.boostCase }
+                $lastCurve = -100
+            }
             $pending = $sync.PendingMode
             if ($pending) {
                 # Clear only if unchanged so a click landing mid-cycle isn't lost

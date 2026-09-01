@@ -6,6 +6,31 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.7.2 — 2026-09-01
+
+Steadier wake-ups and instant displays.
+
+### Fixed
+- **Fans now really return to your mode after sleep.** The wake-up re-apply used to fire
+  once, so early that the motherboard's own resume would quietly override it back to full
+  speed — Vento now re-asserts your fan mode a few more times while the machine settles.
+- **The overlay no longer vanishes mid-game on a single failed sensor read** — a momentary
+  GPU-load hiccup now gets the same 60-second grace as menus and loading screens.
+- Long display scene names on profile tiles (like CINEMA) are no longer cut off — the tile
+  summary got its own second line.
+- If the overlay window can't be created, Vento now writes the reason to error.log instead
+  of retrying silently forever.
+
+### Changed
+- **Displays re-opens in a fraction of the time.** Vento now remembers each display's
+  verified control set for the session, so re-opening the panel only re-reads the current
+  values — about five times faster on real hardware. A discovery that looks glitchy is
+  never memorised; the next open probes in full again.
+- The installer now asks you to close a running Vento instead of overwriting its files in
+  use, and states Windows 10 or newer as required.
+
+---
+
 ## 1.7.1 — 2026-08-29
 
 Polish and fixes for the 1.7 features.
