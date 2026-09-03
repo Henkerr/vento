@@ -1,4 +1,4 @@
-# =====================================================================
+﻿# =====================================================================
 #  Vento - lightweight fan monitoring & control for Windows
 #  PowerShell 5.1 + WPF + LibreHardwareMonitor. Admin rights required
 #  for SuperIO sensor access.
@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.7.2'
+$script:AppVersion = '1.7.3'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -854,6 +854,20 @@ $worker = {
             if ($ctlCase) { $ctlCase.Control.SetSoftware([math]::Max(20, $pct)) }
         }
 
+        function Reset-FanControls {
+            # LHM's Control setters are change-gated and nothing in its update
+            # loop ever re-writes control registers: after sleep the SuperIO
+            # forgets our duty while LHM still caches it, so re-applying the
+            # same mode used to write NOTHING to the chip (the 1.6.1 and 1.7.2
+            # wake fixes were silent no-ops; the manual mode toggle worked only
+            # because its values actually changed). Dropping to Default first
+            # makes the next SetSoftware a real mode change, whose handler
+            # writes the value to the chip (verified in LHM 0.9.6 source:
+            # Control.cs setters + SuperIOHardware.cs ControlModeChanged).
+            if ($ctlCpu)  { $ctlCpu.Control.SetDefault() }
+            if ($ctlCase) { $ctlCase.Control.SetDefault() }
+        }
+
         function Set-Mode([string]$mode) {
             $s = $sync.Settings
             switch ($mode) {
@@ -911,23 +925,20 @@ $worker = {
             # QPC can pause across S3.
             $wallNow = [DateTime]::UtcNow
             if (($wallNow - $lastWall).TotalSeconds -gt 25) {
+                # Reset-FanControls is what makes this re-apply actually reach
+                # the chip - see its comment. The staged repeats below cover a
+                # board whose EC settles late and re-arms its own defaults.
+                Reset-FanControls
                 Set-Mode $sync.Data.ActiveMode
                 if ($boostOn -and $sync.Data.ActiveMode -eq 'quiet' -and $s.boostEnabled) { Set-CaseSpeed $s.boostCase }
                 $lastCurve = -100
                 $sinceUpdate = 999999
-                # One write at wake is not enough on real hardware (live-tested
-                # 2026-09-01: fans stayed loud in Quiet until a manual toggle).
-                # This first write can land while the board's EC/SuperIO is
-                # still running its own resume init, which then reverts the
-                # fans to BIOS full AFTER us. So re-assert a few more times as
-                # the machine settles - the writes are cheap and idempotent,
-                # and whoever writes last wins. The user's manual re-toggle
-                # always worked precisely because it came late enough.
                 $reapplyAt = @(($nowMs + 5000), ($nowMs + 15000), ($nowMs + 45000))
             }
             $lastWall = $wallNow
             if ($reapplyAt.Count -gt 0 -and $nowMs -ge $reapplyAt[0]) {
                 $reapplyAt = @($reapplyAt | Select-Object -Skip 1)
+                Reset-FanControls
                 Set-Mode $sync.Data.ActiveMode
                 if ($boostOn -and $sync.Data.ActiveMode -eq 'quiet' -and $s.boostEnabled) { Set-CaseSpeed $s.boostCase }
                 $lastCurve = -100

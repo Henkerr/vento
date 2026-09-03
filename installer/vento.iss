@@ -4,7 +4,7 @@
 #define AppName "Vento"
 ; CI can override with: ISCC /DAppVersion=x.y.z  (keep in sync with app.ps1)
 #ifndef AppVersion
-#define AppVersion "1.7.2"
+#define AppVersion "1.7.3"
 #endif
 #define AppPublisher "Blakfy"
 #define AppURL "https://github.com/Henkerr/vento"

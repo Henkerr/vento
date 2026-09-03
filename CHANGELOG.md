@@ -6,6 +6,21 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.7.3 — 2026-09-03
+
+The sleep fix that actually reaches the chip.
+
+### Fixed
+- **Fans really do return to your mode after sleep now.** The previous wake fixes re-applied
+  your fan mode, but the monitoring library underneath skips hardware writes when it believes
+  the value hasn't changed — and after sleep the chip has forgotten the setting while the
+  library still remembers it. Those re-applies never reached the hardware, which is exactly
+  why switching modes by hand always worked. The wake-up path now drops fan control to its
+  default first, so the re-apply is a real mode change and a real write. Verified against
+  the library's source, and re-asserted at 5, 15 and 45 seconds after wake for good measure.
+
+---
+
 ## 1.7.2 — 2026-09-01
 
 Steadier wake-ups and instant displays.
