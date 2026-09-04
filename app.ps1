@@ -459,6 +459,15 @@ function Get-DefaultSettings {
         osdColSsd        = ''
         osdColMb         = ''
         osdColFan        = ''
+        osdPods          = $false      # AirPods battery in the overlay
+        osdColPods       = ''
+        # AirPods battery over Apple's BLE proximity advertisements. Wire
+        # format from public research (INRIA hal-02394619, furiousMAC) -
+        # passive listening only, nothing is ever written to the buds.
+        podsEnabled      = $true       # scan for AirPods battery broadcasts
+        podsModel        = 0           # learned model id (0 = learn from the first strong packet)
+        podsRssiMin      = -80         # ignore advertisements weaker than this (dBm)
+        podsWarn         = 20          # low-battery notification threshold (%)
         monSync          = $false      # monitor panel: one set of sliders drives all displays
         monProfile       = 'DAY'       # display profile currently applied
         monAdvOpen       = $true       # the ALL CONTROLS section starts expanded
@@ -571,6 +580,11 @@ function Import-Settings {
         $s.monAdvOpen       = [bool]$s.monAdvOpen
         $s.monNightFrom     = [int](Limit $s.monNightFrom 0 1439)
         $s.monNightTo       = [int](Limit $s.monNightTo   0 1439)
+        $s.osdPods          = [bool]$s.osdPods
+        $s.podsEnabled      = [bool]$s.podsEnabled
+        $s.podsModel        = [int](Limit $s.podsModel 0 65535)
+        $s.podsRssiMin      = [int](Limit $s.podsRssiMin -100 -40)
+        $s.podsWarn         = [int](Limit $s.podsWarn 5 50)
     } catch {
         $s = Get-DefaultSettings
     }
@@ -643,7 +657,7 @@ function Import-Settings {
     if (@('tr','tl','bl','br') -notcontains [string]$s.osdCorner) { $s.osdCorner = 'tr' }
     if (@('blade','strip','hero','pills','ghost','micro','thermo') -notcontains [string]$s.osdLayout) { $s.osdLayout = 'blade' }
     if (@('sirocco','ember','venom','violet','crimson','mono') -notcontains [string]$s.osdTheme) { $s.osdTheme = 'sirocco' }
-    foreach ($k in 'osdColFps','osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan') {
+    foreach ($k in 'osdColFps','osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan','osdColPods') {
         $v = [string]$s[$k]
         if ($v) { try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($v) } catch { $v = '' } }
         $s[$k] = $v
@@ -1821,6 +1835,12 @@ $xaml = @'
                              Margin="7,0,0,0" VerticalAlignment="Center" Text="STARTING"/>
                 </StackPanel>
               </Border>
+              <Button x:Name="BtnPods" Style="{StaticResource ChipTitleBtn}" ToolTip="AirPods battery" Margin="0,0,8,0">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="15" Text="&#xE7F6;" VerticalAlignment="Center"/>
+                  <TextBlock Text="PODS" FontSize="10" FontWeight="Bold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+              </Button>
               <Button x:Name="BtnMonitors" Style="{StaticResource ChipTitleBtn}" ToolTip="Displays: brightness, color, profiles" Margin="0,0,8,0">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="15" Text="&#xE7F4;" VerticalAlignment="Center"/>
@@ -2561,6 +2581,7 @@ $xaml = @'
                         <CheckBox x:Name="S_OsdFans" Style="{StaticResource SetCheck}" Content="Fan speeds (CPU + case)" Width="220"/>
                         <CheckBox x:Name="S_OsdSsd"  Style="{StaticResource SetCheck}" Content="SSD temperature" Width="220"/>
                         <CheckBox x:Name="S_OsdMb"   Style="{StaticResource SetCheck}" Content="Board temperature" Width="220"/>
+                        <CheckBox x:Name="S_OsdPods" Style="{StaticResource SetCheck}" Content="AirPods battery" Width="220"/>
                       </WrapPanel>
                       <TextBlock Style="{StaticResource SetLabel}" Text="Metric colors - click to pick one; unpainted metrics follow the theme" Margin="0,10,0,0"/>
                       <WrapPanel Margin="0,4,0,0">
@@ -2572,6 +2593,7 @@ $xaml = @'
                         <Button x:Name="O_ColSsd"   Style="{StaticResource SegBtn}" Content="SSD"   MinWidth="58" Margin="0,2,4,2"/>
                         <Button x:Name="O_ColMb"    Style="{StaticResource SegBtn}" Content="BOARD" MinWidth="58" Margin="0,2,4,2"/>
                         <Button x:Name="O_ColFan"   Style="{StaticResource SegBtn}" Content="FAN"   MinWidth="58" Margin="0,2,4,2"/>
+                        <Button x:Name="O_ColPods"  Style="{StaticResource SegBtn}" Content="PODS"  MinWidth="58" Margin="0,2,4,2"/>
                         <Button x:Name="O_ColReset" Style="{StaticResource SegBtn}" Content="Reset" MinWidth="58" Margin="8,2,0,2"/>
                       </WrapPanel>
 
@@ -3053,6 +3075,82 @@ $xaml = @'
               </Border>
             </Border>
           </Border>
+          <!-- PODS panel: AirPods battery, read passively from Apple's own BLE
+               proximity broadcasts. Shows only what the buds actually said and
+               how long ago - a closed case goes silent by design. -->
+          <Border x:Name="PodsOverlay" Grid.Row="1" Grid.RowSpan="2" Background="#E607090D" Visibility="Collapsed">
+            <Border Style="{StaticResource Card}" Margin="16,8,16,14">
+              <Border Style="{StaticResource CardInner}" Padding="20,16">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <StackPanel Grid.Row="0">
+                    <TextBlock Style="{StaticResource CardTitle}" Text="AIRPODS"/>
+                    <TextBlock x:Name="PodsStatus" Style="{StaticResource CardSub}" Text="Listening for battery broadcasts..."/>
+                  </StackPanel>
+                  <Grid Grid.Row="1">
+                    <StackPanel x:Name="PodsEmpty" VerticalAlignment="Center" HorizontalAlignment="Center">
+                      <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="44" Text="&#xE7F6;" Foreground="#2B3447" HorizontalAlignment="Center"/>
+                      <TextBlock x:Name="PodsEmptyText" Style="{StaticResource CardSub}" Margin="0,12,0,0" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="380"
+                                 Text="No battery broadcasts yet. AirPods send them while the buds are out of the case, or while the lid is open."/>
+                    </StackPanel>
+                    <StackPanel x:Name="PodsBody" VerticalAlignment="Center" Visibility="Collapsed" Width="400">
+                      <TextBlock x:Name="PodsModelText" FontSize="14" FontWeight="SemiBold" Foreground="#8FA3BC" HorizontalAlignment="Center" Text="AirPods"/>
+                      <StackPanel Margin="0,18,0,0">
+                        <Grid Margin="0,0,0,14">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="52"/><ColumnDefinition Width="*"/><ColumnDefinition Width="66"/><ColumnDefinition Width="22"/>
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Grid.Column="0" Text="LEFT" FontSize="10" FontWeight="Bold" Foreground="#8FA3BC" VerticalAlignment="Center"/>
+                          <Border Grid.Column="1" Width="240" Height="8" CornerRadius="4" Background="#1A2230" VerticalAlignment="Center" HorizontalAlignment="Left">
+                            <Border x:Name="PodsLBar" Height="8" CornerRadius="4" Background="#6FB1FF" Width="0" HorizontalAlignment="Left"/>
+                          </Border>
+                          <TextBlock Grid.Column="2" x:Name="PodsLVal" FontSize="16" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                          <TextBlock Grid.Column="3" x:Name="PodsLChg" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,14">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="52"/><ColumnDefinition Width="*"/><ColumnDefinition Width="66"/><ColumnDefinition Width="22"/>
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Grid.Column="0" Text="RIGHT" FontSize="10" FontWeight="Bold" Foreground="#8FA3BC" VerticalAlignment="Center"/>
+                          <Border Grid.Column="1" Width="240" Height="8" CornerRadius="4" Background="#1A2230" VerticalAlignment="Center" HorizontalAlignment="Left">
+                            <Border x:Name="PodsRBar" Height="8" CornerRadius="4" Background="#6FB1FF" Width="0" HorizontalAlignment="Left"/>
+                          </Border>
+                          <TextBlock Grid.Column="2" x:Name="PodsRVal" FontSize="16" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                          <TextBlock Grid.Column="3" x:Name="PodsRChg" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
+                        </Grid>
+                        <Grid>
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="52"/><ColumnDefinition Width="*"/><ColumnDefinition Width="66"/><ColumnDefinition Width="22"/>
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Grid.Column="0" Text="CASE" FontSize="10" FontWeight="Bold" Foreground="#8FA3BC" VerticalAlignment="Center"/>
+                          <Border Grid.Column="1" Width="240" Height="8" CornerRadius="4" Background="#1A2230" VerticalAlignment="Center" HorizontalAlignment="Left">
+                            <Border x:Name="PodsCBar" Height="8" CornerRadius="4" Background="#6FB1FF" Width="0" HorizontalAlignment="Left"/>
+                          </Border>
+                          <TextBlock Grid.Column="2" x:Name="PodsCVal" FontSize="16" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                          <TextBlock Grid.Column="3" x:Name="PodsCChg" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
+                        </Grid>
+                      </StackPanel>
+                      <TextBlock x:Name="PodsInfoText" Style="{StaticResource CardSub}" HorizontalAlignment="Center" Margin="0,18,0,0" Text=""/>
+                    </StackPanel>
+                  </Grid>
+                  <Grid Grid.Row="2" Margin="0,12,0,0">
+                    <TextBlock Style="{StaticResource CardSub}" Foreground="#4A5970" VerticalAlignment="Center" Margin="0,0,206,0"
+                               TextTrimming="CharacterEllipsis"
+                               Text="Read passively from Apple's own battery broadcasts - nothing is sent to the buds."/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                      <Button x:Name="BtnPodsForget" Style="{StaticResource GhostBtn}" Content="Forget" Width="82"
+                              ToolTip="Unbind these AirPods and learn the next pair heard close by"/>
+                      <Button x:Name="BtnPodsClose" Style="{StaticResource PrimaryBtn}" Content="Close" Width="96" Margin="8,0,0,0"/>
+                    </StackPanel>
+                  </Grid>
+                </Grid>
+              </Border>
+            </Border>
+          </Border>
         </Grid>
       </Border>
     </Border>
@@ -3133,8 +3231,11 @@ foreach ($name in @(
     'OsdCornerShell','O_CorTL','O_CorTR','O_CorBL','O_CorBR',
     'S_OsdScale','V_OsdScale','S_OsdSecond','S_OsdCapSafe',
     'S_OsdOpacity','V_OsdOpacity','BtnOsdMove','BtnOsdResetPos','OsdPosNote',
-    'S_OsdFps','S_OsdCpu','S_OsdGpu','S_OsdLoad','S_OsdRam','S_OsdFans','S_OsdSsd','S_OsdMb',
-    'O_ColFps','O_ColCpu','O_ColGpu','O_ColLoad','O_ColRam','O_ColSsd','O_ColMb','O_ColFan','O_ColReset',
+    'S_OsdFps','S_OsdCpu','S_OsdGpu','S_OsdLoad','S_OsdRam','S_OsdFans','S_OsdSsd','S_OsdMb','S_OsdPods',
+    'O_ColFps','O_ColCpu','O_ColGpu','O_ColLoad','O_ColRam','O_ColSsd','O_ColMb','O_ColFan','O_ColPods','O_ColReset',
+    'PodsOverlay','BtnPods','PodsStatus','PodsEmpty','PodsEmptyText','PodsBody','PodsModelText',
+    'PodsLVal','PodsLChg','PodsLBar','PodsRVal','PodsRChg','PodsRBar','PodsCVal','PodsCChg','PodsCBar',
+    'PodsInfoText','BtnPodsClose','BtnPodsForget',
     'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool',
     'S_CpuMax','S_GpuMax','S_Interval','S_StartMin','S_CloseTray','S_Updates','S_AutoStart',
     'V_QuietCase','V_NormalCase','V_PerfCase','V_PerfCpu',
@@ -3737,10 +3838,10 @@ $script:osdThemePick  = 'sirocco'
 $script:osdColorStage = @{}      # metric color overrides staged while the panel is open
 $script:osdCheckMap = @(@('S_OsdFps','osdFps'), @('S_OsdCpu','osdCpu'), @('S_OsdGpu','osdGpu'), @('S_OsdLoad','osdGpuLoad'),
                         @('S_OsdRam','osdRam'),
-                        @('S_OsdFans','osdFans'), @('S_OsdSsd','osdSsd'), @('S_OsdMb','osdMb'))
+                        @('S_OsdFans','osdFans'), @('S_OsdSsd','osdSsd'), @('S_OsdMb','osdMb'), @('S_OsdPods','osdPods'))
 $script:osdColBtnMap = @(@('O_ColFps','osdColFps'), @('O_ColCpu','osdColCpu'), @('O_ColGpu','osdColGpu'), @('O_ColLoad','osdColLoad'),
                          @('O_ColRam','osdColRam'), @('O_ColSsd','osdColSsd'), @('O_ColMb','osdColMb'),
-                         @('O_ColFan','osdColFan'))
+                         @('O_ColFan','osdColFan'), @('O_ColPods','osdColPods'))
 
 function Update-PickerButtons($map, [string]$picked) {
     foreach ($k in @($map.Keys)) {
@@ -3808,7 +3909,8 @@ function Update-OsdPreview {
         $script:osdState = 'cool'
         Build-OsdContent
         $sample = @{ cpu = "62$($script:deg)"; gpu = "71$($script:deg)"; load = '98%'; ram = '54%'
-                     ssd = "48$($script:deg)"; mb = "46$($script:deg)"; fan = "842 $($script:mid) 615" }
+                     ssd = "48$($script:deg)"; mb = "46$($script:deg)"; fan = "842 $($script:mid) 615"
+                     fps = '144'; pods = "100$($script:mid)90$($script:mid)30" }
         foreach ($id in @($script:osdVals.Keys)) { $script:osdVals[$id].Text = $sample[$id] }
         if ($el.OsdPreviewHost.Children.Count -gt 0) {
             $c = $el.OsdPreviewHost.Children[$el.OsdPreviewHost.Children.Count - 1]
@@ -4201,7 +4303,7 @@ $el.BtnUpdateNow.Add_Click({ $script:bannerDismissed = $true; Hide-UpdateBanner;
 $el.BtnUpdateLater.Add_Click({ $script:bannerDismissed = $true; Hide-UpdateBanner })
 $el.BtnSettings.Add_Click({
     if ($el.SettingsOverlay.Visibility -eq 'Visible') { $el.SettingsOverlay.Visibility = 'Collapsed' }
-    else { Open-Settings }
+    else { $el.PodsOverlay.Visibility = 'Collapsed'; Open-Settings }
 })
 
 # --- Monitor panel (DDC/CI) ------------------------------------------
@@ -5417,7 +5519,7 @@ $el.MonMapCanvas.Add_SizeChanged({ if ($el.MonitorOverlay.Visibility -eq 'Visibl
 $el.MonTimeCanvas.Add_SizeChanged({ if ($el.MonitorOverlay.Visibility -eq 'Visible') { Build-MonTimeline } })
 $el.BtnMonitors.Add_Click({
     if ($el.MonitorOverlay.Visibility -eq 'Visible') { $el.MonitorOverlay.Visibility = 'Collapsed' }
-    else { Open-Monitors }
+    else { $el.PodsOverlay.Visibility = 'Collapsed'; Open-Monitors }
 })
 $el.BtnMonClose.Add_Click({ $el.MonitorOverlay.Visibility = 'Collapsed' })
 $el.BtnMonRescan.Add_Click({
@@ -5746,6 +5848,322 @@ function Install-Update {
     [void]$script:psDl.AddScript($dl.ToString()).AddArgument($sync).AddArgument($u.AssetUrl).AddArgument($dst).AddArgument($u.Sha256)
     [void]$script:psDl.BeginInvoke()
 }
+
+# --- AirPods battery (BLE) -------------------------------------------
+# AirPods broadcast their battery in Apple's BLE proximity advertisements
+# (company id 0x004C, message type 0x07). Vento listens passively - nothing
+# is ever sent to the buds. Wire format from public research (INRIA
+# hal-02394619, furiousMAC continuity). The WinRT advertisement watcher
+# cannot be driven from PowerShell directly (WinRT events + winmd refs), so
+# a small C# class owns it; it is compiled in a background runspace because
+# the winmd-referencing compile takes ~1s that the UI thread shouldn't pay.
+$script:podsCompileStarted = $false
+$script:podsModels = @{
+    0x2002 = 'AirPods';   0x200F = 'AirPods 2'; 0x2013 = 'AirPods 3'
+    0x2019 = 'AirPods 4'; 0x201B = 'AirPods 4 ANC'
+    0x200E = 'AirPods Pro'; 0x2014 = 'AirPods Pro 2'; 0x2024 = 'AirPods Pro 2'
+    0x2027 = 'AirPods Pro 3'; 0x200A = 'AirPods Max'; 0x201F = 'AirPods Max'
+    0x2012 = 'Beats Fit Pro'
+}
+$script:pods = $null           # last merged state (see Update-PodsData)
+$script:podsBarWarn = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF8A8A'))
+$script:podsBarWarn.Freeze()
+$script:podsInk = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#EDF1F8'))
+$script:podsInk.Freeze()
+$script:podsLastPP = 0         # packet counter already processed
+$script:podsRetryAt = [DateTime]::MinValue
+$script:podsWarned = @{ L = $false; R = $false; C = $false }
+$script:podsLearn = $null      # unbound: @{Model;N} streak toward binding
+$script:podsFiltered = 0       # packets heard but rejected by the identity gates
+$script:podsModelPushed = $false
+
+function Start-PodsCompile {
+    if ($script:podsCompileStarted) { return }
+    $script:podsCompileStarted = $true
+    $body = {
+        param($sync)
+        try {
+            $gac = "$env:SystemRoot\Microsoft.NET\assembly\GAC_MSIL"
+            $refs = @(
+                "$env:SystemRoot\System32\WinMetadata\Windows.Devices.winmd"
+                "$env:SystemRoot\System32\WinMetadata\Windows.Foundation.winmd"
+                "$env:SystemRoot\System32\WinMetadata\Windows.Storage.winmd"
+                'System.dll'
+            )
+            # GAC folder names carry versions - resolve, never hardcode.
+            foreach ($n in 'System.Runtime', 'System.Runtime.WindowsRuntime', 'System.Runtime.InteropServices.WindowsRuntime') {
+                $dll = Get-ChildItem (Join-Path $gac $n) -Recurse -Filter "$n.dll" -ErrorAction Stop | Select-Object -First 1
+                if (-not $dll) { throw "facade missing: $n" }
+                $refs += $dll.FullName
+            }
+            $cp = New-Object System.CodeDom.Compiler.CompilerParameters
+            $cp.ReferencedAssemblies.AddRange([string[]]$refs)
+            Add-Type -CompilerParameters $cp -TypeDefinition @'
+using System;
+using Windows.Devices.Bluetooth.Advertisement;
+using Windows.Storage.Streams;
+
+namespace VentoNative {
+  public static class Pods {
+    static readonly object Gate = new object();
+    static BluetoothLEAdvertisementWatcher s_w;
+    static byte[] s_pkt; static short s_rssi; static long s_seenTick;
+    static int s_pp; static int s_model; static string s_err = "";
+
+    public static bool Running { get { lock (Gate) { return s_w != null; } } }
+    // Once bound, foreign models are dropped BEFORE the single latest-packet
+    // slot: otherwise a neighbour's chattier AirPods would keep overwriting
+    // ours and starve every consumer. 0 accepts everything (learning).
+    public static void SetModel(int m) { lock (Gate) { s_model = m; } }
+
+    public static int Start() {
+      lock (Gate) {
+        if (s_w != null) return 0;
+        try {
+          var w = new BluetoothLEAdvertisementWatcher();
+          // Win11 26100 refuses Start() without a Received handler attached.
+          w.Received += OnReceived;
+          w.Stopped += OnStopped;
+          w.Start();
+          s_w = w; s_err = "";
+          return 0;
+        } catch (Exception e) { s_err = e.Message; s_w = null; return -1; }
+      }
+    }
+    public static void Stop() {
+      lock (Gate) { if (s_w != null) { try { s_w.Stop(); } catch (Exception) { } s_w = null; } }
+    }
+    static void OnReceived(BluetoothLEAdvertisementWatcher w, BluetoothLEAdvertisementReceivedEventArgs a) {
+      try {
+        var md = a.Advertisement.ManufacturerData;
+        for (int i = 0; i < md.Count; i++) {
+          var m = md[i];
+          if (m.CompanyId != 0x004C) continue;
+          var buf = m.Data;
+          if (buf == null || buf.Length != 27) continue;
+          var bytes = new byte[27];
+          DataReader.FromBuffer(buf).ReadBytes(bytes);
+          if (bytes[0] != 0x07 || bytes[1] != 25) continue;
+          int model = (bytes[4] << 8) | bytes[3];
+          lock (Gate) {
+            if (s_model != 0 && model != s_model) continue;
+            s_pkt = bytes; s_rssi = a.RawSignalStrengthInDBm;
+            s_seenTick = Environment.TickCount; s_pp++;
+          }
+        }
+      } catch (Exception) { }
+    }
+    static void OnStopped(BluetoothLEAdvertisementWatcher w, BluetoothLEAdvertisementWatcherStoppedEventArgs a) {
+      lock (Gate) { s_err = a.Error.ToString(); s_w = null; }
+    }
+    // "pp;rssi;ageMs;hex22" - only the first 11 payload bytes ever leave this
+    // class; bytes 11-26 are a privacy-sensitive opaque blob and stay here.
+    public static string Poll() {
+      lock (Gate) {
+        string err = s_err.Length > 0 ? ";ERR:" + s_err : "";
+        if (s_pkt == null) return s_pp + ";;;" + err;
+        long age = (long)(Environment.TickCount - s_seenTick);
+        return s_pp + ";" + s_rssi + ";" + age + ";" +
+               BitConverter.ToString(s_pkt, 0, 11).Replace("-", "") + err;
+      }
+    }
+  }
+}
+'@
+            $sync.PodsReady = $true
+        } catch { $sync.PodsErr = "$_" }
+    }
+    $script:podsRunspace = [runspacefactory]::CreateRunspace()
+    $script:podsRunspace.Open()
+    $script:psPods = [powershell]::Create()
+    $script:psPods.Runspace = $script:podsRunspace
+    [void]$script:psPods.AddScript($body.ToString()).AddArgument($sync)
+    [void]$script:psPods.BeginInvoke()
+}
+
+# Decode one Poll() snapshot into $script:pods. Every claim the UI makes
+# traces back to a real packet: fields update only when the packet carried a
+# valid value, and everything is stamped with when it was last heard.
+function Update-PodsData {
+    if (-not ('VentoNative.Pods' -as [type])) { return }
+    $s = $script:settings
+    $snap = [VentoNative.Pods]::Poll()
+    $p = $snap -split ';', 5
+    $pp = [int]$p[0]
+    if ($pp -eq $script:podsLastPP -or -not $p[3]) { return }
+    $script:podsLastPP = $pp
+    $rssi = [int]$p[1]
+    if ($rssi -lt [int]$s.podsRssiMin) { $script:podsFiltered++; return }
+    $hex = [string]$p[3]
+    if ($hex.Length -lt 22) { return }
+    $b = New-Object 'int[]' 11
+    for ($i = 0; $i -lt 11; $i++) { $b[$i] = [Convert]::ToInt32($hex.Substring($i * 2, 2), 16) }
+    $model = ($b[4] -shl 8) -bor $b[3]
+    # Bind to a model heard REPEATEDLY at close range, then only accept that
+    # model: BLE addresses rotate for privacy, so model id plus signal
+    # strength is the best identity this protocol offers. Three consecutive
+    # strong packets keep a one-off blip from an apartment neighbour from
+    # being adopted; FORGET in the panel unbinds if it ever goes wrong.
+    if ([int]$s.podsModel -eq 0) {
+        # -70: this rig's adapter reads a worn bud AT THE DESK as -76, and the
+        # case held next to the PC as -42..-62 - so binding wants the buds
+        # brought close once, without demanding they touch the antenna
+        if ($rssi -lt -70) { $script:podsFiltered++; return }
+        if ($script:podsLearn -and [int]$script:podsLearn.Model -eq $model) { $script:podsLearn.N++ }
+        else { $script:podsLearn = @{ Model = $model; N = 1 } }
+        if ([int]$script:podsLearn.N -lt 3) { $script:podsFiltered++; return }
+        $s.podsModel = $model
+        $script:podsLearn = $null
+        if ('VentoNative.Pods' -as [type]) { try { [VentoNative.Pods]::SetModel($model) } catch { } }
+        $script:saveTimer.Stop(); $script:saveTimer.Start()
+    } elseif ($model -ne [int]$s.podsModel) { $script:podsFiltered++; return }
+    $fromLeft = ($b[5] -band 0x20) -ne 0
+    $currBat = $b[6] -band 0x0F; $anotBat = ($b[6] -shr 4) -band 0x0F
+    $caseBat = $b[7] -band 0x0F
+    $chCurr = ($b[7] -band 0x10) -ne 0; $chAnot = ($b[7] -band 0x20) -ne 0
+    $inCurr = ($b[5] -band 0x02) -ne 0; $inAnot = ($b[5] -band 0x08) -ne 0
+    if (-not $script:pods) {
+        $script:pods = @{ Model = 0; L = $null; R = $null; Case = $null
+                          ChgL = $false; ChgR = $false; ChgCase = $false
+                          InL = $false; InR = $false; Lid = $null
+                          Rssi = 0; Seen = $null; LSeen = $null; RSeen = $null; CaseSeen = $null }
+    }
+    $d = $script:pods
+    $d.Model = $model; $d.Rssi = $rssi; $d.Seen = [DateTime]::Now
+    $lB = $(if ($fromLeft) { $currBat } else { $anotBat })
+    $rB = $(if ($fromLeft) { $anotBat } else { $currBat })
+    # Each side keeps its own last-heard stamp: a bud that died or stayed
+    # home must not ride the other bud's freshness and read as live data.
+    if ($lB -le 10) { $d.L = $lB * 10; $d.LSeen = [DateTime]::Now }
+    if ($rB -le 10) { $d.R = $rB * 10; $d.RSeen = [DateTime]::Now }
+    if ($caseBat -le 10) { $d.Case = $caseBat * 10; $d.CaseSeen = [DateTime]::Now }
+    $d.ChgL = $(if ($fromLeft) { $chCurr } else { $chAnot })
+    $d.ChgR = $(if ($fromLeft) { $chAnot } else { $chCurr })
+    $d.ChgCase = ($b[7] -band 0x40) -ne 0
+    # the in-ear bit reads true while a pod charges - filter it, as the
+    # charging pod is definitionally in the case
+    $d.InL = $(if ($fromLeft) { $inCurr } else { $inAnot }) -and -not $d.ChgL
+    $d.InR = $(if ($fromLeft) { $inAnot } else { $inCurr }) -and -not $d.ChgR
+    $d.Lid = ($b[8] -band 0x08) -eq 0   # $true = lid open
+    # Low-battery toast per component, re-armed by charging or recovery.
+    foreach ($t in @(@('L', $d.L, $d.ChgL, 'Left'), @('R', $d.R, $d.ChgR, 'Right'), @('C', $d.Case, $d.ChgCase, 'Case'))) {
+        $k = $t[0]; $v = $t[1]; $chg = $t[2]
+        if ($null -eq $v) { continue }
+        if ($chg -or $v -ge ([int]$s.podsWarn + 20)) { $script:podsWarned[$k] = $false }
+        elseif ($v -le [int]$s.podsWarn -and -not $script:podsWarned[$k]) {
+            $script:podsWarned[$k] = $true
+            [void](Show-Toast 'AirPods battery low' ('{0}: {1}%' -f $t[3], $v) 'vento-pods')
+        }
+    }
+}
+
+function Get-PodsAgeText([DateTime]$t) {
+    $sec = [int]([DateTime]::Now - $t).TotalSeconds
+    if ($sec -lt 5) { return 'just now' }
+    if ($sec -lt 90) { return ('{0}s ago' -f $sec) }
+    $min = [int][math]::Round($sec / 60.0)
+    if ($min -lt 90) { return ('{0}m ago' -f $min) }
+    return ('{0}h ago' -f [int][math]::Round($min / 60.0))
+}
+
+function Update-PodsPanel {
+    # Most specific state first: a disabled feature or a dead compile must
+    # never sit behind a stale 'Starting...' line.
+    if (-not [bool]$script:settings.podsEnabled) { $el.PodsStatus.Text = 'Scanning is turned off (podsEnabled in settings.json).' }
+    elseif ($sync.PodsErr) { $el.PodsStatus.Text = 'Bluetooth LE is not available on this machine.' }
+    elseif (-not $sync.PodsReady) { $el.PodsStatus.Text = 'Starting the Bluetooth listener...' }
+    elseif (('VentoNative.Pods' -as [type]) -and -not [VentoNative.Pods]::Running) { $el.PodsStatus.Text = 'Bluetooth is off or unavailable - retrying.' }
+    else { $el.PodsStatus.Text = 'Listening for battery broadcasts...' }
+    $d = $script:pods
+    if (-not $d -or -not $d.Seen) {
+        # Packets are arriving but failing the identity gates - saying
+        # 'no broadcasts' would blame the wrong thing.
+        if ($script:podsFiltered -gt 0) {
+            $el.PodsEmptyText.Text = ('Hearing Apple battery broadcasts nearby ({0} so far), but none repeated, close and matching enough to lock onto yet. Keep the buds next to the PC for a few seconds.' -f $script:podsFiltered)
+        }
+        return
+    }
+    $el.PodsEmpty.Visibility = 'Collapsed'
+    $el.PodsBody.Visibility = 'Visible'
+    $name = if ($script:podsModels.ContainsKey($d.Model)) { $script:podsModels[$d.Model] } else { 'AirPods (0x{0:X4})' -f $d.Model }
+    $el.PodsModelText.Text = $name
+    foreach ($t in @(@('L', $d.L, $d.ChgL), @('R', $d.R, $d.ChgR), @('C', $d.Case, $d.ChgCase))) {
+        $k = $t[0]; $v = $t[1]
+        # red only while not charging - a charging component is already healing
+        $low = ($null -ne $v -and $v -le [int]$script:settings.podsWarn -and -not $t[2])
+        $el["Pods${k}Val"].Text = $(if ($null -ne $v) { '{0}%' -f $v } else { '--' })
+        $el["Pods${k}Val"].Foreground = $(if ($low) { $script:podsBarWarn } else { $script:podsInk })
+        $el["Pods${k}Chg"].Visibility = $(if ($t[2]) { 'Visible' } else { 'Collapsed' })
+        $bar = $el["Pods${k}Bar"]
+        $bar.Width = [math]::Round(240.0 * $(if ($null -ne $v) { $v / 100.0 } else { 0 }), 1)
+        $bar.Background = $(if ($low) { $script:podsBarWarn } else { $script:brushAccent })
+    }
+    $info = '{0} dBm {1} updated {2}' -f $d.Rssi, $script:mid, (Get-PodsAgeText $d.Seen)
+    if ($null -ne $d.Lid) { $info += (' {0} {1}' -f $script:mid, $(if ($d.Lid) { 'lid open' } else { 'lid closed' })) }
+    if ($d.InL -or $d.InR) { $info += (' {0} in ear' -f $script:mid) }
+    # Any component whose own last-heard stamp lags the packet stream gets an
+    # explicit age - the number on the tile is history, not a live reading.
+    foreach ($t in @(@('left', $d.L, $d.LSeen), @('right', $d.R, $d.RSeen), @('case', $d.Case, $d.CaseSeen))) {
+        if ($null -ne $t[1] -and $t[2] -and ([DateTime]::Now - $t[2]).TotalMinutes -gt 3) {
+            $info += (' {0} {1} as of {2}' -f $script:mid, $t[0], (Get-PodsAgeText $t[2]))
+        }
+    }
+    $el.PodsInfoText.Text = $info
+}
+
+# Called every UI tick: keeps the watcher alive, folds new packets in, and
+# refreshes whichever surfaces (panel, OSD) are showing pods data.
+function Update-PodsTick {
+    $s = $script:settings
+    # The open panel repaints on EVERY path, including the early returns -
+    # otherwise a compile error or a disabled feature leaves whatever status
+    # line happened to be there when the panel opened.
+    $vis = ($el.PodsOverlay.Visibility -eq 'Visible')
+    if (-not [bool]$s.podsEnabled) {
+        if (('VentoNative.Pods' -as [type]) -and [VentoNative.Pods]::Running) { [VentoNative.Pods]::Stop() }
+        if ($vis) { Update-PodsPanel }
+        return
+    }
+    if (-not $script:podsCompileStarted) { Start-PodsCompile; if ($vis) { Update-PodsPanel }; return }
+    if (-not $sync.PodsReady -or -not ('VentoNative.Pods' -as [type])) { if ($vis) { Update-PodsPanel }; return }
+    if (-not $script:podsModelPushed) {
+        # tell the C# filter which model is ours before the first packets land
+        try { [VentoNative.Pods]::SetModel([int]$s.podsModel) } catch { }
+        $script:podsModelPushed = $true
+    }
+    if (-not [VentoNative.Pods]::Running -and [DateTime]::Now -gt $script:podsRetryAt) {
+        # Bluetooth may be off right now; keep trying gently.
+        $script:podsRetryAt = [DateTime]::Now.AddSeconds(15)
+        [void][VentoNative.Pods]::Start()
+    }
+    Update-PodsData
+    if ($vis) { Update-PodsPanel }
+}
+
+$el.BtnPods.Add_Click({
+    if ($el.PodsOverlay.Visibility -eq 'Visible') { $el.PodsOverlay.Visibility = 'Collapsed' }
+    else {
+        # one overlay at a time - PodsOverlay is last in the XAML, so anything
+        # left open underneath would keep its chip looking dead
+        $el.SettingsOverlay.Visibility = 'Collapsed'
+        $el.MonitorOverlay.Visibility = 'Collapsed'
+        $el.PodsOverlay.Visibility = 'Visible'; Update-PodsPanel
+    }
+})
+$el.BtnPodsClose.Add_Click({ $el.PodsOverlay.Visibility = 'Collapsed' })
+$el.BtnPodsForget.Add_Click({
+    # Unbind: back to learning mode; next model heard 3x at close range wins.
+    $script:settings.podsModel = 0
+    $sync.Settings.podsModel = 0
+    if ('VentoNative.Pods' -as [type]) { try { [VentoNative.Pods]::SetModel(0) } catch { } }
+    $script:pods = $null; $script:podsLearn = $null; $script:podsFiltered = 0
+    $script:podsWarned = @{ L = $false; R = $false; C = $false }
+    $el.PodsBody.Visibility = 'Collapsed'
+    $el.PodsEmpty.Visibility = 'Visible'
+    $el.PodsEmptyText.Text = 'Forgotten. Keep the AirPods you want next to the PC - the first pair heard a few times up close becomes the new one.'
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    Update-PodsPanel
+})
 
 # --- DDC/CI worker ---------------------------------------------------
 # DDC calls take 50ms-2s each, so they run in their own runspace fed by a
@@ -6363,8 +6781,10 @@ $window.Add_StateChanged({
 })
 $window.Add_KeyDown({ param($s, $e)
     if ($e.Key -eq 'Escape') {
-        if ($el.SettingsOverlay.Visibility -eq 'Visible') { $el.SettingsOverlay.Visibility = 'Collapsed' }
+        # top of the z-order closes first: Pods is the last overlay in XAML
+        if ($el.PodsOverlay.Visibility -eq 'Visible') { $el.PodsOverlay.Visibility = 'Collapsed' }
         elseif ($el.MonitorOverlay.Visibility -eq 'Visible') { $el.MonitorOverlay.Visibility = 'Collapsed' }
+        elseif ($el.SettingsOverlay.Visibility -eq 'Visible') { $el.SettingsOverlay.Visibility = 'Collapsed' }
     }
 })
 
@@ -6412,7 +6832,8 @@ $script:osdMetricDef = @(
     @{ Id = 'ram';  Key = 'osdRam';     Col = 'osdColRam';  Lab = 'RAM' },
     @{ Id = 'ssd';  Key = 'osdSsd';     Col = 'osdColSsd';  Lab = 'SSD' },
     @{ Id = 'mb';   Key = 'osdMb';      Col = 'osdColMb';   Lab = 'BOARD' },
-    @{ Id = 'fan';  Key = 'osdFans';    Col = 'osdColFan';  Lab = 'FAN' }
+    @{ Id = 'fan';  Key = 'osdFans';    Col = 'osdColFan';  Lab = 'FAN' },
+    @{ Id = 'pods'; Key = 'osdPods';    Col = 'osdColPods'; Lab = 'PODS' }
 )
 
 function Get-OsdTheme {
@@ -7457,6 +7878,9 @@ $script:timer.Add_Tick({
         Update-FanSpark $script:histFanCase $el.CaseFanSpark $el.FanSparkHost $script:fanMax $el.CaseFanSparkFill
     }
 
+    # --- AirPods battery: fold in new packets, keep the watcher alive ---
+    try { Update-PodsTick } catch { }
+
     # --- OSD overlay ---
     $osdWant = if ($script:osdEditing) { $true } else {
         switch ([string]$script:settings.osdMode) {
@@ -7497,6 +7921,19 @@ $script:timer.Add_Tick({
                 fan  = '{0} {1} {2}' -f $(if ($null -ne $d.CpuFan) { $d.CpuFan } else { '--' }),
                                         $script:mid,
                                         $(if ($null -ne $d.CaseFan) { $d.CaseFan } else { '--' })
+                pods = $(
+                    $pd = $script:pods
+                    # per-side staleness: every number rides its OWN last-heard
+                    # stamp, so a bud that died or stayed home can't borrow the
+                    # other bud's freshness - a frozen number is a quiet lie
+                    $now0 = [DateTime]::Now
+                    $lF = ($pd -and $pd.LSeen -and ($now0 - $pd.LSeen).TotalSeconds -lt 60)
+                    $rF = ($pd -and $pd.RSeen -and ($now0 - $pd.RSeen).TotalSeconds -lt 60)
+                    if ($lF -or $rF) {
+                        $txt = '{0}{1}{2}' -f $(if ($lF) { $pd.L } else { '-' }), $script:mid, $(if ($rF) { $pd.R } else { '-' })
+                        if ($null -ne $pd.Case -and $pd.CaseSeen -and ($now0 - $pd.CaseSeen).TotalMinutes -lt 10) { $txt += ('{0}{1}' -f $script:mid, $pd.Case) }
+                        $txt
+                    } else { '--' })
             }
             foreach ($id in @($script:osdVals.Keys)) { $script:osdVals[$id].Text = $ovals[$id] }
             if ($script:osdThermoDot) {
@@ -7593,6 +8030,9 @@ finally {
     if ($script:psDdc) { try { $script:psDdc.Dispose() } catch { } }
     if ($script:ddcRunspace) { try { $script:ddcRunspace.Dispose() } catch { } }
     Stop-FpsTracer   # tears down the real-time ETW session so it doesn't outlive the app
+    if ('VentoNative.Pods' -as [type]) { try { [VentoNative.Pods]::Stop() } catch { } }
+    if ($script:psPods) { try { $script:psPods.Dispose() } catch { } }
+    if ($script:podsRunspace) { try { $script:podsRunspace.Dispose() } catch { } }
     if ($script:notify) {
         try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
     }
