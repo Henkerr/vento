@@ -3075,82 +3075,75 @@ $xaml = @'
               </Border>
             </Border>
           </Border>
-          <!-- PODS panel: AirPods battery, read passively from Apple's own BLE
-               proximity broadcasts. Shows only what the buds actually said and
-               how long ago - a closed case goes silent by design. -->
-          <Border x:Name="PodsOverlay" Grid.Row="1" Grid.RowSpan="2" Background="#E607090D" Visibility="Collapsed">
-            <Border Style="{StaticResource Card}" Margin="16,8,16,14">
-              <Border Style="{StaticResource CardInner}" Padding="20,16">
-                <Grid>
-                  <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                  </Grid.RowDefinitions>
-                  <StackPanel Grid.Row="0">
-                    <TextBlock Style="{StaticResource CardTitle}" Text="AIRPODS"/>
-                    <TextBlock x:Name="PodsStatus" Style="{StaticResource CardSub}" Text="Listening for battery broadcasts..."/>
+          <!-- PODS flyout: AirPods battery, read passively from Apple's own BLE
+               proximity broadcasts. A small card under the PODS chip - click
+               anywhere else (or Esc) to close. Shows only what the buds
+               actually said and how long ago; a closed case goes silent by
+               design. -->
+          <Grid x:Name="PodsOverlay" Grid.Row="1" Grid.RowSpan="2" Visibility="Collapsed">
+            <Border x:Name="PodsBackdrop" Background="#01000000"/>
+            <Border Style="{StaticResource Card}" Width="304" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,2,16,0"
+                    BorderThickness="1" BorderBrush="#1FFFFFFF">
+              <Border.Effect>
+                <DropShadowEffect BlurRadius="28" ShadowDepth="8" Direction="270" Opacity="0.6" Color="#000000"/>
+              </Border.Effect>
+              <Border Style="{StaticResource CardInner}" Padding="16,12,16,10">
+                <StackPanel>
+                  <Grid>
+                    <TextBlock x:Name="PodsModelText" Style="{StaticResource CardTitle}" Text="AIRPODS" VerticalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                      <Ellipse x:Name="PodsDot" Width="6" Height="6" Fill="#4A5970" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBlock x:Name="PodsStatus" FontSize="10" Foreground="#4A5970" VerticalAlignment="Center" Text="Starting"/>
+                    </StackPanel>
+                  </Grid>
+                  <StackPanel x:Name="PodsEmpty" Margin="0,10,0,2">
+                    <TextBlock x:Name="PodsEmptyText" Style="{StaticResource CardSub}" Margin="0" TextWrapping="Wrap" TextTrimming="None"
+                               Text="No battery broadcasts yet. AirPods send them while a bud is out of the case or the lid is open - keep them near the PC."/>
                   </StackPanel>
-                  <Grid Grid.Row="1">
-                    <StackPanel x:Name="PodsEmpty" VerticalAlignment="Center" HorizontalAlignment="Center">
-                      <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="44" Text="&#xE7F6;" Foreground="#2B3447" HorizontalAlignment="Center"/>
-                      <TextBlock x:Name="PodsEmptyText" Style="{StaticResource CardSub}" Margin="0,12,0,0" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="380"
-                                 Text="No battery broadcasts yet. AirPods send them while the buds are out of the case, or while the lid is open."/>
-                    </StackPanel>
-                    <StackPanel x:Name="PodsBody" VerticalAlignment="Center" Visibility="Collapsed" Width="400">
-                      <TextBlock x:Name="PodsModelText" FontSize="14" FontWeight="SemiBold" Foreground="#8FA3BC" HorizontalAlignment="Center" Text="AirPods"/>
-                      <StackPanel Margin="0,18,0,0">
-                        <Grid Margin="0,0,0,14">
-                          <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="52"/><ColumnDefinition Width="*"/><ColumnDefinition Width="66"/><ColumnDefinition Width="22"/>
-                          </Grid.ColumnDefinitions>
-                          <TextBlock Grid.Column="0" Text="LEFT" FontSize="10" FontWeight="Bold" Foreground="#8FA3BC" VerticalAlignment="Center"/>
-                          <Border Grid.Column="1" Width="240" Height="8" CornerRadius="4" Background="#1A2230" VerticalAlignment="Center" HorizontalAlignment="Left">
-                            <Border x:Name="PodsLBar" Height="8" CornerRadius="4" Background="#6FB1FF" Width="0" HorizontalAlignment="Left"/>
-                          </Border>
-                          <TextBlock Grid.Column="2" x:Name="PodsLVal" FontSize="16" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-                          <TextBlock Grid.Column="3" x:Name="PodsLChg" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,14">
-                          <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="52"/><ColumnDefinition Width="*"/><ColumnDefinition Width="66"/><ColumnDefinition Width="22"/>
-                          </Grid.ColumnDefinitions>
-                          <TextBlock Grid.Column="0" Text="RIGHT" FontSize="10" FontWeight="Bold" Foreground="#8FA3BC" VerticalAlignment="Center"/>
-                          <Border Grid.Column="1" Width="240" Height="8" CornerRadius="4" Background="#1A2230" VerticalAlignment="Center" HorizontalAlignment="Left">
-                            <Border x:Name="PodsRBar" Height="8" CornerRadius="4" Background="#6FB1FF" Width="0" HorizontalAlignment="Left"/>
-                          </Border>
-                          <TextBlock Grid.Column="2" x:Name="PodsRVal" FontSize="16" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-                          <TextBlock Grid.Column="3" x:Name="PodsRChg" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
-                        </Grid>
-                        <Grid>
-                          <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="52"/><ColumnDefinition Width="*"/><ColumnDefinition Width="66"/><ColumnDefinition Width="22"/>
-                          </Grid.ColumnDefinitions>
-                          <TextBlock Grid.Column="0" Text="CASE" FontSize="10" FontWeight="Bold" Foreground="#8FA3BC" VerticalAlignment="Center"/>
-                          <Border Grid.Column="1" Width="240" Height="8" CornerRadius="4" Background="#1A2230" VerticalAlignment="Center" HorizontalAlignment="Left">
-                            <Border x:Name="PodsCBar" Height="8" CornerRadius="4" Background="#6FB1FF" Width="0" HorizontalAlignment="Left"/>
-                          </Border>
-                          <TextBlock Grid.Column="2" x:Name="PodsCVal" FontSize="16" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-                          <TextBlock Grid.Column="3" x:Name="PodsCChg" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
-                        </Grid>
-                      </StackPanel>
-                      <TextBlock x:Name="PodsInfoText" Style="{StaticResource CardSub}" HorizontalAlignment="Center" Margin="0,18,0,0" Text=""/>
-                    </StackPanel>
+                  <StackPanel x:Name="PodsBody" Visibility="Collapsed" Margin="0,10,0,0">
+                    <Grid Margin="0,0,0,9">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="44"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="16"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Text="LEFT" FontSize="9" FontWeight="Bold" Foreground="#8FA3BC" VerticalAlignment="Center"/>
+                      <Border Grid.Column="1" Width="166" Height="6" CornerRadius="3" Background="#1A2230" VerticalAlignment="Center" HorizontalAlignment="Left">
+                        <Border x:Name="PodsLBar" Height="6" CornerRadius="3" Background="#6FB1FF" Width="0" HorizontalAlignment="Left"/>
+                      </Border>
+                      <TextBlock Grid.Column="2" x:Name="PodsLVal" FontSize="13" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                      <TextBlock Grid.Column="3" x:Name="PodsLChg" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
+                    </Grid>
+                    <Grid Margin="0,0,0,9">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="44"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="16"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Text="RIGHT" FontSize="9" FontWeight="Bold" Foreground="#8FA3BC" VerticalAlignment="Center"/>
+                      <Border Grid.Column="1" Width="166" Height="6" CornerRadius="3" Background="#1A2230" VerticalAlignment="Center" HorizontalAlignment="Left">
+                        <Border x:Name="PodsRBar" Height="6" CornerRadius="3" Background="#6FB1FF" Width="0" HorizontalAlignment="Left"/>
+                      </Border>
+                      <TextBlock Grid.Column="2" x:Name="PodsRVal" FontSize="13" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                      <TextBlock Grid.Column="3" x:Name="PodsRChg" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
+                    </Grid>
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="44"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="16"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Text="CASE" FontSize="9" FontWeight="Bold" Foreground="#8FA3BC" VerticalAlignment="Center"/>
+                      <Border Grid.Column="1" Width="166" Height="6" CornerRadius="3" Background="#1A2230" VerticalAlignment="Center" HorizontalAlignment="Left">
+                        <Border x:Name="PodsCBar" Height="6" CornerRadius="3" Background="#6FB1FF" Width="0" HorizontalAlignment="Left"/>
+                      </Border>
+                      <TextBlock Grid.Column="2" x:Name="PodsCVal" FontSize="13" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                      <TextBlock Grid.Column="3" x:Name="PodsCChg" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
+                    </Grid>
+                  </StackPanel>
+                  <Grid Margin="0,10,0,0">
+                    <TextBlock x:Name="PodsInfoText" Style="{StaticResource CardSub}" Margin="0,0,64,0" Foreground="#4A5970" VerticalAlignment="Center" Text=""/>
+                    <Button x:Name="BtnPodsForget" Style="{StaticResource GhostBtn}" Content="Forget" FontSize="11" Height="22" Width="56" HorizontalAlignment="Right"
+                            ToolTip="Unbind these AirPods and learn the next pair heard close by"/>
                   </Grid>
-                  <Grid Grid.Row="2" Margin="0,12,0,0">
-                    <TextBlock Style="{StaticResource CardSub}" Foreground="#4A5970" VerticalAlignment="Center" Margin="0,0,206,0"
-                               TextTrimming="CharacterEllipsis"
-                               Text="Read passively from Apple's own battery broadcasts - nothing is sent to the buds."/>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                      <Button x:Name="BtnPodsForget" Style="{StaticResource GhostBtn}" Content="Forget" Width="82"
-                              ToolTip="Unbind these AirPods and learn the next pair heard close by"/>
-                      <Button x:Name="BtnPodsClose" Style="{StaticResource PrimaryBtn}" Content="Close" Width="96" Margin="8,0,0,0"/>
-                    </StackPanel>
-                  </Grid>
-                </Grid>
+                </StackPanel>
               </Border>
             </Border>
-          </Border>
+          </Grid>
         </Grid>
       </Border>
     </Border>
@@ -3235,7 +3228,7 @@ foreach ($name in @(
     'O_ColFps','O_ColCpu','O_ColGpu','O_ColLoad','O_ColRam','O_ColSsd','O_ColMb','O_ColFan','O_ColPods','O_ColReset',
     'PodsOverlay','BtnPods','PodsStatus','PodsEmpty','PodsEmptyText','PodsBody','PodsModelText',
     'PodsLVal','PodsLChg','PodsLBar','PodsRVal','PodsRChg','PodsRBar','PodsCVal','PodsCChg','PodsCBar',
-    'PodsInfoText','BtnPodsClose','BtnPodsForget',
+    'PodsInfoText','BtnPodsForget','PodsBackdrop','PodsDot',
     'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool',
     'S_CpuMax','S_GpuMax','S_Interval','S_StartMin','S_CloseTray','S_Updates','S_AutoStart',
     'V_QuietCase','V_NormalCase','V_PerfCase','V_PerfCpu',
@@ -5876,6 +5869,40 @@ $script:podsWarned = @{ L = $false; R = $false; C = $false }
 $script:podsLearn = $null      # unbound: @{Model;N} streak toward binding
 $script:podsFiltered = 0       # packets heard but rejected by the identity gates
 $script:podsModelPushed = $false
+$script:podsBarW = 166         # px, the flyout's bar track (PodsLBar & co in XAML)
+$script:podsDotLive = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#7FE0A0'))
+$script:podsDotLive.Freeze()
+$script:podsDotIdle = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#4A5970'))
+$script:podsDotIdle.Freeze()
+# On-demand radio. The watcher is passive - the buds broadcast whether or
+# not anyone listens, so it costs them nothing - but there is no reason to
+# hold the PC's adapter in scan mode all day either. It listens while
+# something shows the data (the PODS flyout, the OSD pods metric) and
+# otherwise wakes for a short sniff every few minutes, first one right at
+# launch, so the low-battery toast still fires. Unbound pods (podsModel 0)
+# never sniff: binding needs the user looking at the flyout, so a neighbour's
+# pair can't be adopted blind.
+$script:podsSniffEvery = 600   # seconds between background sniffs
+$script:podsSniffLen   = 20    # seconds each sniff listens
+$script:podsIdleGrace  = 10    # seconds the radio stays on after the last consumer
+$script:podsSniffNext  = [DateTime]::MinValue
+$script:podsSniffUntil = [DateTime]::MinValue
+$script:podsWantAt     = [DateTime]::MinValue   # last tick that wanted the radio
+$script:podsWant       = $false
+$script:podsStartFailed = $false   # last Start() was refused (Bluetooth off?) - drives the flyout's red status
+
+# Pure decision: should the radio listen right now? A consumer wins outright
+# and pushes the next sniff out - no point sniffing right after it closes.
+function Get-PodsScanWant([bool]$consumer, [bool]$bound, [DateTime]$now) {
+    if ($consumer) { $script:podsSniffNext = $now.AddSeconds($script:podsSniffEvery); return $true }
+    if ($now -lt $script:podsSniffUntil) { return $true }
+    if ($bound -and $now -ge $script:podsSniffNext) {
+        $script:podsSniffUntil = $now.AddSeconds($script:podsSniffLen)
+        $script:podsSniffNext  = $now.AddSeconds($script:podsSniffEvery)
+        return $true
+    }
+    return $false
+}
 
 function Start-PodsCompile {
     if ($script:podsCompileStarted) { return }
@@ -6068,25 +6095,32 @@ function Get-PodsAgeText([DateTime]$t) {
 
 function Update-PodsPanel {
     # Most specific state first: a disabled feature or a dead compile must
-    # never sit behind a stale 'Starting...' line.
-    if (-not [bool]$script:settings.podsEnabled) { $el.PodsStatus.Text = 'Scanning is turned off (podsEnabled in settings.json).' }
-    elseif ($sync.PodsErr) { $el.PodsStatus.Text = 'Bluetooth LE is not available on this machine.' }
-    elseif (-not $sync.PodsReady) { $el.PodsStatus.Text = 'Starting the Bluetooth listener...' }
-    elseif (('VentoNative.Pods' -as [type]) -and -not [VentoNative.Pods]::Running) { $el.PodsStatus.Text = 'Bluetooth is off or unavailable - retrying.' }
-    else { $el.PodsStatus.Text = 'Listening for battery broadcasts...' }
+    # never sit behind a stale 'Starting' line. The dot says it at a glance:
+    # green = listening, red = something is in the way, grey = getting there.
+    $live = $false; $bad = $false
+    if (-not [bool]$script:settings.podsEnabled) { $st = 'Scanning off'; $bad = $true }
+    elseif ($sync.PodsErr) { $st = 'No Bluetooth LE'; $bad = $true }
+    elseif (-not $sync.PodsReady -or -not ('VentoNative.Pods' -as [type])) { $st = 'Starting' }
+    elseif ([VentoNative.Pods]::Running) { $st = 'Listening'; $live = $true }
+    elseif ($script:podsStartFailed) { $st = 'Bluetooth off - retrying'; $bad = $true }
+    else { $st = 'Starting' }   # compiled, not yet asked to start (next tick will)
+    $el.PodsStatus.Text = $st
+    $el.PodsDot.Fill = $(if ($live) { $script:podsDotLive } elseif ($bad) { $script:podsBarWarn } else { $script:podsDotIdle })
+    # nothing to forget until a pair is bound
+    $el.BtnPodsForget.Visibility = $(if ([int]$script:settings.podsModel -ne 0) { 'Visible' } else { 'Collapsed' })
     $d = $script:pods
     if (-not $d -or -not $d.Seen) {
+        $el.PodsModelText.Text = 'AIRPODS'
         # Packets are arriving but failing the identity gates - saying
         # 'no broadcasts' would blame the wrong thing.
         if ($script:podsFiltered -gt 0) {
-            $el.PodsEmptyText.Text = ('Hearing Apple battery broadcasts nearby ({0} so far), but none repeated, close and matching enough to lock onto yet. Keep the buds next to the PC for a few seconds.' -f $script:podsFiltered)
+            $el.PodsEmptyText.Text = ('Hearing Apple battery broadcasts nearby ({0} so far), but none close and repeated enough to lock onto. Keep the buds next to the PC for a few seconds.' -f $script:podsFiltered)
         }
         return
     }
     $el.PodsEmpty.Visibility = 'Collapsed'
     $el.PodsBody.Visibility = 'Visible'
-    $name = if ($script:podsModels.ContainsKey($d.Model)) { $script:podsModels[$d.Model] } else { 'AirPods (0x{0:X4})' -f $d.Model }
-    $el.PodsModelText.Text = $name
+    $el.PodsModelText.Text = $(if ($script:podsModels.ContainsKey($d.Model)) { $script:podsModels[$d.Model].ToUpperInvariant() } else { 'AIRPODS 0x{0:X4}' -f $d.Model })
     foreach ($t in @(@('L', $d.L, $d.ChgL), @('R', $d.R, $d.ChgR), @('C', $d.Case, $d.ChgCase))) {
         $k = $t[0]; $v = $t[1]
         # red only while not charging - a charging component is already healing
@@ -6095,10 +6129,10 @@ function Update-PodsPanel {
         $el["Pods${k}Val"].Foreground = $(if ($low) { $script:podsBarWarn } else { $script:podsInk })
         $el["Pods${k}Chg"].Visibility = $(if ($t[2]) { 'Visible' } else { 'Collapsed' })
         $bar = $el["Pods${k}Bar"]
-        $bar.Width = [math]::Round(240.0 * $(if ($null -ne $v) { $v / 100.0 } else { 0 }), 1)
+        $bar.Width = [math]::Round($script:podsBarW * $(if ($null -ne $v) { $v / 100.0 } else { 0 }), 1)
         $bar.Background = $(if ($low) { $script:podsBarWarn } else { $script:brushAccent })
     }
-    $info = '{0} dBm {1} updated {2}' -f $d.Rssi, $script:mid, (Get-PodsAgeText $d.Seen)
+    $info = 'updated {0}' -f (Get-PodsAgeText $d.Seen)
     if ($null -ne $d.Lid) { $info += (' {0} {1}' -f $script:mid, $(if ($d.Lid) { 'lid open' } else { 'lid closed' })) }
     if ($d.InL -or $d.InR) { $info += (' {0} in ear' -f $script:mid) }
     # Any component whose own last-heard stamp lags the packet stream gets an
@@ -6109,32 +6143,55 @@ function Update-PodsPanel {
         }
     }
     $el.PodsInfoText.Text = $info
+    # the line trims in a 300px card - hover shows all of it, plus the signal
+    $el.PodsInfoText.ToolTip = ('{0} {1} {2} dBm' -f $info, $script:mid, $d.Rssi)
 }
 
-# Called every UI tick: keeps the watcher alive, folds new packets in, and
-# refreshes whichever surfaces (panel, OSD) are showing pods data.
+# Called every UI tick: decides whether the radio should listen, keeps the
+# watcher alive while it should, folds new packets in, and refreshes
+# whichever surfaces (flyout, OSD) are showing pods data.
 function Update-PodsTick {
     $s = $script:settings
-    # The open panel repaints on EVERY path, including the early returns -
+    # The open flyout repaints on EVERY path, including the early returns -
     # otherwise a compile error or a disabled feature leaves whatever status
-    # line happened to be there when the panel opened.
+    # line happened to be there when it opened.
     $vis = ($el.PodsOverlay.Visibility -eq 'Visible')
+    $ready = [bool]($sync.PodsReady -and ('VentoNative.Pods' -as [type]))
     if (-not [bool]$s.podsEnabled) {
-        if (('VentoNative.Pods' -as [type]) -and [VentoNative.Pods]::Running) { [VentoNative.Pods]::Stop() }
+        if ($ready -and [VentoNative.Pods]::Running) { [VentoNative.Pods]::Stop() }
+        $script:podsWant = $false
         if ($vis) { Update-PodsPanel }
         return
     }
-    if (-not $script:podsCompileStarted) { Start-PodsCompile; if ($vis) { Update-PodsPanel }; return }
-    if (-not $sync.PodsReady -or -not ('VentoNative.Pods' -as [type])) { if ($vis) { Update-PodsPanel }; return }
-    if (-not $script:podsModelPushed) {
-        # tell the C# filter which model is ours before the first packets land
-        try { [VentoNative.Pods]::SetModel([int]$s.podsModel) } catch { }
-        $script:podsModelPushed = $true
-    }
-    if (-not [VentoNative.Pods]::Running -and [DateTime]::Now -gt $script:podsRetryAt) {
-        # Bluetooth may be off right now; keep trying gently.
-        $script:podsRetryAt = [DateTime]::Now.AddSeconds(15)
-        [void][VentoNative.Pods]::Start()
+    $now = [DateTime]::Now
+    $consumer = [bool]($vis -or ([bool]$s.osdPods -and $script:osd -and $script:osd.IsVisible))
+    $want = Get-PodsScanWant $consumer ([int]$s.podsModel -ne 0) $now
+    if ($want) {
+        $script:podsWantAt = $now
+        # fresh demand starts the radio on THIS tick, not after a leftover backoff
+        if (-not $script:podsWant) { $script:podsRetryAt = [DateTime]::MinValue }
+        $script:podsWant = $true
+        # The C# watcher is compiled on first demand: a PC that never shows
+        # pods data never pays the ~1s compile either.
+        if (-not $script:podsCompileStarted) { Start-PodsCompile }
+        if (-not $ready) { if ($vis) { Update-PodsPanel }; return }
+        if (-not $script:podsModelPushed) {
+            # tell the C# filter which model is ours before the first packets land
+            try { [VentoNative.Pods]::SetModel([int]$s.podsModel) } catch { }
+            $script:podsModelPushed = $true
+        }
+        if (-not [VentoNative.Pods]::Running -and $now -gt $script:podsRetryAt) {
+            # Bluetooth may be off right now; keep trying gently.
+            $script:podsRetryAt = $now.AddSeconds(15)
+            $script:podsStartFailed = ([VentoNative.Pods]::Start() -ne 0)
+        }
+    } else {
+        $script:podsWant = $false
+        if (-not $ready) { if ($vis) { Update-PodsPanel }; return }
+        # a short grace so toggling the flyout doesn't thrash the adapter
+        if ([VentoNative.Pods]::Running -and ($now - $script:podsWantAt).TotalSeconds -gt $script:podsIdleGrace) {
+            [VentoNative.Pods]::Stop()
+        }
     }
     Update-PodsData
     if ($vis) { Update-PodsPanel }
@@ -6147,10 +6204,15 @@ $el.BtnPods.Add_Click({
         # left open underneath would keep its chip looking dead
         $el.SettingsOverlay.Visibility = 'Collapsed'
         $el.MonitorOverlay.Visibility = 'Collapsed'
-        $el.PodsOverlay.Visibility = 'Visible'; Update-PodsPanel
+        $el.PodsOverlay.Visibility = 'Visible'
+        # the flyout is a consumer: start the radio now, not a tick later
+        try { Update-PodsTick } catch { }
+        Update-PodsPanel
     }
 })
-$el.BtnPodsClose.Add_Click({ $el.PodsOverlay.Visibility = 'Collapsed' })
+# A flyout, not a page: a click anywhere outside the card closes it (so does
+# Esc, and the PODS chip itself).
+$el.PodsBackdrop.Add_MouseDown({ $el.PodsOverlay.Visibility = 'Collapsed' })
 $el.BtnPodsForget.Add_Click({
     # Unbind: back to learning mode; next model heard 3x at close range wins.
     $script:settings.podsModel = 0
