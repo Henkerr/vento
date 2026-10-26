@@ -1496,6 +1496,41 @@ $xaml = @'
         </Setter.Value>
       </Setter>
     </Style>
+    <!-- A context menu opens in its own popup, so it inherits neither the
+         window's font nor its dark surfaces - both are set here. -->
+    <Style x:Key="DarkMenu" TargetType="ContextMenu">
+      <Setter Property="OverridesDefaultStyle" Value="True"/>
+      <Setter Property="FontFamily" Value="__FONTS__#Sora, Segoe UI"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ContextMenu">
+            <Border Background="#141A24" BorderBrush="#26FFFFFF" BorderThickness="1" CornerRadius="8" Padding="4">
+              <StackPanel IsItemsHost="True"/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="DarkMenuItem" TargetType="MenuItem">
+      <Setter Property="OverridesDefaultStyle" Value="True"/>
+      <Setter Property="Foreground" Value="#EDF1F8"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="MenuItem">
+            <Border x:Name="bg" Background="Transparent" CornerRadius="5" Padding="10,6">
+              <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#1FFFFFFF"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <Style x:Key="SubtleBtn" TargetType="Button">
       <Setter Property="Foreground" Value="#8A93A6"/>
       <Setter Property="Background" Value="Transparent"/>
@@ -3082,26 +3117,30 @@ $xaml = @'
                design. -->
           <Grid x:Name="PodsOverlay" Grid.Row="1" Grid.RowSpan="2" Visibility="Collapsed">
             <Border x:Name="PodsBackdrop" Background="#01000000"/>
-            <Border Style="{StaticResource Card}" Width="304" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,2,16,0"
+            <Border x:Name="PodsCard" Style="{StaticResource Card}" Width="304" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,2,16,0"
                     BorderThickness="1" BorderBrush="#1FFFFFFF">
               <Border.Effect>
                 <DropShadowEffect BlurRadius="28" ShadowDepth="8" Direction="270" Opacity="0.6" Color="#000000"/>
               </Border.Effect>
-              <Border Style="{StaticResource CardInner}" Padding="16,12,16,10">
+              <!-- Battery only on the face of it: status and freshness live in
+                   tooltips, and unbinding the pair is a right-click away. -->
+              <Border.ContextMenu>
+                <ContextMenu Style="{StaticResource DarkMenu}">
+                  <MenuItem x:Name="PodsForgetItem" Style="{StaticResource DarkMenuItem}" Header="Forget these AirPods"/>
+                </ContextMenu>
+              </Border.ContextMenu>
+              <Border Style="{StaticResource CardInner}" Padding="16,12,16,14">
                 <StackPanel>
-                  <Grid>
+                  <Grid x:Name="PodsHead" Background="Transparent">
                     <TextBlock x:Name="PodsModelText" Style="{StaticResource CardTitle}" Text="AIRPODS" VerticalAlignment="Center"/>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                      <Ellipse x:Name="PodsDot" Width="6" Height="6" Fill="#4A5970" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                      <TextBlock x:Name="PodsStatus" FontSize="10" Foreground="#4A5970" VerticalAlignment="Center" Text="Starting"/>
-                    </StackPanel>
+                    <Ellipse x:Name="PodsDot" Width="6" Height="6" Fill="#4A5970" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                   </Grid>
                   <StackPanel x:Name="PodsEmpty" Margin="0,10,0,2">
                     <TextBlock x:Name="PodsEmptyText" Style="{StaticResource CardSub}" Margin="0" TextWrapping="Wrap" TextTrimming="None"
                                Text="No battery broadcasts yet. AirPods send them while a bud is out of the case or the lid is open - keep them near the PC."/>
                   </StackPanel>
                   <StackPanel x:Name="PodsBody" Visibility="Collapsed" Margin="0,10,0,0">
-                    <Grid Margin="0,0,0,9">
+                    <Grid x:Name="PodsLRow" Margin="0,0,0,9" Background="Transparent">
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="44"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="16"/>
                       </Grid.ColumnDefinitions>
@@ -3112,7 +3151,7 @@ $xaml = @'
                       <TextBlock Grid.Column="2" x:Name="PodsLVal" FontSize="13" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                       <TextBlock Grid.Column="3" x:Name="PodsLChg" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
                     </Grid>
-                    <Grid Margin="0,0,0,9">
+                    <Grid x:Name="PodsRRow" Margin="0,0,0,9" Background="Transparent">
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="44"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="16"/>
                       </Grid.ColumnDefinitions>
@@ -3123,7 +3162,7 @@ $xaml = @'
                       <TextBlock Grid.Column="2" x:Name="PodsRVal" FontSize="13" FontWeight="Bold" Foreground="#EDF1F8" Text="--" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                       <TextBlock Grid.Column="3" x:Name="PodsRChg" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
                     </Grid>
-                    <Grid>
+                    <Grid x:Name="PodsCRow" Background="Transparent">
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="44"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="16"/>
                       </Grid.ColumnDefinitions>
@@ -3135,11 +3174,6 @@ $xaml = @'
                       <TextBlock Grid.Column="3" x:Name="PodsCChg" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#7FE0A0" Text="&#xE945;" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
                     </Grid>
                   </StackPanel>
-                  <Grid Margin="0,10,0,0">
-                    <TextBlock x:Name="PodsInfoText" Style="{StaticResource CardSub}" Margin="0,0,64,0" Foreground="#4A5970" VerticalAlignment="Center" Text=""/>
-                    <Button x:Name="BtnPodsForget" Style="{StaticResource GhostBtn}" Content="Forget" FontSize="11" Height="22" Width="56" HorizontalAlignment="Right"
-                            ToolTip="Unbind these AirPods and learn the next pair heard close by"/>
-                  </Grid>
                 </StackPanel>
               </Border>
             </Border>
@@ -3226,9 +3260,9 @@ foreach ($name in @(
     'S_OsdOpacity','V_OsdOpacity','BtnOsdMove','BtnOsdResetPos','OsdPosNote',
     'S_OsdFps','S_OsdCpu','S_OsdGpu','S_OsdLoad','S_OsdRam','S_OsdFans','S_OsdSsd','S_OsdMb','S_OsdPods',
     'O_ColFps','O_ColCpu','O_ColGpu','O_ColLoad','O_ColRam','O_ColSsd','O_ColMb','O_ColFan','O_ColPods','O_ColReset',
-    'PodsOverlay','BtnPods','PodsStatus','PodsEmpty','PodsEmptyText','PodsBody','PodsModelText',
+    'PodsOverlay','BtnPods','PodsCard','PodsHead','PodsEmpty','PodsEmptyText','PodsBody','PodsModelText',
     'PodsLVal','PodsLChg','PodsLBar','PodsRVal','PodsRChg','PodsRBar','PodsCVal','PodsCChg','PodsCBar',
-    'PodsInfoText','BtnPodsForget','PodsBackdrop','PodsDot',
+    'PodsLRow','PodsRRow','PodsCRow','PodsForgetItem','PodsBackdrop','PodsDot',
     'S_C40','S_C55','S_C70','S_C80','S_GameLoad','S_GameCool',
     'S_CpuMax','S_GpuMax','S_Interval','S_StartMin','S_CloseTray','S_Updates','S_AutoStart',
     'V_QuietCase','V_NormalCase','V_PerfCase','V_PerfCpu',
@@ -6104,10 +6138,8 @@ function Update-PodsPanel {
     elseif ([VentoNative.Pods]::Running) { $st = 'Listening'; $live = $true }
     elseif ($script:podsStartFailed) { $st = 'Bluetooth off - retrying'; $bad = $true }
     else { $st = 'Starting' }   # compiled, not yet asked to start (next tick will)
-    $el.PodsStatus.Text = $st
     $el.PodsDot.Fill = $(if ($live) { $script:podsDotLive } elseif ($bad) { $script:podsBarWarn } else { $script:podsDotIdle })
-    # nothing to forget until a pair is bound
-    $el.BtnPodsForget.Visibility = $(if ([int]$script:settings.podsModel -ne 0) { 'Visible' } else { 'Collapsed' })
+    $el.PodsHead.ToolTip = $st
     $d = $script:pods
     if (-not $d -or -not $d.Seen) {
         $el.PodsModelText.Text = 'AIRPODS'
@@ -6132,19 +6164,23 @@ function Update-PodsPanel {
         $bar.Width = [math]::Round($script:podsBarW * $(if ($null -ne $v) { $v / 100.0 } else { 0 }), 1)
         $bar.Background = $(if ($low) { $script:podsBarWarn } else { $script:brushAccent })
     }
-    $info = 'updated {0}' -f (Get-PodsAgeText $d.Seen)
+    # The face shows battery only; the rest is one hover away on the title.
+    $info = '{0} {1} updated {2}' -f $st, $script:mid, (Get-PodsAgeText $d.Seen)
     if ($null -ne $d.Lid) { $info += (' {0} {1}' -f $script:mid, $(if ($d.Lid) { 'lid open' } else { 'lid closed' })) }
     if ($d.InL -or $d.InR) { $info += (' {0} in ear' -f $script:mid) }
-    # Any component whose own last-heard stamp lags the packet stream gets an
-    # explicit age - the number on the tile is history, not a live reading.
-    foreach ($t in @(@('left', $d.L, $d.LSeen), @('right', $d.R, $d.RSeen), @('case', $d.Case, $d.CaseSeen))) {
+    $el.PodsHead.ToolTip = ('{0} {1} {2} dBm' -f $info, $script:mid, $d.Rssi)
+    # A component whose own last-heard stamp lags the packet stream is
+    # history, not a live reading: its row dims and says how old it is.
+    foreach ($t in @(@('L', $d.L, $d.LSeen), @('R', $d.R, $d.RSeen), @('C', $d.Case, $d.CaseSeen))) {
+        $row = $el["Pods$($t[0])Row"]
         if ($null -ne $t[1] -and $t[2] -and ([DateTime]::Now - $t[2]).TotalMinutes -gt 3) {
-            $info += (' {0} {1} as of {2}' -f $script:mid, $t[0], (Get-PodsAgeText $t[2]))
+            $row.Opacity = 0.45
+            $row.ToolTip = ('As of {0}' -f (Get-PodsAgeText $t[2]))
+        } else {
+            $row.Opacity = 1.0
+            $row.ToolTip = $null
         }
     }
-    $el.PodsInfoText.Text = $info
-    # the line trims in a 300px card - hover shows all of it, plus the signal
-    $el.PodsInfoText.ToolTip = ('{0} {1} {2} dBm' -f $info, $script:mid, $d.Rssi)
 }
 
 # Called every UI tick: decides whether the radio should listen, keeps the
@@ -6213,7 +6249,9 @@ $el.BtnPods.Add_Click({
 # A flyout, not a page: a click anywhere outside the card closes it (so does
 # Esc, and the PODS chip itself).
 $el.PodsBackdrop.Add_MouseDown({ $el.PodsOverlay.Visibility = 'Collapsed' })
-$el.BtnPodsForget.Add_Click({
+# nothing to forget until a pair is bound - no menu at all then
+$el.PodsCard.Add_ContextMenuOpening({ if ([int]$script:settings.podsModel -eq 0) { $_.Handled = $true } })
+$el.PodsForgetItem.Add_Click({
     # Unbind: back to learning mode; next model heard 3x at close range wins.
     $script:settings.podsModel = 0
     $sync.Settings.podsModel = 0
