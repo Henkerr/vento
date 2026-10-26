@@ -4,7 +4,7 @@
 #define AppName "Vento"
 ; CI can override with: ISCC /DAppVersion=x.y.z  (keep in sync with app.ps1)
 #ifndef AppVersion
-#define AppVersion "1.7.3"
+#define AppVersion "1.8.0"
 #endif
 #define AppPublisher "Blakfy"
 #define AppURL "https://github.com/Henkerr/vento"
@@ -46,6 +46,10 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; Flags: unchecked
 Source: "..\Vento.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\vento.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
+Source: "..\assets\logo.png"; DestDir: "{app}\assets"; Flags: ignoreversion
+Source: "..\assets\logo\*.png"; DestDir: "{app}\assets\logo"; Flags: ignoreversion
+; 1.8 Glass UI: the main window and its styles load from these at startup
+Source: "..\ui\*.xaml"; DestDir: "{app}\ui"; Flags: ignoreversion
 Source: "..\lib\*.dll"; DestDir: "{app}\lib"; Flags: ignoreversion
 Source: "..\fonts\*.ttf"; DestDir: "{app}\fonts"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
