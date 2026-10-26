@@ -427,6 +427,7 @@ function Get-DefaultSettings {
         osdMode          = 'auto'      # in-game overlay: auto (while gaming) | on | off
         osdLayout        = 'blade'     # blade | strip | hero | pills | ghost | micro | thermo
         osdTheme         = 'sirocco'   # sirocco | ember | venom | violet | crimson | mono
+        windowMaterial   = 'mica'      # mica | acrylic | micaalt: the main window's Windows 11 backdrop
         osdCorner        = 'tr'        # overlay corner: tr | tl | bl | br
         osdScale         = 100         # overlay scale %
         osdOnSecondary   = $false      # place the overlay on the secondary monitor
@@ -657,6 +658,7 @@ function Import-Settings {
     if (@('tr','tl','bl','br') -notcontains [string]$s.osdCorner) { $s.osdCorner = 'tr' }
     if (@('blade','strip','hero','pills','ghost','micro','thermo') -notcontains [string]$s.osdLayout) { $s.osdLayout = 'blade' }
     if (@('sirocco','ember','venom','violet','crimson','mono') -notcontains [string]$s.osdTheme) { $s.osdTheme = 'sirocco' }
+    if (@('mica','acrylic','micaalt') -notcontains [string]$s.windowMaterial) { $s.windowMaterial = 'mica' }
     foreach ($k in 'osdColFps','osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan','osdColPods') {
         $v = [string]$s[$k]
         if ($v) { try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($v) } catch { $v = '' } }
@@ -3306,6 +3308,477 @@ if (-not $script:app) {
         Quit-App
     })
 }
+
+# --- Glass main window (1.8) -----------------------------------------
+# The legacy window above is still built and still holds every control the
+# rest of this script drives, but it is never shown. The window people see
+# is ui\main.xaml (styles in ui\theme.xaml). Its pages call the same
+# functions the legacy controls did, or drive those controls directly, so
+# fan, profile and display logic stay exactly as they were while each page
+# moves over to the new design.
+Add-Type -Namespace VentoNative -Name Dwm -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref int value, int size);
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] public struct MARGINS { public int l, r, t, b; }
+[System.Runtime.InteropServices.DllImport("dwmapi.dll")] public static extern int DwmExtendFrameIntoClientArea(System.IntPtr hwnd, ref MARGINS m);
+'@
+
+$script:inv = [Globalization.CultureInfo]::InvariantCulture
+$script:dot = [char]0xB7
+
+# Windows keeps eight shades of the accent; dark mode fills with Light 2 and
+# writes with Light 3. Read again whenever Windows says the color changed.
+function Read-AccentPalette {
+    $a = @{ Light3 = '#99EBFF'; Light2 = '#4CC2FF'; Base = '#0078D4' }
+    try {
+        $p = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Accent' -ErrorAction Stop).AccentPalette
+        if ($p -and $p.Count -ge 16) {
+            $hex = { param($i) '#{0:X2}{1:X2}{2:X2}' -f $p[$i * 4], $p[$i * 4 + 1], $p[$i * 4 + 2] }
+            $a.Light3 = & $hex 0; $a.Light2 = & $hex 1; $a.Base = & $hex 3
+        }
+    } catch { }
+    $a
+}
+$script:acc = Read-AccentPalette
+
+function Get-GColor([string]$hex, [byte]$a = 255) {
+    $c = [System.Windows.Media.ColorConverter]::ConvertFromString($hex)
+    [System.Windows.Media.Color]::FromArgb($a, $c.R, $c.G, $c.B)
+}
+function Get-GBrush([string]$hex, [byte]$a = 255) {
+    $b = New-Object System.Windows.Media.SolidColorBrush (Get-GColor $hex $a); $b.Freeze(); $b
+}
+function Read-UiXaml([string]$name) {
+    $x = [IO.File]::ReadAllText((Join-Path $script:AppRoot "ui\$name"))
+    $logo = ('file:///' + ((Join-Path $script:AppRoot 'assets\logo') -replace '\\', '/') + '/') -replace ' ', '%20'
+    $soft = '#24' + $script:acc.Light2.Substring(1)
+    $x = $x.Replace('__LOGO__', $logo).Replace('__ACCENTLIGHT__', $script:acc.Light3).Replace('__ACCENTSOFT__', $soft)
+    $x = $x.Replace('__ACCENTBASE__', $script:acc.Base).Replace('__ACCENT__', $script:acc.Light2)
+    [System.Windows.Markup.XamlReader]::Parse($x)
+}
+
+# Theme first, at Application level, so the main window's StaticResource
+# lookups resolve. The legacy window keeps its own Window.Resources.
+$script:app.Resources.MergedDictionaries.Add((Read-UiXaml 'theme.xaml'))
+$script:shell = Read-UiXaml 'main.xaml'
+if (Test-Path $script:icoPath) { try { $script:shell.Icon = $window.Icon } catch { } }
+$script:g = @{}
+function G([string]$n) {
+    if (-not $script:g.ContainsKey($n)) { $script:g[$n] = $script:shell.FindName($n) }
+    $script:g[$n]
+}
+
+# --- the glass: DWM system backdrop behind a transparent WPF surface ---
+$script:materials = @{ acrylic = 3; mica = 2; micaalt = 4 }
+function Get-ShellHwnd { (New-Object System.Windows.Interop.WindowInteropHelper $script:shell).Handle }
+function Set-Material([string]$kind) {
+    $h = Get-ShellHwnd
+    if ($h -eq [IntPtr]::Zero) { return }
+    $v = [int]$script:materials[$kind]; if (-not $v) { $v = 2 }
+    $hr = [VentoNative.Dwm]::DwmSetWindowAttribute($h, 38, [ref]$v, 4)
+    # Acrylic over a busy desktop gets a light veil for contrast; Mica is
+    # already calm. No system backdrop (older Windows, transparency off):
+    # paint the Settings-app gray ourselves.
+    (G 'Tint').Background = $(if ($hr -ne 0) { Get-GBrush '#202020' } elseif ($v -eq 3) { Get-GBrush '#101216' 0x59 } else { [System.Windows.Media.Brushes]::Transparent })
+}
+$script:shell.Add_SourceInitialized({
+    $h = Get-ShellHwnd
+    [System.Windows.Interop.HwndSource]::FromHwnd($h).CompositionTarget.BackgroundColor = [System.Windows.Media.Colors]::Transparent
+    $m = New-Object VentoNative.Dwm+MARGINS; $m.l = -1; $m.r = -1; $m.t = -1; $m.b = -1
+    [void][VentoNative.Dwm]::DwmExtendFrameIntoClientArea($h, [ref]$m)
+    $one = 1; [void][VentoNative.Dwm]::DwmSetWindowAttribute($h, 20, [ref]$one, 4)    # dark frame
+    $round = 2; [void][VentoNative.Dwm]::DwmSetWindowAttribute($h, 33, [ref]$round, 4) # rounded corners
+    Set-Material ([string]$script:settings.windowMaterial)
+    # live accent: Windows broadcasts these when the accent or theme changes
+    $src = [System.Windows.Interop.HwndSource]::FromHwnd($h)
+    $script:accentHook = [System.Windows.Interop.HwndSourceHook]{
+        $m = [int]$args[1]
+        if ($m -eq 0x0320 -or $m -eq 0x001A) { $script:accentTimer.Stop(); $script:accentTimer.Start() }
+        return [IntPtr]::Zero
+    }
+    $src.AddHook($script:accentHook)
+})
+foreach ($pair in @(@('MatAcrylic', 'acrylic'), @('MatMica', 'mica'), @('MatMicaAlt', 'micaalt'))) {
+    $rb = G $pair[0]; $rb.Tag = $pair[1]
+    $rb.IsChecked = ([string]$script:settings.windowMaterial -eq $pair[1])
+    $rb.Add_Checked({
+        param($s, $e)
+        Set-Material ([string]$s.Tag)
+        $script:settings.windowMaterial = [string]$s.Tag
+        $script:saveTimer.Stop(); $script:saveTimer.Start()
+    })
+}
+
+# --- live Windows accent: recolor the shared brushes in place ---
+function Set-GlassAccent($a) {
+    $script:acc = $a
+    # CLR-side swap (VentoNative.Res): a PowerShell indexer would store a
+    # PSObject wrapper WPF can't use. Every {DynamicResource} follows.
+    [VentoNative.Res]::SetBrush($script:app.Resources, 'AccentBrush', (Get-GColor $a.Light2))
+    [VentoNative.Res]::SetBrush($script:app.Resources, 'AccentTextBrush', (Get-GColor $a.Light3))
+    [VentoNative.Res]::SetBrush($script:app.Resources, 'AccentSoftBrush', (Get-GColor $a.Light2 0x24))
+    (G 'MeterStop0').Color = Get-GColor $a.Light2; (G 'MeterStop1').Color = Get-GColor $a.Light2
+    (G 'AccentHex').Text = $a.Light2
+    $script:glassReveal = $false
+    try { Update-Glass $sync.Data } catch { }
+}
+$script:accentTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:accentTimer.Interval = [TimeSpan]::FromMilliseconds(450)
+$script:accentTimer.Add_Tick({
+    param($s, $e) $s.Stop()
+    $n = Read-AccentPalette
+    if ($n.Light2 -ne $script:acc.Light2 -or $n.Light3 -ne $script:acc.Light3) { Set-GlassAccent $n }
+})
+
+# --- motion helpers ---
+function New-GAnim([double]$from, [double]$to, [int]$ms, [int]$delay = 0) {
+    $a = New-Object System.Windows.Media.Animation.DoubleAnimation
+    if (-not [double]::IsNaN($from)) { $a.From = $from }
+    $a.To = $to; $a.Duration = [System.Windows.Duration][TimeSpan]::FromMilliseconds($ms)
+    $a.BeginTime = [TimeSpan]::FromMilliseconds($delay)
+    $e = New-Object System.Windows.Media.Animation.CubicEase; $e.EasingMode = 'EaseOut'; $a.EasingFunction = $e
+    $a
+}
+
+# --- navigation: sliding selection pill + staggered page entrance ---
+$script:glassPages = 'PageHome', 'PageFans', 'PageAlerts', 'PageProfiles', 'PageDisplays', 'PagePods', 'PageOverlay', 'PageSettings'
+$script:glassReveal = $true
+function Move-NavPill($item, [bool]$animate) {
+    if (-not $item -or $item.ActualHeight -le 0) { return }
+    $p = $item.TranslatePoint((New-Object System.Windows.Point 0, ($item.ActualHeight / 2 - 8)), (G 'NavGrid'))
+    [System.Windows.Controls.Canvas]::SetLeft((G 'NavPill'), $p.X)
+    $t = G 'NavPillT'
+    if ($animate) {
+        $t.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-GAnim ([double]::NaN) $p.Y 280))
+        $k = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
+        foreach ($f in @(@(16, 0), @(26, 120), @(16, 280))) {
+            [void]$k.KeyFrames.Add((New-Object System.Windows.Media.Animation.LinearDoubleKeyFrame $f[0], ([System.Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromMilliseconds($f[1])))))
+        }
+        (G 'NavPill').BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, $k)
+    } else {
+        $t.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $null); $t.Y = $p.Y
+    }
+}
+function Show-GlassPage([string]$name, [bool]$animate = $true) {
+    foreach ($p in $script:glassPages) { (G $p).Visibility = $(if ($p -eq $name) { 'Visible' } else { 'Collapsed' }) }
+    $pg = G $name
+    $pg.ScrollToTop()
+    $i = 0
+    foreach ($child in $pg.Content.Children) {
+        $tt = New-Object System.Windows.Media.TranslateTransform
+        $child.RenderTransform = $tt
+        if ($animate) {
+            # start values sit in the base so nothing flashes during the stagger
+            $child.Opacity = 0; $tt.Y = 18
+            $d = [math]::Min(7, $i) * 35
+            $child.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-GAnim 0 1 300 $d))
+            $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-GAnim 18 0 420 $d))
+        } else {
+            $child.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null); $child.Opacity = 1
+        }
+        $i++
+    }
+    $script:glassReveal = $true
+    [void]$pg.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Loaded, [action]{ try { Update-Glass $sync.Data } catch { } })
+}
+foreach ($n in 'NavHome', 'NavFans', 'NavAlerts', 'NavProfiles', 'NavDisplays', 'NavPods', 'NavOverlay', 'NavSettings') {
+    (G $n).Add_Checked({ param($s, $e) Show-GlassPage ([string]$s.Tag); Move-NavPill $s $true })
+}
+# "Find a setting": as you type, jump to the page that owns the word
+$script:searchMap = [ordered]@{
+    Fans     = 'fans fan curve quiet normal performance auto boost speed rpm mode cooling'
+    Alerts   = 'alerts alert warning warnings limit limits safety target targets game detection notification notifications'
+    Profiles = 'profiles profile gaming movie work'
+    Displays = 'displays display monitor brightness contrast input hdmi preset night screen'
+    Pods     = 'devices device airpods battery bluetooth headphones earbuds keyboard mouse controller wireless'
+    Overlay  = 'overlay osd fps layout blade strip hero pills ghost micro thermo color position corner capture obs'
+    Settings = 'settings startup windows tray shortcut shortcuts hotkey keyboard update material acrylic mica accent about version'
+    Home     = 'home sensors sensor temperature cpu gpu ssd board'
+}
+(G 'Search').Add_TextChanged({
+    param($s, $e)
+    $q = $s.Text.Trim().ToLowerInvariant()
+    if ($q.Length -lt 2) { return }
+    foreach ($k in $script:searchMap.Keys) {
+        if (@($script:searchMap[$k].Split(' ') | Where-Object { $_.StartsWith($q) }).Count) {
+            if (-not (G "Nav$k").IsChecked) { (G "Nav$k").IsChecked = $true }
+            break
+        }
+    }
+})
+$script:shell.Add_ContentRendered({ Show-GlassPage 'PageHome' $false; Move-NavPill (G 'NavHome') $false })
+
+# --- Glass: drawing helpers --------------------------------------------
+function Format-GPt([double]$x, [double]$y) { $x.ToString('0.##', $script:inv) + ',' + $y.ToString('0.##', $script:inv) }
+# Catmull-Rom through the samples, as cubic Beziers: smooth, never overshooting much
+function Get-GSmooth($v, [double]$w, [double]$h, [double]$lo, [double]$hi) {
+    $n = $v.Count; $pts = New-Object 'System.Collections.Generic.List[System.Windows.Point]'
+    for ($i = 0; $i -lt $n; $i++) {
+        $pts.Add((New-Object System.Windows.Point ($w * $i / ($n - 1)), (2 + ($h - 4) * (1 - (([double]$v[$i] - $lo) / [math]::Max(0.001, $hi - $lo))))))
+    }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('M ' + (Format-GPt $pts[0].X $pts[0].Y))
+    for ($i = 0; $i -lt $n - 1; $i++) {
+        $p0 = $pts[[math]::Max(0, $i - 1)]; $p1 = $pts[$i]; $p2 = $pts[$i + 1]; $p3 = $pts[[math]::Min($n - 1, $i + 2)]
+        [void]$sb.Append(' C ' + (Format-GPt ($p1.X + ($p2.X - $p0.X) / 6) ($p1.Y + ($p2.Y - $p0.Y) / 6)) + ' ' +
+            (Format-GPt ($p2.X - ($p3.X - $p1.X) / 6) ($p2.Y - ($p3.Y - $p1.Y) / 6)) + ' ' + (Format-GPt $p2.X $p2.Y))
+    }
+    @{ Line = $sb.ToString(); Last = $pts[$n - 1] }
+}
+function Add-GSeries($canvas, $v, [string]$hex, [double]$lo, [double]$hi, [byte]$fillTop, [double]$thick) {
+    $w = $canvas.ActualWidth; $h = $canvas.ActualHeight
+    if ($w -le 0 -or $h -le 0 -or $v.Count -lt 2) { return }
+    $s = Get-GSmooth $v $w $h $lo $hi
+    if ($fillTop -gt 0) {
+        $gr = New-Object System.Windows.Media.LinearGradientBrush
+        $gr.StartPoint = '0,0'; $gr.EndPoint = '0,1'
+        $gr.GradientStops.Add((New-Object System.Windows.Media.GradientStop (Get-GColor $hex $fillTop), 0))
+        $gr.GradientStops.Add((New-Object System.Windows.Media.GradientStop (Get-GColor $hex 0), 1))
+        $f = New-Object System.Windows.Shapes.Path
+        $f.Data = [System.Windows.Media.Geometry]::Parse($s.Line + ' L ' + (Format-GPt $w $h) + ' L ' + (Format-GPt 0 $h) + ' Z'); $f.Fill = $gr
+        [void]$canvas.Children.Add($f)
+    }
+    $l = New-Object System.Windows.Shapes.Path
+    $l.Data = [System.Windows.Media.Geometry]::Parse($s.Line); $l.Stroke = Get-GBrush $hex; $l.StrokeThickness = $thick; $l.StrokeLineJoin = 'Round'
+    [void]$canvas.Children.Add($l)
+    $d = New-Object System.Windows.Shapes.Ellipse
+    $d.Width = 8; $d.Height = 8; $d.Fill = Get-GBrush $hex; $d.Stroke = Get-GBrush '#2B2B2B'; $d.StrokeThickness = 2
+    [System.Windows.Controls.Canvas]::SetLeft($d, $s.Last.X - 6); [System.Windows.Controls.Canvas]::SetTop($d, $s.Last.Y - 4)
+    [void]$canvas.Children.Add($d)
+}
+function Add-GHLine($canvas, [double]$y, [string]$hex, [byte]$a, [switch]$Dashed) {
+    $gl = New-Object System.Windows.Shapes.Line
+    $gl.X1 = 0; $gl.X2 = $canvas.ActualWidth; $gl.Y1 = [math]::Round($y) + 0.5; $gl.Y2 = $gl.Y1
+    $gl.Stroke = Get-GBrush $hex $a; $gl.StrokeThickness = 1
+    if ($Dashed) { $gl.StrokeDashArray = New-Object System.Windows.Media.DoubleCollection (, [double[]]@(4, 3)) }
+    [void]$canvas.Children.Add($gl)
+}
+function Add-GText($canvas, [string]$text, [double]$x, [double]$y, [switch]$Right) {
+    $t = New-Object System.Windows.Controls.TextBlock
+    $t.Text = $text; $t.Style = $script:app.FindResource('CaptionTertiary'); $t.FontSize = 11
+    if ($Right) { [System.Windows.Controls.Canvas]::SetRight($t, $x) } else { [System.Windows.Controls.Canvas]::SetLeft($t, $x) }
+    [System.Windows.Controls.Canvas]::SetTop($t, $y)
+    [void]$canvas.Children.Add($t)
+}
+function Start-GReveal($canvas) {
+    $w = $canvas.ActualWidth; $h = $canvas.ActualHeight + 30
+    $rg = New-Object System.Windows.Media.RectangleGeometry (New-Object System.Windows.Rect -20, -20, 0, ($h + 20))
+    $canvas.Clip = $rg
+    $ra = New-Object System.Windows.Media.Animation.RectAnimation (New-Object System.Windows.Rect -20, -20, 0, ($h + 20)), (New-Object System.Windows.Rect -20, -20, ($w + 40), ($h + 20)), ([System.Windows.Duration][TimeSpan]::FromMilliseconds(900))
+    $e = New-Object System.Windows.Media.Animation.CubicEase; $e.EasingMode = 'EaseOut'; $ra.EasingFunction = $e
+    $rg.BeginAnimation([System.Windows.Media.RectangleGeometry]::RectProperty, $ra)
+}
+# Battery ring: one dashed ellipse whose single dash is the charge, rotated
+# to 12 o'clock; animating the dash offset fills it like a gauge. Charging
+# adds a breathing glow and a spark running round.
+function Set-GRing($canvas, $pct, [double]$thick, [string]$hex, [bool]$animate, [bool]$charging) {
+    $canvas.Children.Clear()
+    $sz = $canvas.Width
+    $t = New-Object System.Windows.Shapes.Ellipse
+    $t.Width = $sz; $t.Height = $sz; $t.Stroke = Get-GBrush '#FFFFFF' 0x1F; $t.StrokeThickness = $thick
+    [void]$canvas.Children.Add($t)
+    if ($null -eq $pct) { return }
+    $a = New-Object System.Windows.Shapes.Ellipse
+    $a.Width = $sz; $a.Height = $sz; $a.Stroke = Get-GBrush $hex; $a.StrokeThickness = $thick; $a.StrokeDashCap = 'Round'
+    $a.RenderTransform = New-Object System.Windows.Media.RotateTransform -90, ($sz / 2), ($sz / 2)
+    $len = [math]::PI * ($sz - $thick) * [double]$pct / 100 / $thick
+    $a.StrokeDashArray = New-Object System.Windows.Media.DoubleCollection (, [double[]]@($len, 1000))
+    [void]$canvas.Children.Add($a)
+    if ($animate) { $a.BeginAnimation([System.Windows.Shapes.Shape]::StrokeDashOffsetProperty, (New-GAnim $len 0 900 120)) }
+    if ($charging) {
+        $glow = New-Object System.Windows.Media.Effects.DropShadowEffect
+        $glow.ShadowDepth = 0; $glow.BlurRadius = $thick * 2.2; $glow.Color = Get-GColor $hex; $glow.Opacity = 0.6
+        $a.Effect = $glow
+        $spark = New-Object System.Windows.Shapes.Ellipse
+        $spark.Width = $sz; $spark.Height = $sz; $spark.StrokeThickness = $thick; $spark.StrokeDashCap = 'Round'
+        $spark.Stroke = Get-GBrush '#FFFFFF' 0xE6
+        $spark.StrokeDashArray = New-Object System.Windows.Media.DoubleCollection (, [double[]]@(0.6, 1000))
+        $rot = New-Object System.Windows.Media.RotateTransform -90, ($sz / 2), ($sz / 2); $spark.RenderTransform = $rot
+        [void]$canvas.Children.Add($spark)
+        $run = New-Object System.Windows.Media.Animation.DoubleAnimation -90, 270, ([System.Windows.Duration][TimeSpan]::FromSeconds(1.8))
+        $run.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+        $rot.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $run)
+        $br = New-Object System.Windows.Media.Animation.DoubleAnimation 0.25, 0.9, ([System.Windows.Duration][TimeSpan]::FromSeconds(1.1))
+        $br.AutoReverse = $true; $br.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+        $glow.BeginAnimation([System.Windows.Media.Effects.DropShadowEffect]::OpacityProperty, $br)
+    }
+}
+
+# --- Glass: Home ---------------------------------------------------------
+# Thermal state of the hottest sensor relative to its own comfort target,
+# the same reading the legacy hero used.
+$script:glassThermal = @{
+    cool = @{ Hex = { $script:acc.Light2 }; Text = { $script:acc.Light3 } }
+    warm = @{ Hex = { '#FFB547' }; Text = { '#FFD08A' } }
+    hot  = @{ Hex = { '#FF8A80' }; Text = { '#FFB4AD' } }
+}
+$script:glassHist = @{ CPU = 'histCpu'; GPU = 'histGpu'; SSD = 'histSsd'; BOARD = 'histMb' }
+$script:glassModeMap = @{ quiet = 'Quiet'; normal = 'Normal'; performance = 'Perf'; curve = 'Curve'; auto = 'Auto' }
+$script:glassModeSync = $false
+function Set-GlassModeCards([string]$mode) {
+    $tag = $script:glassModeMap[$mode]; if (-not $tag) { return }
+    $script:glassModeSync = $true
+    try {
+        foreach ($p in 'M', 'F') { $rb = G "$p$tag"; if ($rb -and -not $rb.IsChecked) { $rb.IsChecked = $true } }
+        $name = $(if ($tag -eq 'Perf') { 'Performance' } else { $tag })
+        (G 'HomeFansMode').Text = $name
+    } finally { $script:glassModeSync = $false }
+}
+foreach ($k in $script:glassModeMap.Keys) {
+    foreach ($p in 'M', 'F') {
+        $rb = G ('{0}{1}' -f $p, $script:glassModeMap[$k]); if (-not $rb) { continue }
+        $rb.Tag = $k
+        $rb.Add_Checked({ param($s, $e) if (-not $script:glassModeSync) { Set-UserMode ([string]$s.Tag) } })
+    }
+}
+
+function Update-GlassHero($d) {
+    $margin = -99.0; $hotName = $null; $hotVal = $null; $target = $null
+    foreach ($probe in @(
+        @($d.CpuTemp, $script:settings.warnCpu, 'CPU'), @($d.GpuTemp, $script:settings.warnGpu, 'GPU'),
+        @($d.SsdTemp, $script:settings.warnSsd, 'SSD'), @($d.MbTemp, $script:settings.warnMb, 'BOARD'))) {
+        if ($null -ne $probe[0]) {
+            $m = [double]$probe[0] - $probe[1]
+            if ($m -gt $margin) { $margin = $m; $hotName = $probe[2]; $hotVal = [double]$probe[0]; $target = [double]$probe[1] }
+        }
+    }
+    if ($null -eq $hotName) { (G 'HomeStatus').Text = 'Reading the sensors...'; return }
+    $state = $(if ($margin -le 0) { 'cool' } elseif ($margin -le 4) { 'warm' } else { 'hot' })
+    $hex = & $script:glassThermal[$state].Hex; $txt = & $script:glassThermal[$state].Text
+    $label = $(if ($hotName -eq 'BOARD') { 'Board' } else { $hotName })
+    (G 'HeroLabel').Text = "$label temperature"
+    (G 'HeroTemp').Text = '{0}' -f [int]$hotVal
+    $deg = [char]0xB0; $dot = $script:dot
+    if ($margin -le -4) {
+        (G 'HeroChipText').Text = "Comfortably under target $dot $([int](-$margin))$deg to spare"
+        (G 'HomeStatus').Text = 'All quiet. Every sensor is comfortably under its target.'
+    } elseif ($margin -le 0) {
+        (G 'HeroChipText').Text = "Nearing target $dot $([math]::Round(-$margin, 1))$deg below"
+        (G 'HomeStatus').Text = "All quiet. $label is $([math]::Round(-$margin, 1))$deg under its target."
+    } elseif ($margin -le 4) {
+        (G 'HeroChipText').Text = "Over target $dot fans compensating"
+        (G 'HomeStatus').Text = "$label is $([math]::Round($margin, 1))$deg over its target. Fans are compensating."
+    } else {
+        (G 'HeroChipText').Text = "Running hot $dot fans working hard"
+        (G 'HomeStatus').Text = "$label is running hot at $([int]$hotVal)$deg. Fans are working hard."
+    }
+    (G 'HeroChip').Background = Get-GBrush $hex 0x26
+    (G 'HeroChipText').Foreground = Get-GBrush $txt
+    (G 'HeroGlowStop').Color = Get-GColor $hex 0x2E; (G 'HeroGlowEnd').Color = Get-GColor $hex 0
+
+    # headroom meter: 30 deg up to the target plus 25
+    $mh = G 'MeterHost'; $mm = G 'MeterMarks'; $mm.Children.Clear()
+    $w = $mh.ActualWidth
+    if ($w -gt 0) {
+        $lo = 30.0; $hi = $target + 25
+        $x = { param($v) $w * ([math]::Min($hi, [math]::Max($lo, $v)) - $lo) / ($hi - $lo) }
+        $tick = New-Object System.Windows.Shapes.Rectangle
+        $tick.Width = 2; $tick.Height = 14; $tick.Fill = Get-GBrush '#FFFFFF' 0xCC; $tick.RadiusX = 1; $tick.RadiusY = 1
+        [System.Windows.Controls.Canvas]::SetLeft($tick, (& $x $target) - 1); [System.Windows.Controls.Canvas]::SetTop($tick, 1)
+        [void]$mm.Children.Add($tick)
+        Add-GText $mm ('{0}{1} target' -f [int]$target, $deg) ((& $x $target) - 26) 17
+        $dotEl = New-Object System.Windows.Shapes.Ellipse
+        $dotEl.Width = 16; $dotEl.Height = 16; $dotEl.Fill = Get-GBrush '#FFFFFF'; $dotEl.Stroke = Get-GBrush '#2B2B2B'; $dotEl.StrokeThickness = 3
+        [System.Windows.Controls.Canvas]::SetTop($dotEl, 0)
+        [void]$mm.Children.Add($dotEl)
+        $to = (& $x $hotVal) - 8
+        if ($script:glassReveal) { $dotEl.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-GAnim -8 $to 900 100)) }
+        else { [System.Windows.Controls.Canvas]::SetLeft($dotEl, $to) }
+        ($mh.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] -and $_.HorizontalAlignment -eq 'Left' } | Select-Object -First 1).Text = '{0}{1}' -f [int]$lo, $deg
+        ($mh.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] -and $_.HorizontalAlignment -eq 'Right' } | Select-Object -First 1).Text = '{0}{1}' -f [int]$hi, $deg
+    }
+
+    # last ten minutes of the hottest sensor
+    $c = G 'HeroChart'; $c.Children.Clear()
+    $hist = Get-Variable -Scope Script -Name $script:glassHist[$hotName] -ValueOnly -ErrorAction SilentlyContinue
+    if ($hist -and $hist.Count -ge 2 -and $c.ActualHeight -gt 0) {
+        $mn = ($hist | Measure-Object -Minimum).Minimum; $mx = ($hist | Measure-Object -Maximum).Maximum
+        $lo2 = [math]::Min($mn, $target) - 3; $hi2 = [math]::Max($mx, $target) + 3
+        $yv = { param($v) 2 + ($c.ActualHeight - 4) * (1 - (($v - $lo2) / ($hi2 - $lo2))) }
+        Add-GHLine $c (& $yv $hi2) '#FFFFFF' 0x10; Add-GHLine $c (& $yv $lo2) '#FFFFFF' 0x10
+        Add-GHLine $c (& $yv $target) '#FFFFFF' 0x40 -Dashed
+        Add-GText $c ('Target {0}{1}' -f [int]$target, $deg) 0 ((& $yv $target) - 17) -Right
+        Add-GSeries $c $hist $hex $lo2 $hi2 0x55 2
+        if ($script:glassReveal) { Start-GReveal $c } else { $c.Clip = $null }
+    }
+}
+
+function Update-GlassDevices {
+    $host_ = G 'HomeDevices'; $host_.Children.Clear()
+    $p = $script:pods
+    if (-not $p -or -not $p.Seen) {
+        $t = New-Object System.Windows.Controls.TextBlock; $t.Text = 'No wireless devices connected'
+        $t.Style = $script:app.FindResource('Caption'); $t.Margin = '0,12,0,0'
+        [void]$host_.Children.Add($t); (G 'DevPager').Visibility = 'Collapsed'; return
+    }
+    (G 'DevPager').Visibility = 'Collapsed'
+    $name = $(if ($script:podsModels.ContainsKey($p.Model)) { $script:podsModels[$p.Model] } else { 'AirPods' })
+    $hd = New-Object System.Windows.Controls.TextBlock; $hd.Text = $name; $hd.Style = $script:app.FindResource('Caption'); $hd.Margin = '0,6,0,12'
+    [void]$host_.Children.Add($hd)
+    $ug = New-Object System.Windows.Controls.Primitives.UniformGrid; $ug.Columns = 3
+    foreach ($r in @(@('Left', $p.L, $p.ChgL), @('Right', $p.R, $p.ChgR), @('Case', $p.Case, $p.ChgCase))) {
+        $sp = New-Object System.Windows.Controls.StackPanel; $sp.HorizontalAlignment = 'Center'
+        $gr = New-Object System.Windows.Controls.Grid; $gr.Width = 56; $gr.Height = 56
+        $cv = New-Object System.Windows.Controls.Canvas; $cv.Width = 56; $cv.Height = 56
+        $low = ($null -ne $r[1] -and $r[1] -le [int]$script:settings.podsWarn -and -not $r[2])
+        $hex = $(if ($r[2]) { '#6CCB5F' } elseif ($low) { '#FF99A4' } else { $script:acc.Light2 })
+        Set-GRing $cv $r[1] 5 $hex $script:glassReveal ([bool]$r[2])
+        $tv = New-Object System.Windows.Controls.TextBlock; $tv.Text = $(if ($null -ne $r[1]) { "$($r[1])" } else { [string][char]0x2014 })
+        $tv.Style = $script:app.FindResource('BodyStrong'); $tv.FontSize = 13; $tv.HorizontalAlignment = 'Center'; $tv.VerticalAlignment = 'Center'
+        [void]$gr.Children.Add($cv); [void]$gr.Children.Add($tv)
+        $lb = New-Object System.Windows.Controls.TextBlock; $lb.Text = $r[0]; $lb.Style = $script:app.FindResource('Caption'); $lb.HorizontalAlignment = 'Center'; $lb.Margin = '0,6,0,0'
+        [void]$sp.Children.Add($gr); [void]$sp.Children.Add($lb)
+        [void]$ug.Children.Add($sp)
+    }
+    [void]$host_.Children.Add($ug)
+}
+
+$script:glassDevKey = $null
+function Update-Glass($d) {
+    if (-not $d -or -not $script:shell.IsVisible) { return }
+    $deg = [char]0xB0
+    if ((G 'PageHome').Visibility -eq 'Visible') {
+        foreach ($s in @(@('TCpu', $d.CpuTemp), @('TGpu', $d.GpuTemp), @('TSsd', $d.SsdTemp))) {
+            (G $s[0]).Text = $(if ($null -ne $s[1]) { '{0}{1}' -f [int]$s[1], $deg } else { '--' })
+        }
+        if ($null -ne $d.CpuName) { Set-ModelLabel (G 'NCpu') $d.CpuName }
+        if ($null -ne $d.GpuName) { Set-ModelLabel (G 'NGpu') $d.GpuName }
+        if ($null -ne $d.SsdName) { Set-ModelLabel (G 'NSsd') $d.SsdName }
+        (G 'RCpu').Text = $(if ($null -ne $d.CpuFan) { '{0}' -f $d.CpuFan } else { '--' })
+        (G 'RCase').Text = $(if ($null -ne $d.CaseFan) { '{0}' -f $d.CaseFan } else { '--' })
+        (G 'RGpu').Text = $(if ($null -ne $d.GpuFan1) { '{0}' -f $d.GpuFan1 } else { '--' })
+        # what each fan is being asked for in this mode
+        $mode = [string]$d.ActiveMode
+        $case = switch ($mode) {
+            'quiet' { '{0}% set' -f $script:settings.quietCase }
+            'normal' { '{0}% set' -f $script:settings.normalCase }
+            'performance' { '{0}% set' -f $script:settings.perfCase }
+            'curve' { $(if ($null -ne $d.CurveTarget) { '{0}% from curve' -f $d.CurveTarget } else { 'Following the curve' }) }
+            default { 'Automatic' }
+        }
+        if ($d.BoostActive) { $case = 'Boost {0}%' -f $script:settings.boostCase }
+        (G 'DutyCase').Text = $case
+        (G 'DutyCpu').Text = $(if ($mode -eq 'performance') { '{0}% set' -f $script:settings.perfCpu } else { 'Motherboard curve' })
+        if ($null -ne $d.MbName -and -not (G 'PcBoard').Text) { (G 'PcBoard').Text = $d.MbName }
+        if ($script:glassReveal -or $script:histTick % 4 -eq 0) { Update-GlassHero $d }
+        $key = $(if ($script:pods) { '{0}{1}{2}{3}{4}' -f $script:pods.L, $script:pods.R, $script:pods.Case, $script:pods.ChgL, $script:pods.ChgR } else { '' })
+        if ($script:glassReveal -or $key -ne $script:glassDevKey) { $script:glassDevKey = $key; Update-GlassDevices }
+        $script:glassReveal = $false
+    }
+    Set-GlassModeCards ([string]$d.ActiveMode)
+}
+
+# --- Glass: update notice --------------------------------------------------
+(G 'InfoClose').Add_Click({ (G 'InfoBar').Visibility = 'Collapsed' })
+(G 'InfoRestart').Add_Click({ Install-Update })
+function Show-GlassUpdate([string]$ver) {
+    (G 'InfoTitle').Text = "Vento $ver is ready"
+    (G 'InfoMsg').Text = 'Install it now and Vento restarts itself when it is done.'
+    (G 'InfoRestart').Content = 'Install now'
+    (G 'InfoBar').Visibility = 'Visible'
+}
+(G 'PcName').Text = $env:COMPUTERNAME
+(G 'AboutVersion').Text = "Version $($script:AppVersion)"
+(G 'AccentHex').Text = $script:acc.Light2
 
 function New-Brush([string]$hex) {
     $b = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color][System.Windows.Media.ColorConverter]::ConvertFromString($hex))
@@ -6839,20 +7312,20 @@ $script:reallyExit = $false
 $script:trayTipShown = $false
 
 function Show-Main {
-    $window.Show()
-    $window.WindowState = [System.Windows.WindowState]::Normal
-    [void]$window.Activate()
+    $script:shell.Show()
+    $script:shell.WindowState = [System.Windows.WindowState]::Normal
+    [void]$script:shell.Activate()
     if ($script:updateNotified) { Show-UpdateBanner }
 }
 function Hide-ToTray {
-    $window.Hide()
+    $script:shell.Hide()
     if (-not $script:trayTipShown) {
         $script:trayTipShown = $true
         $script:lastBalloon = 'info'
         $script:notify.ShowBalloonTip(2500, 'Vento', $script:L.TrayStillHere, [System.Windows.Forms.ToolTipIcon]::Info)
     }
 }
-function Quit-App { $script:reallyExit = $true; $window.Close() }
+function Quit-App { $script:reallyExit = $true; $script:shell.Close() }
 
 $el.TitleBar.Add_MouseLeftButtonDown({ try { $window.DragMove() } catch { } })
 $el.BtnMin.Add_Click({ Hide-ToTray })
@@ -6863,23 +7336,24 @@ $el.BtnPerf.Add_Click({   Set-UserMode 'performance' })
 $el.BtnCurve.Add_Click({  Set-UserMode 'curve' })
 $el.BtnAuto.Add_Click({   Set-UserMode 'auto' })
 
-$window.Add_Closing({ param($s, $e)
+$script:shell.Add_Closing({ param($s, $e)
     if (-not $script:reallyExit) {
         if ($script:settings.closeToTray) { $e.Cancel = $true; Hide-ToTray; return }
         $script:reallyExit = $true
     }
 })
-$window.Add_Closed({
+$script:shell.Add_Closed({
+    try { $window.Close() } catch { }
     if ($script:ownsApp) { $script:app.Shutdown() }
     elseif ($script:frame) { $script:frame.Continue = $false }
 })
-$window.Add_StateChanged({
-    if ($window.WindowState -eq [System.Windows.WindowState]::Minimized) {
-        $window.WindowState = [System.Windows.WindowState]::Normal
+$script:shell.Add_StateChanged({
+    if ($script:shell.WindowState -eq [System.Windows.WindowState]::Minimized) {
+        $script:shell.WindowState = [System.Windows.WindowState]::Normal
         Hide-ToTray
     }
 })
-$window.Add_KeyDown({ param($s, $e)
+$script:shell.Add_KeyDown({ param($s, $e)
     if ($e.Key -eq 'Escape') {
         # top of the z-order closes first: Pods is the last overlay in XAML
         if ($el.PodsOverlay.Visibility -eq 'Visible') { $el.PodsOverlay.Visibility = 'Collapsed' }
@@ -7919,7 +8393,8 @@ $script:timer.Add_Tick({
         $script:miUpdate.Visible = $true
         $el.UpdatePillText.Text = 'UPDATE {0}' -f $sync.Update.Version
         $el.UpdatePill.Visibility = 'Visible'
-        if ($window.IsVisible) { Show-UpdateBanner }
+        if ($script:shell.IsVisible) { Show-UpdateBanner }
+        Show-GlassUpdate ([string]$sync.Update.Version)
         $ver = [string]$sync.Update.Version
         $shown = Show-Toast ('Vento {0} is available' -f $ver) `
                             'Install it now and Vento restarts itself when it is done.' `
@@ -7980,6 +8455,9 @@ $script:timer.Add_Tick({
 
     # --- AirPods battery: fold in new packets, keep the watcher alive ---
     try { Update-PodsTick } catch { }
+
+    # --- the Glass window draws from the same data ---
+    try { Update-Glass $d } catch { }
 
     # --- OSD overlay ---
     $osdWant = if ($script:osdEditing) { $true } else {
@@ -8089,7 +8567,7 @@ $script:timer.Add_Tick({
 $script:timer.Start()
 
 # --- Run -------------------------------------------------------------
-if (-not $script:settings.startMinimized) { $window.Show() }
+if (-not $script:settings.startMinimized) { $script:shell.Show() }
 if ($script:ownsApp) {
     [void]$script:app.Run()
 } else {

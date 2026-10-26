@@ -1,0 +1,1515 @@
+<!--
+  Vento rebuilt as a Windows 11 app: real glass behind the window (DWM
+  acrylic / Mica, applied by Glass.ps1), a Settings-style navigation pane and
+  one page per area instead of a single tall dashboard with overlays.
+  Preview only - fake sensor data, nothing here talks to hardware.
+-->
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Vento" Width="1120" Height="868" MinWidth="1000" MinHeight="640"
+        Background="Transparent" WindowStartupLocation="CenterScreen"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" FontFamily="{StaticResource TextFont}" Foreground="{StaticResource TextPrimaryBrush}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome GlassFrameThickness="-1" CaptionHeight="48" ResizeBorderThickness="6" UseAeroCaptionButtons="True" CornerRadius="0"/>
+  </WindowChrome.WindowChrome>
+  <Window.Resources>
+    <!-- Overlay theme in use; Glass.ps1 swaps these when a color is picked -->
+    <SolidColorBrush x:Key="OsdAccentBrush" Color="#6FB1FF"/>
+    <SolidColorBrush x:Key="OsdPanelBrush" Color="#DC0A0D13"/>
+    <SolidColorBrush x:Key="OsdBorderBrush" Color="#26FFFFFF"/>
+    <SolidColorBrush x:Key="OsdInkBrush" Color="#EDF1F8"/>
+    <SolidColorBrush x:Key="OsdLabBrush" Color="#8FA3BC"/>
+    <LinearGradientBrush x:Key="SceneBrush" StartPoint="0,0" EndPoint="1,1">
+      <GradientStop Color="#1B2A3A" Offset="0"/>
+      <GradientStop Color="#3A2533" Offset="0.55"/>
+      <GradientStop Color="#4A3020" Offset="1"/>
+    </LinearGradientBrush>
+    <Style x:Key="MiniScene" TargetType="Border">
+      <Setter Property="Height" Value="70"/>
+      <Setter Property="CornerRadius" Value="5"/>
+      <Setter Property="Background" Value="{StaticResource SceneBrush}"/>
+      <Setter Property="Margin" Value="0,0,0,10"/>
+      <Setter Property="ClipToBounds" Value="True"/>
+    </Style>
+    <Style x:Key="OsdTiny" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontSize" Value="8"/>
+      <Setter Property="Foreground" Value="{DynamicResource OsdInkBrush}"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+  </Window.Resources>
+
+  <Grid x:Name="Root">
+    <!-- Deepens acrylic a touch so text keeps its contrast; Mica needs none -->
+    <Border x:Name="Tint" Background="#59101216"/>
+
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="48"/>
+        <RowDefinition Height="*"/>
+      </Grid.RowDefinitions>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="300"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <!-- Title bar (drag area; the caption buttons are Windows' own) -->
+      <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0">
+        <Image Source="__LOGO__vento-32.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
+        <TextBlock Text="Vento" Style="{StaticResource Caption}" Foreground="{StaticResource TextPrimaryBrush}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+        <Border CornerRadius="4" BorderBrush="#33FFFFFF" BorderThickness="1" Padding="6,0,6,1" Margin="10,0,0,0" VerticalAlignment="Center">
+          <TextBlock Text="Design preview" Style="{StaticResource CaptionTertiary}" FontSize="11"/>
+        </Border>
+        <Ellipse x:Name="LiveDot" Width="6" Height="6" Fill="{StaticResource SuccessBrush}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+        <TextBlock Text="Live" Style="{StaticResource CaptionTertiary}" Margin="7,0,0,0" VerticalAlignment="Center"/>
+      </StackPanel>
+      <Button x:Name="BtnFlyout" Grid.ColumnSpan="2" Style="{StaticResource LinkButton}" HorizontalAlignment="Right" VerticalAlignment="Center"
+              Margin="0,0,150,0" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="What Vento shows when you click its tray icon">
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Text="&#xE8A7;" FontFamily="{StaticResource IconFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
+          <TextBlock Text="Tray flyout" VerticalAlignment="Center"/>
+        </StackPanel>
+      </Button>
+
+      <!-- Navigation pane, laid out like the Settings app: account-style
+           card, "Find a setting" search, then one flat list of pages -->
+      <Grid x:Name="NavGrid" Grid.Row="1" Grid.Column="0">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <Grid Margin="16,2,16,16">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="64"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <!-- the app logo stands in for the account picture -->
+          <Image x:Name="AvatarFan" Source="__LOGO__vento-128.png" Width="72" Height="72" Margin="-4" RenderOptions.BitmapScalingMode="HighQuality"/>
+          <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">
+            <TextBlock x:Name="PcName" Text="This PC" Style="{StaticResource BodyStrong}" TextTrimming="CharacterEllipsis"/>
+            <TextBlock Text="ASUS B450M-DRAGON" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
+          </StackPanel>
+        </Grid>
+        <TextBox x:Name="Search" Grid.Row="1" Style="{StaticResource SearchBox}" Margin="16,0,16,14"/>
+
+        <StackPanel Grid.Row="2" Margin="8,0,8,0">
+          <RadioButton x:Name="NavHome" GroupName="Nav" Style="{StaticResource NavItem}" IsChecked="True" Tag="PageHome">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE80F;" Style="{StaticResource Glyph}"/>
+              <TextBlock Text="Home" Margin="16,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+          </RadioButton>
+          <RadioButton x:Name="NavFans" GroupName="Nav" Style="{StaticResource NavItem}" Tag="PageFans">
+            <StackPanel Orientation="Horizontal">
+              <Viewbox Width="16" Height="16"><Path Data="{StaticResource FanGeometrySmall}" Style="{StaticResource FluentIcon}" Fill="{StaticResource TextPrimaryBrush}"/></Viewbox>
+              <TextBlock Text="Fans" Margin="16,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+          </RadioButton>
+          <RadioButton x:Name="NavAlerts" GroupName="Nav" Style="{StaticResource NavItem}" Tag="PageAlerts">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xEA8F;" Style="{StaticResource Glyph}"/>
+              <TextBlock Text="Alerts" Margin="16,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+          </RadioButton>
+          <RadioButton x:Name="NavProfiles" GroupName="Nav" Style="{StaticResource NavItem}" Tag="PageProfiles">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE77B;" Style="{StaticResource Glyph}"/>
+              <TextBlock Text="Profiles" Margin="16,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+          </RadioButton>
+          <RadioButton x:Name="NavDisplays" GroupName="Nav" Style="{StaticResource NavItem}" Tag="PageDisplays">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE7F4;" Style="{StaticResource Glyph}"/>
+              <TextBlock Text="Displays" Margin="16,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+          </RadioButton>
+          <RadioButton x:Name="NavPods" GroupName="Nav" Style="{StaticResource NavItem}" Tag="PagePods">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE702;" Style="{StaticResource Glyph}"/>
+              <TextBlock Text="Devices" Margin="16,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+          </RadioButton>
+          <RadioButton x:Name="NavOverlay" GroupName="Nav" Style="{StaticResource NavItem}" Tag="PageOverlay">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE81E;" Style="{StaticResource Glyph}"/>
+              <TextBlock Text="Overlay" Margin="16,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+          </RadioButton>
+          <RadioButton x:Name="NavSettings" GroupName="Nav" Style="{StaticResource NavItem}" Tag="PageSettings">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE713;" Style="{StaticResource Glyph}"/>
+              <TextBlock Text="Settings" Margin="16,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+          </RadioButton>
+        </StackPanel>
+
+        <!-- One selection pill for the whole pane; it slides to the picked item -->
+        <Canvas Grid.RowSpan="3" IsHitTestVisible="False">
+          <Border x:Name="NavPill" Width="3" Height="16" CornerRadius="1.5" Background="{DynamicResource AccentBrush}">
+            <Border.RenderTransform><TranslateTransform x:Name="NavPillT"/></Border.RenderTransform>
+          </Border>
+        </Canvas>
+      </Grid>
+
+      <!-- Content sheet -->
+      <Border Grid.Row="1" Grid.Column="1" Background="{StaticResource LayerBrush}" BorderBrush="{StaticResource LayerStrokeBrush}"
+              BorderThickness="1,1,0,0" CornerRadius="8,0,0,0">
+        <Grid x:Name="Pages">
+
+          <!-- ============================ HOME ============================ -->
+          <ScrollViewer x:Name="PageHome" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <StackPanel Margin="36,26,36,28">
+              <Grid>
+                <StackPanel>
+                  <TextBlock Text="Home" Style="{StaticResource PageTitle}"/>
+                  <TextBlock x:Name="HomeStatus" Text="All quiet. The board is 3&#xB0; under its target." Style="{StaticResource Body}"
+                             Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,0"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+                  <TextBlock Text="Profile" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                  <RadioButton x:Name="ChipGaming" GroupName="HomeProfile" Style="{StaticResource ProfileChip}" Background="#7FE0A0" Content="Gaming" Tag="Gaming"/>
+                  <RadioButton x:Name="ChipMovie" GroupName="HomeProfile" Style="{StaticResource ProfileChip}" Background="#FF7A8A" Content="Movie" Tag="Movie"/>
+                  <RadioButton x:Name="ChipWork" GroupName="HomeProfile" Style="{StaticResource ProfileChip}" Background="#FFC46F" Content="Work" Tag="Work"/>
+                </StackPanel>
+              </Grid>
+
+              <!-- Error InfoBar: the fan driver (PawnIO) is missing or stopped.
+                   Shown instead of letting fan control fail silently. -->
+              <Border x:Name="DriverBar" CornerRadius="4" Background="#442E1F22" BorderBrush="#33FF99A4" BorderThickness="1" Padding="14,10,8,10" Margin="0,20,0,0" Visibility="Collapsed">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <Border Width="18" Height="18" CornerRadius="9" Background="#FF99A4" VerticalAlignment="Top" Margin="0,1,0,0">
+                    <TextBlock Text="!" FontFamily="Segoe UI" FontWeight="Bold" FontSize="12" Foreground="#000000" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                  </Border>
+                  <StackPanel Grid.Column="1" Margin="12,0,12,0">
+                    <TextBlock Text="Fan control is paused" Style="{StaticResource BodyStrong}"/>
+                    <TextBlock Text="Vento can't reach the fan controller: the PawnIO driver is missing or stopped. Your fans are running on their BIOS settings until it is back." Style="{StaticResource Body}" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="DriverFix" Style="{StaticResource AccentButton}" Content="Install driver" FontSize="13" MinHeight="28" Padding="12,3"/>
+                    <Button x:Name="DriverClose" Style="{StaticResource IconButton}" Content="&#xE711;" Margin="6,0,0,0" ToolTip="Dismiss"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+              <!-- InfoBar: an update that is downloaded and verified -->
+              <Border x:Name="InfoBar" CornerRadius="4" Background="#0DFFFFFF" BorderBrush="#14FFFFFF" BorderThickness="1" Padding="14,8,8,8" Margin="0,20,0,0">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <Border x:Name="InfoIconBg" Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentBrush}" VerticalAlignment="Center">
+                    <TextBlock x:Name="InfoIcon" Text="&#xE896;" FontFamily="{StaticResource IconFont}" FontSize="10" Foreground="#000000" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                  </Border>
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <TextBlock x:Name="InfoTitle" Text="Vento 1.8.0 is ready" Style="{StaticResource BodyStrong}"/>
+                    <TextBlock x:Name="InfoMsg" Text="Downloaded and verified. Restart to finish updating." Style="{StaticResource Body}" Foreground="{StaticResource TextSecondaryBrush}" Margin="12,0,0,0"/>
+                  </StackPanel>
+                  <Button x:Name="InfoRestart" Grid.Column="2" Style="{StaticResource AccentButton}" Content="Restart now" FontSize="13" MinHeight="28" Padding="12,3" Margin="12,0,6,0"/>
+                  <Button x:Name="InfoClose" Grid.Column="3" Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="Dismiss"/>
+                </Grid>
+              </Border>
+
+              <Border Style="{StaticResource Card}" Height="208" Margin="0,12,0,0">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="320"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <!-- thermal glow: follows the board's state -->
+                  <Border Grid.ColumnSpan="2" CornerRadius="8" IsHitTestVisible="False">
+                    <Border.Background>
+                      <RadialGradientBrush Center="0.1,0.3" GradientOrigin="0.1,0.3" RadiusX="0.5" RadiusY="1.2">
+                        <GradientStop x:Name="HeroGlowStop" Color="#2A4CC2FF" Offset="0"/>
+                        <GradientStop x:Name="HeroGlowEnd" Color="#004CC2FF" Offset="1"/>
+                      </RadialGradientBrush>
+                    </Border.Background>
+                  </Border>
+                  <StackPanel Margin="24,20,8,0">
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock Text="&#xE9CA;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                      <TextBlock Text="Board temperature" Style="{StaticResource Caption}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel x:Name="HeroTempHost" Orientation="Horizontal" Background="Transparent" Cursor="Hand" HorizontalAlignment="Left"
+                                ToolTip="Click to preview the warm and hot states">
+                      <TextBlock x:Name="HeroTemp" Text="59" FontFamily="Segoe UI" FontSize="60" FontWeight="SemiBold"
+                                 Typography.NumeralAlignment="Tabular" TextOptions.TextFormattingMode="Ideal" Margin="0,0,0,2"/>
+                      <TextBlock Text="&#xB0;C" FontFamily="Segoe UI" FontSize="24" FontWeight="Normal"
+                                 Foreground="{StaticResource TextSecondaryBrush}" Margin="6,14,0,0"/>
+                    </StackPanel>
+                    <Border x:Name="HeroChip" CornerRadius="11" Background="{DynamicResource AccentSoftBrush}" HorizontalAlignment="Left" Padding="10,3,10,4" Margin="0,-2,0,16">
+                      <TextBlock x:Name="HeroChipText" Text="Nearing target &#xB7; 3&#xB0; below" Style="{StaticResource Caption}" Foreground="{DynamicResource AccentTextBrush}"/>
+                    </Border>
+                    <!-- Headroom: where the board sits between idle and alarm -->
+                    <Grid x:Name="MeterHost" Height="32">
+                      <Border Height="6" CornerRadius="3" VerticalAlignment="Top" Margin="0,5,0,0" Opacity="0.9">
+                        <Border.Background>
+                          <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                            <GradientStop x:Name="MeterStop0" Color="__ACCENT__" Offset="0"/>
+                            <GradientStop x:Name="MeterStop1" Color="__ACCENT__" Offset="0.45"/>
+                            <GradientStop Color="#FFB547" Offset="0.72"/>
+                            <GradientStop Color="#FF8A80" Offset="1"/>
+                          </LinearGradientBrush>
+                        </Border.Background>
+                      </Border>
+                      <Canvas x:Name="MeterMarks"/>
+                      <TextBlock Text="40&#xB0;" Style="{StaticResource CaptionTertiary}" FontSize="11" VerticalAlignment="Bottom" HorizontalAlignment="Left"/>
+                      <TextBlock Text="85&#xB0;" Style="{StaticResource CaptionTertiary}" FontSize="11" VerticalAlignment="Bottom" HorizontalAlignment="Right"/>
+                    </Grid>
+                  </StackPanel>
+                  <Grid Grid.Column="1" Margin="8,18,22,18">
+                    <TextBlock Text="Last 10 minutes" Style="{StaticResource CaptionTertiary}" HorizontalAlignment="Right" VerticalAlignment="Top"/>
+                    <Canvas x:Name="HeroChart" Margin="0,26,0,0"/>
+                  </Grid>
+                </Grid>
+              </Border>
+
+              <Grid Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="12"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="12"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Style="{StaticResource Card}" Padding="16,14,16,14">
+                  <StackPanel>
+                    <Grid Margin="0,0,0,4">
+                      <TextBlock Text="Sensors" Style="{StaticResource BodyStrong}"/>
+                      <TextBlock Text="&#xB0;C" Style="{StaticResource CaptionTertiary}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,10,0,0">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                      <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE950;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                      <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
+                        <TextBlock Text="CPU" Style="{StaticResource BodyStrong}" FontSize="13"/>
+                        <TextBlock Text="Ryzen 5 3600" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                      <TextBlock Grid.Column="2" x:Name="TCpu" Text="60&#xB0;" Style="{StaticResource Metric}" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,10,0,0">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                      <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xF211;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                      <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
+                        <TextBlock Text="GPU" Style="{StaticResource BodyStrong}" FontSize="13"/>
+                        <TextBlock Text="RTX 2060 SUPER" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                      <TextBlock Grid.Column="2" x:Name="TGpu" Text="54&#xB0;" Style="{StaticResource Metric}" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,10,0,0">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                      <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xEDA2;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                      <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
+                        <TextBlock Text="SSD" Style="{StaticResource BodyStrong}" FontSize="13"/>
+                        <TextBlock Text="Samsung 980 PRO 1TB" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                      <TextBlock Grid.Column="2" x:Name="TSsd" Text="42&#xB0;" Style="{StaticResource Metric}" VerticalAlignment="Center"/>
+                    </Grid>
+                  </StackPanel>
+                </Border>
+
+                <Border Grid.Column="2" Style="{StaticResource Card}" Padding="16,14,16,14">
+                  <StackPanel>
+                    <Grid Margin="0,0,0,4">
+                      <TextBlock Text="Fans" Style="{StaticResource BodyStrong}"/>
+                      <TextBlock x:Name="HomeFansMode" Text="Quiet" Style="{StaticResource CaptionTertiary}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,10,0,0">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                      <Border Style="{StaticResource IconTile}">
+                        <Path x:Name="SpinCpu" Data="{StaticResource FanGeometry}" Style="{StaticResource FluentIcon}" Fill="{DynamicResource AccentBrush}" RenderTransformOrigin="0.5,0.5">
+                          <Path.RenderTransform><RotateTransform/></Path.RenderTransform>
+                        </Path>
+                      </Border>
+                      <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
+                        <TextBlock Text="CPU fan" Style="{StaticResource BodyStrong}" FontSize="13"/>
+                        <TextBlock x:Name="DutyCpu" Text="62% duty" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                      <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock x:Name="RCpu" Text="1951" Style="{StaticResource Metric}"/>
+                        <TextBlock Text="rpm" Style="{StaticResource CaptionTertiary}" VerticalAlignment="Bottom" Margin="4,0,0,3"/>
+                      </StackPanel>
+                    </Grid>
+                    <Grid Margin="0,10,0,0">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                      <Border Style="{StaticResource IconTile}">
+                        <Path x:Name="SpinCase" Data="{StaticResource FanGeometry}" Style="{StaticResource FluentIcon}" Fill="{DynamicResource AccentBrush}" RenderTransformOrigin="0.5,0.5">
+                          <Path.RenderTransform><RotateTransform/></Path.RenderTransform>
+                        </Path>
+                      </Border>
+                      <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
+                        <TextBlock Text="Case fans" Style="{StaticResource BodyStrong}" FontSize="13"/>
+                        <TextBlock x:Name="DutyCase" Text="30% duty" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                      <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock x:Name="RCase" Text="717" Style="{StaticResource Metric}"/>
+                        <TextBlock Text="rpm" Style="{StaticResource CaptionTertiary}" VerticalAlignment="Bottom" Margin="4,0,0,3"/>
+                      </StackPanel>
+                    </Grid>
+                    <Grid Margin="0,10,0,0">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                      <Border Style="{StaticResource IconTile}">
+                        <Path x:Name="SpinGpu" Data="{StaticResource FanGeometry}" Style="{StaticResource FluentIcon}" Fill="{DynamicResource AccentBrush}" RenderTransformOrigin="0.5,0.5">
+                          <Path.RenderTransform><RotateTransform/></Path.RenderTransform>
+                        </Path>
+                      </Border>
+                      <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
+                        <TextBlock Text="GPU fans" Style="{StaticResource BodyStrong}" FontSize="13"/>
+                        <TextBlock Text="33% duty" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                      <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock x:Name="RGpu" Text="1018" Style="{StaticResource Metric}"/>
+                        <TextBlock Text="rpm" Style="{StaticResource CaptionTertiary}" VerticalAlignment="Bottom" Margin="4,0,0,3"/>
+                      </StackPanel>
+                    </Grid>
+                  </StackPanel>
+                </Border>
+
+                <Border Grid.Column="4" Style="{StaticResource Card}" Padding="16,14,16,14">
+                  <StackPanel>
+                    <Grid Margin="0,0,0,4">
+                      <TextBlock Text="Devices" Style="{StaticResource BodyStrong}" VerticalAlignment="Center"/>
+                      <!-- page through: one battery page per device, then the list -->
+                      <StackPanel x:Name="DevPager" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,-6,-8,-6">
+                        <TextBlock x:Name="DevPageText" Text="1 / 2" Style="{StaticResource CaptionTertiary}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <Button x:Name="DevPrev" Style="{StaticResource IconButton}" Content="&#xE76B;" Width="28" Height="28" FontSize="11" ToolTip="Previous"/>
+                        <Button x:Name="DevNext" Style="{StaticResource IconButton}" Content="&#xE76C;" Width="28" Height="28" FontSize="11" ToolTip="Next"/>
+                      </StackPanel>
+                    </Grid>
+                    <!-- connected wireless devices and their battery, filled by Glass.ps1 -->
+                    <Grid x:Name="HomeDevHost" Height="146" ClipToBounds="True"><StackPanel x:Name="HomeDevices"/></Grid>
+                  </StackPanel>
+                </Border>
+              </Grid>
+
+              <Border Style="{StaticResource Card}" Margin="0,12,0,0" Padding="12,14,12,12">
+                <StackPanel>
+                  <Grid Margin="4,0,4,12">
+                    <TextBlock Text="Fan mode" Style="{StaticResource BodyStrong}"/>
+                    <TextBlock Text="Applies instantly" Style="{StaticResource CaptionTertiary}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                  </Grid>
+                  <UniformGrid Columns="5">
+                    <RadioButton x:Name="MQuiet" GroupName="HomeMode" Style="{StaticResource ModeCard}" IsChecked="True" Tag="Quiet">
+                      <StackPanel>
+                        <TextBlock Text="&#xF1E8;" Style="{StaticResource Glyph}" FontSize="20" Foreground="{DynamicResource AccentTextBrush}" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Quiet" Style="{StaticResource BodyStrong}" Margin="0,10,0,0"/>
+                        <TextBlock Text="Silent until warm" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="MNormal" GroupName="HomeMode" Style="{StaticResource ModeCard}" Tag="Normal">
+                      <StackPanel>
+                        <TextBlock Text="&#xE9D9;" Style="{StaticResource Glyph}" FontSize="20" Foreground="{DynamicResource AccentTextBrush}" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Normal" Style="{StaticResource BodyStrong}" Margin="0,10,0,0"/>
+                        <TextBlock Text="Balanced every day" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="MPerf" GroupName="HomeMode" Style="{StaticResource ModeCard}" Tag="Perf">
+                      <StackPanel>
+                        <TextBlock Text="&#xEC4A;" Style="{StaticResource Glyph}" FontSize="20" Foreground="{DynamicResource AccentTextBrush}" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Performance" Style="{StaticResource BodyStrong}" Margin="0,10,0,0"/>
+                        <TextBlock Text="Airflow first" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="MCurve" GroupName="HomeMode" Style="{StaticResource ModeCard}" Tag="Curve">
+                      <StackPanel>
+                        <TextBlock Text="&#xE9E9;" Style="{StaticResource Glyph}" FontSize="20" Foreground="{DynamicResource AccentTextBrush}" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Curve" Style="{StaticResource BodyStrong}" Margin="0,10,0,0"/>
+                        <TextBlock Text="Your own fan curve" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="MAuto" GroupName="HomeMode" Style="{StaticResource ModeCard}" Tag="Auto">
+                      <StackPanel>
+                        <Viewbox Width="20" Height="20" HorizontalAlignment="Left"><Path Data="{StaticResource AutoGeometry}" Style="{StaticResource FluentIcon}" Fill="{DynamicResource AccentTextBrush}"/></Viewbox>
+                        <TextBlock Text="Auto" Style="{StaticResource BodyStrong}" Margin="0,10,0,0"/>
+                        <TextBlock Text="Follows your apps" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                    </RadioButton>
+                  </UniformGrid>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- ============================ FANS ============================ -->
+          <ScrollViewer x:Name="PageFans" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <StackPanel Margin="36,26,36,28">
+              <TextBlock Text="Fans" Style="{StaticResource PageTitle}"/>
+              <TextBlock Text="Pick a mode, then fine-tune it. Changes reach the fan controller right away." Style="{StaticResource Body}"
+                         Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,20"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}">
+                    <Path Data="{StaticResource FanGeometry}" Style="{StaticResource FluentIcon}" Fill="{StaticResource TextPrimaryBrush}"/>
+                  </Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Fan mode" Style="{StaticResource Body}"/>
+                    <TextBlock Text="How Vento drives the case and CPU fans" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <Border Grid.Column="2" Style="{StaticResource SegHost}">
+                    <StackPanel Orientation="Horizontal">
+                      <RadioButton x:Name="FQuiet" GroupName="FansMode" Style="{StaticResource SegItem}" Content="Quiet" IsChecked="True" Tag="Quiet"/>
+                      <RadioButton x:Name="FNormal" GroupName="FansMode" Style="{StaticResource SegItem}" Content="Normal" Tag="Normal"/>
+                      <RadioButton x:Name="FPerf" GroupName="FansMode" Style="{StaticResource SegItem}" Content="Performance" Tag="Perf"/>
+                      <RadioButton x:Name="FCurve" GroupName="FansMode" Style="{StaticResource SegItem}" Content="Curve" Tag="Curve"/>
+                      <RadioButton x:Name="FAuto" GroupName="FansMode" Style="{StaticResource SegItem}" Content="Auto" Tag="Auto"/>
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Border>
+
+              <TextBlock x:Name="FansSection" Text="Quiet mode" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <StackPanel x:Name="SlidersPanel">
+                <Border Style="{StaticResource SettingsCard}">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xEC4A;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                      <TextBlock Text="Case fan speed" Style="{StaticResource Body}"/>
+                      <TextBlock Text="While the board stays under the boost line" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" x:Name="V1" Text="30%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="S1" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="30"/>
+                  </Grid>
+                </Border>
+                <Border Style="{StaticResource SettingsCard}">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE9CA;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                      <TextBlock Text="Boost above" Style="{StaticResource Body}"/>
+                      <TextBlock Text="Board temperature that wakes the fans up" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" x:Name="V2" Text="75&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="S2" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="95" Value="75"/>
+                  </Grid>
+                </Border>
+                <Border Style="{StaticResource SettingsCard}">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xF1E8;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                      <TextBlock Text="Resume below" Style="{StaticResource Body}"/>
+                      <TextBlock Text="Fans settle back once the board cools to this" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" x:Name="V3" Text="65&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="S3" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="95" Value="65"/>
+                  </Grid>
+                </Border>
+                <Border Style="{StaticResource SettingsCard}">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE945;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                      <TextBlock Text="Boost speed" Style="{StaticResource Body}"/>
+                      <TextBlock Text="Case fan speed while boosting" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" x:Name="V4" Text="80%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="S4" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="80"/>
+                  </Grid>
+                </Border>
+              </StackPanel>
+
+              <!-- Curve mode: drag the four points -->
+              <Border x:Name="CurvePanel" Style="{StaticResource Card}" Padding="18,14,18,12" Visibility="Collapsed">
+                <StackPanel>
+                  <Grid Margin="0,0,0,6">
+                    <StackPanel>
+                      <TextBlock Text="Case fan curve" Style="{StaticResource Body}"/>
+                      <TextBlock Text="Drag a point up or down. Case fans follow the board temperature along this line." Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <Button x:Name="CurveReset" Style="{StaticResource FluentButton}" Content="Reset" FontSize="13" MinHeight="28" Padding="12,3" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                  </Grid>
+                  <Canvas x:Name="CurveCanvas" Height="230" Background="Transparent"/>
+                </StackPanel>
+              </Border>
+
+              <TextBlock Text="Activity" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Border Style="{StaticResource Card}" Padding="18,14,18,12">
+                <StackPanel>
+                  <Grid Margin="0,0,0,10">
+                    <TextBlock Text="Last 10 minutes" Style="{StaticResource Caption}"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                      <Ellipse Width="8" Height="8" Fill="#E6FFFFFF" VerticalAlignment="Center"/>
+                      <TextBlock Text="CPU fan" Style="{StaticResource Caption}" Margin="8,0,18,0"/>
+                      <Ellipse Width="8" Height="8" Fill="{DynamicResource AccentBrush}" VerticalAlignment="Center"/>
+                      <TextBlock Text="Case fans" Style="{StaticResource Caption}" Margin="8,0,0,0"/>
+                    </StackPanel>
+                  </Grid>
+                  <Canvas x:Name="FansChart" Height="120"/>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- ============================ ALERTS ========================== -->
+          <ScrollViewer x:Name="PageAlerts" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <StackPanel Margin="36,26,36,28">
+              <TextBlock Text="Alerts" Style="{StaticResource PageTitle}"/>
+              <TextBlock Text="When Vento should warn you, and when it should step in on its own." Style="{StaticResource Body}"
+                         Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,20"/>
+
+              <TextBlock Text="Comfort targets" Style="{StaticResource BodyStrong}" Margin="0,0,0,2"/>
+              <TextBlock Text="Above its target a part turns warm on Home and Vento sends a notification." Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+              <Border Style="{StaticResource Card}" Padding="16,2,16,2">
+                <StackPanel>
+                  <Grid MinHeight="56">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE950;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <TextBlock Grid.Column="1" Text="CPU" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="16,0"/>
+                    <TextBlock Grid.Column="2" x:Name="WCpuV" Text="65&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="WCpu" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="95" Value="65"/>
+                  </Grid>
+                  <Border Height="1" Background="{StaticResource DividerBrush}"/>
+                  <Grid MinHeight="56">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xF211;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <TextBlock Grid.Column="1" Text="GPU" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="16,0"/>
+                    <TextBlock Grid.Column="2" x:Name="WGpuV" Text="65&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="WGpu" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="95" Value="65"/>
+                  </Grid>
+                  <Border Height="1" Background="{StaticResource DividerBrush}"/>
+                  <Grid MinHeight="56">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xEDA2;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <TextBlock Grid.Column="1" Text="SSD" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="16,0"/>
+                    <TextBlock Grid.Column="2" x:Name="WSsdV" Text="60&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="WSsd" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="85" Value="60"/>
+                  </Grid>
+                  <Border Height="1" Background="{StaticResource DividerBrush}"/>
+                  <Grid MinHeight="56">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE964;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <TextBlock Grid.Column="1" Text="Board" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="16,0"/>
+                    <TextBlock Grid.Column="2" x:Name="WMbV" Text="62&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="WMb" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="90" Value="62"/>
+                  </Grid>
+                </StackPanel>
+              </Border>
+
+              <TextBlock Text="Safety limits" Style="{StaticResource BodyStrong}" Margin="0,20,0,2"/>
+              <TextBlock Text="Past these, Vento takes over: fans switch to Auto at full strength whatever mode you are in." Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7BA;" Style="{StaticResource Glyph}" Foreground="#FFB547" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="CPU limit" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Ryzen 5 3600 is rated to 95&#xB0;" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <TextBlock Grid.Column="2" x:Name="LimCpuV" Text="85&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                  <Slider Grid.Column="3" x:Name="LimCpu" Style="{StaticResource FluentSlider}" Minimum="60" Maximum="95" Value="85"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7BA;" Style="{StaticResource Glyph}" Foreground="#FFB547" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="GPU limit" Style="{StaticResource Body}"/>
+                    <TextBlock Text="RTX 2060 SUPER slows itself down near 88&#xB0;" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <TextBlock Grid.Column="2" x:Name="LimGpuV" Text="83&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                  <Slider Grid.Column="3" x:Name="LimGpu" Style="{StaticResource FluentSlider}" Minimum="60" Maximum="90" Value="83"/>
+                </Grid>
+              </Border>
+
+              <TextBlock Text="Game detection" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7FC;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Switch fans when a game starts" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Watches GPU load and changes the fan mode for you" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox x:Name="GameOn" Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                </Grid>
+              </Border>
+              <StackPanel x:Name="GameRows">
+                <Border Style="{StaticResource SettingsCard}">
+                  <Grid Margin="52,0,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                      <TextBlock Text="GPU load above" Style="{StaticResource Body}"/>
+                      <TextBlock Text="Counts as playing once the GPU stays this busy" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" x:Name="GameLoadV" Text="80%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="2" x:Name="GameLoad" Style="{StaticResource FluentSlider}" Minimum="30" Maximum="100" Value="80"/>
+                  </Grid>
+                </Border>
+                <Border Style="{StaticResource SettingsCard}">
+                  <Grid Margin="52,0,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                      <TextBlock Text="Switch to" Style="{StaticResource Body}"/>
+                      <TextBlock Text="The mode used while you play" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <Border Grid.Column="1" Style="{StaticResource SegHost}">
+                      <StackPanel Orientation="Horizontal">
+                        <RadioButton GroupName="GameAct" Style="{StaticResource SegItem}" Content="Normal"/>
+                        <RadioButton GroupName="GameAct" Style="{StaticResource SegItem}" Content="Performance" IsChecked="True"/>
+                      </StackPanel>
+                    </Border>
+                  </Grid>
+                </Border>
+                <Border Style="{StaticResource SettingsCard}">
+                  <Grid Margin="52,0,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                      <TextBlock Text="Switch back after" Style="{StaticResource Body}"/>
+                      <TextBlock Text="How long the GPU must be quiet before your own mode returns" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" x:Name="GameCoolV" Text="15 s" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="2" x:Name="GameCool" Style="{StaticResource FluentSlider}" Minimum="5" Maximum="120" Value="15"/>
+                  </Grid>
+                </Border>
+              </StackPanel>
+
+              <TextBlock Text="Notifications" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xEA8F;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Windows notifications" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Temperature, low battery and update notices in the Windows notification center" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <Button x:Name="TestToast" Grid.Column="2" Style="{StaticResource FluentButton}" Content="Send a test" FontSize="13" MinHeight="30" Padding="12,4" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                  <CheckBox Grid.Column="3" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                </Grid>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- ========================== PROFILES ========================== -->
+          <ScrollViewer x:Name="PageProfiles" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <StackPanel Margin="36,26,36,28">
+              <TextBlock Text="Profiles" Style="{StaticResource PageTitle}"/>
+              <TextBlock Text="One name for fans, overlay and displays together. Switch here, from the tray, or with a shortcut." Style="{StaticResource Body}"
+                         Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,20"/>
+              <UniformGrid Columns="2">
+                <!-- Gaming -->
+                <Border Style="{StaticResource Card}" Margin="0,0,6,12" Padding="0">
+                  <Grid>
+                    <Border CornerRadius="8" IsHitTestVisible="False">
+                      <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                          <GradientStop Color="#267FE0A0" Offset="0"/>
+                          <GradientStop Color="#007FE0A0" Offset="0.6"/>
+                        </LinearGradientBrush>
+                      </Border.Background>
+                    </Border>
+                    <StackPanel Margin="20,18,20,18">
+                      <Grid>
+                        <StackPanel Orientation="Horizontal">
+                          <Ellipse Width="10" Height="10" Fill="#7FE0A0" VerticalAlignment="Center"/>
+                          <TextBlock Text="Gaming" Style="{StaticResource Subtitle}" FontSize="18" Margin="10,0,0,0"/>
+                        </StackPanel>
+                        <Border x:Name="BadgeGaming" CornerRadius="10" Background="{DynamicResource AccentBrush}" Padding="9,2,9,3" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed">
+                          <TextBlock Text="Active" Style="{StaticResource Caption}" Foreground="#000000" FontWeight="SemiBold"/>
+                        </Border>
+                      </Grid>
+                      <Grid Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/></Grid.RowDefinitions>
+                        <Viewbox Width="14" Height="14" HorizontalAlignment="Left"><Path Data="{StaticResource FanGeometrySmall}" Style="{StaticResource FluentIcon}" Fill="{StaticResource TextSecondaryBrush}"/></Viewbox>
+                        <TextBlock Grid.Column="1" Text="Fans" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="2" Text="Performance" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Text="&#xE81E;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="Overlay" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="On" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Text="&#xE7F4;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="Displays" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Grid.Column="2" Text="Game preset" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                      </Grid>
+                      <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                        <Button x:Name="ApplyGaming" Style="{StaticResource AccentButton}" Content="Apply" FontSize="13" MinHeight="30" Padding="16,4" Tag="Gaming"/>
+                        <Button Style="{StaticResource FluentButton}" Content="Edit" FontSize="13" MinHeight="30" Padding="16,4" Margin="8,0,0,0"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </Grid>
+                </Border>
+                <!-- Movie -->
+                <Border Style="{StaticResource Card}" Margin="6,0,0,12" Padding="0">
+                  <Grid>
+                    <Border CornerRadius="8" IsHitTestVisible="False">
+                      <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                          <GradientStop Color="#26FF7A8A" Offset="0"/>
+                          <GradientStop Color="#00FF7A8A" Offset="0.6"/>
+                        </LinearGradientBrush>
+                      </Border.Background>
+                    </Border>
+                    <StackPanel Margin="20,18,20,18">
+                      <Grid>
+                        <StackPanel Orientation="Horizontal">
+                          <Ellipse Width="10" Height="10" Fill="#FF7A8A" VerticalAlignment="Center"/>
+                          <TextBlock Text="Movie" Style="{StaticResource Subtitle}" FontSize="18" Margin="10,0,0,0"/>
+                        </StackPanel>
+                        <Border x:Name="BadgeMovie" CornerRadius="10" Background="{DynamicResource AccentBrush}" Padding="9,2,9,3" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed">
+                          <TextBlock Text="Active" Style="{StaticResource Caption}" Foreground="#000000" FontWeight="SemiBold"/>
+                        </Border>
+                      </Grid>
+                      <Grid Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/></Grid.RowDefinitions>
+                        <Viewbox Width="14" Height="14" HorizontalAlignment="Left"><Path Data="{StaticResource FanGeometrySmall}" Style="{StaticResource FluentIcon}" Fill="{StaticResource TextSecondaryBrush}"/></Viewbox>
+                        <TextBlock Grid.Column="1" Text="Fans" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="2" Text="Quiet" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Text="&#xE81E;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="Overlay" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="Off" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Text="&#xE7F4;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="Displays" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Grid.Column="2" Text="Cinema preset" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                      </Grid>
+                      <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                        <Button x:Name="ApplyMovie" Style="{StaticResource AccentButton}" Content="Apply" FontSize="13" MinHeight="30" Padding="16,4" Tag="Movie"/>
+                        <Button Style="{StaticResource FluentButton}" Content="Edit" FontSize="13" MinHeight="30" Padding="16,4" Margin="8,0,0,0"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </Grid>
+                </Border>
+                <!-- Work -->
+                <Border Style="{StaticResource Card}" Margin="0,0,6,0" Padding="0">
+                  <Grid>
+                    <Border CornerRadius="8" IsHitTestVisible="False">
+                      <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                          <GradientStop Color="#26FFC46F" Offset="0"/>
+                          <GradientStop Color="#00FFC46F" Offset="0.6"/>
+                        </LinearGradientBrush>
+                      </Border.Background>
+                    </Border>
+                    <StackPanel Margin="20,18,20,18">
+                      <Grid>
+                        <StackPanel Orientation="Horizontal">
+                          <Ellipse Width="10" Height="10" Fill="#FFC46F" VerticalAlignment="Center"/>
+                          <TextBlock Text="Work" Style="{StaticResource Subtitle}" FontSize="18" Margin="10,0,0,0"/>
+                        </StackPanel>
+                        <Border x:Name="BadgeWork" CornerRadius="10" Background="{DynamicResource AccentBrush}" Padding="9,2,9,3" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed">
+                          <TextBlock Text="Active" Style="{StaticResource Caption}" Foreground="#000000" FontWeight="SemiBold"/>
+                        </Border>
+                      </Grid>
+                      <Grid Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/></Grid.RowDefinitions>
+                        <Viewbox Width="14" Height="14" HorizontalAlignment="Left"><Path Data="{StaticResource FanGeometrySmall}" Style="{StaticResource FluentIcon}" Fill="{StaticResource TextSecondaryBrush}"/></Viewbox>
+                        <TextBlock Grid.Column="1" Text="Fans" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="2" Text="Normal" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Text="&#xE81E;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="Overlay" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="Off" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Text="&#xE7F4;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="Displays" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Grid.Column="2" Text="Day preset" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                      </Grid>
+                      <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                        <Button x:Name="ApplyWork" Style="{StaticResource AccentButton}" Content="Apply" FontSize="13" MinHeight="30" Padding="16,4" Tag="Work"/>
+                        <Button Style="{StaticResource FluentButton}" Content="Edit" FontSize="13" MinHeight="30" Padding="16,4" Margin="8,0,0,0"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </Grid>
+                </Border>
+                <!-- New -->
+                <Grid Margin="6,0,0,0" Cursor="Hand" Background="Transparent">
+                  <Rectangle RadiusX="8" RadiusY="8" Stroke="#3DFFFFFF" StrokeThickness="1" StrokeDashArray="4 3"/>
+                  <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Border Width="40" Height="40" CornerRadius="20" Background="#0FFFFFFF" HorizontalAlignment="Center">
+                      <TextBlock Text="&#xE710;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="New profile" Style="{StaticResource BodyStrong}" HorizontalAlignment="Center" Margin="0,10,0,0"/>
+                    <TextBlock Text="Save what is set right now under a name" Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                  </StackPanel>
+                </Grid>
+              </UniformGrid>
+              <Border Style="{StaticResource SettingsCard}" Margin="0,16,0,0">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE765;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Next profile shortcut" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Cycle Gaming, Movie and Work from anywhere" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <Button x:Name="GoHotkeys" Grid.Column="2" Style="{StaticResource FluentButton}" Content="Set in Settings" FontSize="13" MinHeight="30" Padding="12,4"/>
+                </Grid>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- ========================== DISPLAYS ========================== -->
+          <ScrollViewer x:Name="PageDisplays" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <StackPanel Margin="36,26,36,28">
+              <TextBlock Text="Displays" Style="{StaticResource PageTitle}"/>
+              <TextBlock Text="Brightness and contrast are set inside the monitors themselves, over DDC/CI." Style="{StaticResource Body}"
+                         Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,20"/>
+              <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE790;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Preset" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Brightness and contrast for both displays in one tap" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <Border Grid.Column="2" Style="{StaticResource SegHost}">
+                    <StackPanel Orientation="Horizontal">
+                      <RadioButton x:Name="PresetDay" GroupName="Preset" Style="{StaticResource SegItem}" Content="Day" IsChecked="True" Tag="70,50,55,70"/>
+                      <RadioButton x:Name="PresetGame" GroupName="Preset" Style="{StaticResource SegItem}" Content="Game" Tag="90,60,80,75"/>
+                      <RadioButton x:Name="PresetCinema" GroupName="Preset" Style="{StaticResource SegItem}" Content="Cinema" Tag="35,45,30,60"/>
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Border>
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <Border Style="{StaticResource Card}" Padding="20,18,20,18">
+                  <StackPanel>
+                    <Grid Margin="0,0,0,18">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="48"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                      <Border Style="{StaticResource IconTile}" Width="48" Height="48" CornerRadius="8">
+                        <TextBlock Text="&#xE7F4;" Style="{StaticResource Glyph}" FontSize="22" HorizontalAlignment="Center"/>
+                      </Border>
+                      <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="Mon1Name" Text="XG2705" Style="{StaticResource BodyStrong}"/>
+                        <TextBlock x:Name="Mon1Info" Text="Primary display" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                    </Grid>
+                    <Grid Margin="0,0,0,12">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+                      <TextBlock Text="&#xE9A9;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                      <TextBlock Grid.Column="1" Text="Brightness" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                      <Slider Grid.Column="2" x:Name="B1" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="70"/>
+                      <TextBlock Grid.Column="3" x:Name="B1V" Text="70" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,0,0,16">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+                      <TextBlock Text="&#xE7B3;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                      <TextBlock Grid.Column="1" Text="Contrast" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                      <Slider Grid.Column="2" x:Name="C1" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="50"/>
+                      <TextBlock Grid.Column="3" x:Name="C1V" Text="50" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid>
+                      <TextBlock Text="Input" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="28,0,0,0"/>
+                      <Border Style="{StaticResource SegHost}">
+                        <StackPanel Orientation="Horizontal">
+                          <RadioButton GroupName="In1" Style="{StaticResource SegItem}" Content="HDMI 1" IsChecked="True"/>
+                          <RadioButton GroupName="In1" Style="{StaticResource SegItem}" Content="HDMI 2"/>
+                          <RadioButton GroupName="In1" Style="{StaticResource SegItem}" Content="DP"/>
+                        </StackPanel>
+                      </Border>
+                    </Grid>
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="2" Style="{StaticResource Card}" Padding="20,18,20,18">
+                  <StackPanel>
+                    <Grid Margin="0,0,0,18">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="48"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                      <Border Style="{StaticResource IconTile}" Width="48" Height="48" CornerRadius="8">
+                        <TextBlock Text="&#xE7F4;" Style="{StaticResource Glyph}" FontSize="22" HorizontalAlignment="Center"/>
+                      </Border>
+                      <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="Mon2Name" Text="LG ULTRAWIDE" Style="{StaticResource BodyStrong}"/>
+                        <TextBlock x:Name="Mon2Info" Text="Second display" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                    </Grid>
+                    <Grid Margin="0,0,0,12">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+                      <TextBlock Text="&#xE9A9;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                      <TextBlock Grid.Column="1" Text="Brightness" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                      <Slider Grid.Column="2" x:Name="B2" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="55"/>
+                      <TextBlock Grid.Column="3" x:Name="B2V" Text="55" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,0,0,16">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+                      <TextBlock Text="&#xE7B3;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                      <TextBlock Grid.Column="1" Text="Contrast" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                      <Slider Grid.Column="2" x:Name="C2" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="70"/>
+                      <TextBlock Grid.Column="3" x:Name="C2V" Text="70" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid>
+                      <TextBlock Text="Input" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="28,0,0,0"/>
+                      <Border Style="{StaticResource SegHost}">
+                        <StackPanel Orientation="Horizontal">
+                          <RadioButton GroupName="In2" Style="{StaticResource SegItem}" Content="HDMI"/>
+                          <RadioButton GroupName="In2" Style="{StaticResource SegItem}" Content="DP" IsChecked="True"/>
+                        </StackPanel>
+                      </Border>
+                    </Grid>
+                  </StackPanel>
+                </Border>
+              </Grid>
+
+              <TextBlock Text="All displays" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE9A9;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Match brightness" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Move one slider and the other display follows" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE708;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Night profile" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Dims both displays from 23:00 to 07:00" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
+                </Grid>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- =========================== AIRPODS ========================== -->
+          <ScrollViewer x:Name="PagePods" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <StackPanel Margin="36,26,36,28">
+              <TextBlock Text="Devices" Style="{StaticResource PageTitle}"/>
+              <Grid Margin="0,4,0,20">
+                <TextBlock Text="Battery for headphones, mice, keyboards and controllers." Style="{StaticResource Body}"
+                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,330,0" TextTrimming="CharacterEllipsis"/>
+                <!-- battery is read on a schedule, not constantly: when it was, and a button to look now -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                  <TextBlock x:Name="DevChecked" Text="Checking..." Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                  <Button x:Name="DevRefresh" Style="{StaticResource FluentButton}" FontSize="13" MinHeight="30" Padding="10,4" ToolTip="Check battery now">
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                      <TextBlock Text="Refresh" VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </Button>
+                </StackPanel>
+              </Grid>
+              <!-- Two tabs: AirPods (only while a pair is connected) and every
+                   other connected device. Paired-but-away devices never show. -->
+              <Border x:Name="DevTabs" Style="{StaticResource SegHost}" HorizontalAlignment="Left" Margin="0,0,0,14">
+                <StackPanel Orientation="Horizontal">
+                  <RadioButton x:Name="TabPods" GroupName="DevTab" Style="{StaticResource SegItem}" Content="AirPods" IsChecked="True"/>
+                  <RadioButton x:Name="TabOther" GroupName="DevTab" Style="{StaticResource SegItem}" Content="Other devices"/>
+                </StackPanel>
+              </Border>
+              <StackPanel x:Name="PodsPanel">
+              <Border Style="{StaticResource Card}" Padding="28,22,28,26">
+                <StackPanel>
+                  <Grid Margin="0,0,0,22">
+                    <StackPanel Orientation="Horizontal">
+                      <Border Style="{StaticResource IconTile}" Width="44" Height="44" CornerRadius="22">
+                        <TextBlock Text="&#xE7F6;" Style="{StaticResource Glyph}" FontSize="20" HorizontalAlignment="Center"/>
+                      </Border>
+                      <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="PodName" Text="AirPods" Style="{StaticResource Subtitle}" FontSize="18"/>
+                        <TextBlock Text="AirPods 4 &#xB7; Connected" Style="{StaticResource Caption}"/>
+                      </StackPanel>
+                    </StackPanel>
+                    <!-- on-demand read: listen for the AirPods' battery broadcast right now -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                      <TextBlock x:Name="PodsUpdated" Text="Updated 12 min ago" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                      <Button x:Name="PodsCheck" Style="{StaticResource FluentButton}" FontSize="13" MinHeight="30" Padding="10,4" ToolTip="Read the battery now">
+                        <StackPanel Orientation="Horizontal">
+                          <TextBlock x:Name="PodsCheckIcon" Text="&#xE72C;" FontFamily="{StaticResource IconFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" RenderTransformOrigin="0.5,0.5">
+                            <TextBlock.RenderTransform><RotateTransform/></TextBlock.RenderTransform>
+                          </TextBlock>
+                          <TextBlock x:Name="PodsCheckText" Text="Check now" VerticalAlignment="Center"/>
+                        </StackPanel>
+                      </Button>
+                    </StackPanel>
+                  </Grid>
+                  <UniformGrid Columns="3">
+                    <StackPanel>
+                      <Grid Width="136" Height="136">
+                        <Canvas x:Name="PRingL" Width="136" Height="136"/>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                          <TextBlock x:Name="PPctL" Text="100%" FontFamily="{StaticResource DisplayFont}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <TextBlock x:Name="PodBolt" Text="&#xE945;" Style="{StaticResource Glyph}" FontSize="11" Foreground="{StaticResource SuccessBrush}"/>
+                            <TextBlock Text="Charging" Style="{StaticResource Caption}" Foreground="{StaticResource SuccessBrush}" Margin="4,0,0,0"/>
+                          </StackPanel>
+                        </StackPanel>
+                      </Grid>
+                      <TextBlock Text="Left" Style="{StaticResource BodyStrong}" HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                    </StackPanel>
+                    <StackPanel>
+                      <Grid Width="136" Height="136">
+                        <Canvas x:Name="PRingR" Width="136" Height="136"/>
+                        <TextBlock x:Name="PPctR" Text="90%" FontFamily="{StaticResource DisplayFont}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Grid>
+                      <TextBlock Text="Right" Style="{StaticResource BodyStrong}" HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                    </StackPanel>
+                    <StackPanel>
+                      <Grid Width="136" Height="136">
+                        <Canvas x:Name="PRingC" Width="136" Height="136"/>
+                        <TextBlock x:Name="PPctC" Text="30%" FontFamily="{StaticResource DisplayFont}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Grid>
+                      <TextBlock Text="Case" Style="{StaticResource BodyStrong}" HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                    </StackPanel>
+                  </UniformGrid>
+                </StackPanel>
+              </Border>
+              </StackPanel>
+              <Border x:Name="OtherPanel" Style="{StaticResource Card}" Padding="16,2,16,2" Visibility="Collapsed">
+                <StackPanel x:Name="DeviceRows"/>
+              </Border>
+              <!-- nothing connected at all -->
+              <Border x:Name="NoDevices" Style="{StaticResource Card}" Padding="24,26,24,26" Visibility="Collapsed">
+                <StackPanel HorizontalAlignment="Center">
+                  <Border Width="48" Height="48" CornerRadius="24" Background="#0FFFFFFF" HorizontalAlignment="Center">
+                    <TextBlock Text="&#xE702;" Style="{StaticResource Glyph}" FontSize="20" HorizontalAlignment="Center"/>
+                  </Border>
+                  <TextBlock x:Name="NoDevTitle" Text="Looking for devices..." Style="{StaticResource BodyStrong}" HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                  <TextBlock Text="Connect your AirPods, a headset, mouse or keyboard and its battery shows up here." Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                  <Button x:Name="DevExample" Style="{StaticResource LinkButton}" Content="Preview with example devices" HorizontalAlignment="Center" Margin="0,10,0,0"/>
+                </StackPanel>
+              </Border>
+              <TextBlock Text="Options" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE81E;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Show in the overlay" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Headphone battery next to your game stats" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE83F;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Low battery alert" Style="{StaticResource Body}"/>
+                    <TextBlock Text="One Windows notification when a device reaches this level" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock x:Name="LowBatV" Text="25%" Style="{StaticResource Body}" VerticalAlignment="Center" Width="40" TextAlignment="Right" Margin="0,0,12,0"/>
+                    <Slider x:Name="LowBat" Style="{StaticResource FluentSlider}" Width="150" Minimum="5" Maximum="50" Value="25" Margin="0,0,20,0"/>
+                    <CheckBox Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE72C;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Check battery" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Less often saves charge. Manual: only when you press Refresh." Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <Border Grid.Column="2" Style="{StaticResource SegHost}">
+                    <StackPanel Orientation="Horizontal">
+                      <RadioButton x:Name="ChkManual" GroupName="BatChk" Style="{StaticResource SegItem}" Content="Manual" Tag="0"/>
+                      <RadioButton x:Name="Chk15" GroupName="BatChk" Style="{StaticResource SegItem}" Content="15 min" Tag="15"/>
+                      <RadioButton x:Name="Chk30" GroupName="BatChk" Style="{StaticResource SegItem}" Content="30 min" Tag="30" IsChecked="True"/>
+                      <RadioButton x:Name="Chk60" GroupName="BatChk" Style="{StaticResource SegItem}" Content="1 hour" Tag="60"/>
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- =========================== OVERLAY ========================== -->
+          <ScrollViewer x:Name="PageOverlay" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <StackPanel Margin="36,26,36,28">
+              <TextBlock Text="Overlay" Style="{StaticResource PageTitle}"/>
+              <TextBlock Text="Live stats on top of your games. Vento shows it on its own when a game starts." Style="{StaticResource Body}"
+                         Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,20"/>
+              <!-- A game-like scene with the overlay where it will sit -->
+              <Border CornerRadius="8" Height="168" BorderBrush="{StaticResource CardStrokeBrush}" BorderThickness="1" ClipToBounds="True" Background="{StaticResource SceneBrush}">
+                <Grid>
+                  <Ellipse Width="420" Height="260" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-80,-120" Opacity="0.55">
+                    <Ellipse.Fill>
+                      <RadialGradientBrush>
+                        <GradientStop Color="#FFB46A" Offset="0"/>
+                        <GradientStop Color="#00FFB46A" Offset="1"/>
+                      </RadialGradientBrush>
+                    </Ellipse.Fill>
+                  </Ellipse>
+                  <Ellipse Width="360" Height="220" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-60,-90,0,0" Opacity="0.5">
+                    <Ellipse.Fill>
+                      <RadialGradientBrush>
+                        <GradientStop Color="#5AA9FF" Offset="0"/>
+                        <GradientStop Color="#005AA9FF" Offset="1"/>
+                      </RadialGradientBrush>
+                    </Ellipse.Fill>
+                  </Ellipse>
+                  <Border x:Name="OsdMock" CornerRadius="8" Background="{DynamicResource OsdPanelBrush}" BorderBrush="{DynamicResource OsdBorderBrush}" BorderThickness="1"
+                          HorizontalAlignment="Right" VerticalAlignment="Top" Margin="16" Padding="12,7">
+                    <!-- built by Glass.ps1 from the metrics switched on below -->
+                    <StackPanel x:Name="OsdItems" Orientation="Horizontal"/>
+                  </Border>
+                  <TextBlock Text="Preview" Style="{StaticResource Caption}" Foreground="#99FFFFFF" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="14,10"/>
+                </Grid>
+              </Border>
+
+              <TextBlock Text="Layout" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <UniformGrid Columns="4" Margin="-4,0">
+                <RadioButton x:Name="LayBlade" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8" IsChecked="True">
+                  <StackPanel>
+                    <Border Style="{StaticResource MiniScene}">
+                      <Border Background="{DynamicResource OsdPanelBrush}" BorderBrush="{DynamicResource OsdAccentBrush}" BorderThickness="2,0,0,0" CornerRadius="3" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" Padding="6,3">
+                        <StackPanel>
+                          <TextBlock Text="144" Style="{StaticResource OsdTiny}" FontSize="13" Foreground="{DynamicResource OsdAccentBrush}"/>
+                          <TextBlock Text="60&#xB0;  54&#xB0;  1951" Style="{StaticResource OsdTiny}"/>
+                        </StackPanel>
+                      </Border>
+                    </Border>
+                    <TextBlock Text="Blade" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
+                  </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="LayStrip" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8">
+                  <StackPanel>
+                    <Border Style="{StaticResource MiniScene}">
+                      <Border Background="{DynamicResource OsdPanelBrush}" CornerRadius="8" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" Padding="7,2">
+                        <StackPanel Orientation="Horizontal">
+                          <TextBlock Text="144" Style="{StaticResource OsdTiny}" Foreground="{DynamicResource OsdAccentBrush}"/>
+                          <TextBlock Text="  60&#xB0;  54&#xB0;  1951" Style="{StaticResource OsdTiny}"/>
+                        </StackPanel>
+                      </Border>
+                    </Border>
+                    <TextBlock Text="Strip" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
+                  </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="LayHero" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8">
+                  <StackPanel>
+                    <Border Style="{StaticResource MiniScene}">
+                      <Border Background="{DynamicResource OsdPanelBrush}" CornerRadius="4" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" Padding="7,2,7,4">
+                        <StackPanel>
+                          <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="144" Style="{StaticResource OsdTiny}" FontSize="20" Foreground="{DynamicResource OsdAccentBrush}"/>
+                            <TextBlock Text=" FPS" Style="{StaticResource OsdTiny}" FontSize="7" Foreground="{DynamicResource OsdLabBrush}" Margin="0,5,0,0"/>
+                          </StackPanel>
+                          <TextBlock Text="60&#xB0;  54&#xB0;  1951" Style="{StaticResource OsdTiny}" FontSize="7"/>
+                        </StackPanel>
+                      </Border>
+                    </Border>
+                    <TextBlock Text="Hero" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
+                  </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="LayPills" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8">
+                  <StackPanel>
+                    <Border Style="{StaticResource MiniScene}">
+                      <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8">
+                        <Border Background="{DynamicResource OsdPanelBrush}" CornerRadius="7" Padding="6,1" Margin="0,0,3,0"><TextBlock Text="144" Style="{StaticResource OsdTiny}" Foreground="{DynamicResource OsdAccentBrush}"/></Border>
+                        <Border Background="{DynamicResource OsdPanelBrush}" CornerRadius="7" Padding="6,1" Margin="0,0,3,0"><TextBlock Text="60&#xB0;" Style="{StaticResource OsdTiny}"/></Border>
+                        <Border Background="{DynamicResource OsdPanelBrush}" CornerRadius="7" Padding="6,1"><TextBlock Text="54&#xB0;" Style="{StaticResource OsdTiny}"/></Border>
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="Pills" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
+                  </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="LayGhost" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,0">
+                  <StackPanel>
+                    <Border Style="{StaticResource MiniScene}">
+                      <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="9,6">
+                        <StackPanel.Effect><DropShadowEffect ShadowDepth="1" BlurRadius="5" Opacity="0.9"/></StackPanel.Effect>
+                        <TextBlock Text="144" Style="{StaticResource OsdTiny}" FontSize="17" Foreground="{DynamicResource OsdAccentBrush}"/>
+                        <TextBlock Text="60&#xB0;  54&#xB0;  1951" Style="{StaticResource OsdTiny}"/>
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="Ghost" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
+                  </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="LayMicro" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,0">
+                  <StackPanel>
+                    <Border Style="{StaticResource MiniScene}">
+                      <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8,7">
+                        <StackPanel.Effect><DropShadowEffect ShadowDepth="1" BlurRadius="4" Opacity="0.9"/></StackPanel.Effect>
+                        <TextBlock Text="144" Style="{StaticResource OsdTiny}" FontSize="7" Foreground="{DynamicResource OsdAccentBrush}"/>
+                        <TextBlock Text="  60&#xB0;  54&#xB0;  1951" Style="{StaticResource OsdTiny}" FontSize="7"/>
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Text="Micro" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
+                  </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="LayThermo" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,0">
+                  <StackPanel>
+                    <Border Style="{StaticResource MiniScene}">
+                      <Border Background="{DynamicResource OsdPanelBrush}" CornerRadius="4" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" Padding="5,4,8,4">
+                        <StackPanel Orientation="Horizontal">
+                          <Border Width="3" CornerRadius="1.5" Margin="0,0,6,0">
+                            <Border.Background>
+                              <LinearGradientBrush StartPoint="0,1" EndPoint="0,0">
+                                <GradientStop Color="#6FB1FF" Offset="0"/>
+                                <GradientStop Color="#F5A45C" Offset="0.6"/>
+                                <GradientStop Color="#F2606B" Offset="1"/>
+                              </LinearGradientBrush>
+                            </Border.Background>
+                          </Border>
+                          <StackPanel>
+                            <TextBlock Text="144" Style="{StaticResource OsdTiny}" FontSize="12" Foreground="{DynamicResource OsdAccentBrush}"/>
+                            <TextBlock Text="60&#xB0;  54&#xB0;" Style="{StaticResource OsdTiny}"/>
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
+                    </Border>
+                    <TextBlock Text="Thermo" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
+                  </StackPanel>
+                </RadioButton>
+              </UniformGrid>
+
+              <TextBlock Text="What it shows" Style="{StaticResource BodyStrong}" Margin="0,20,0,2"/>
+              <TextBlock Text="The first one switched on is the big number. Each can have its own color." Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+              <!-- one row per metric (built by Glass.ps1): color dot, name, switch -->
+              <Border Style="{StaticResource Card}" Padding="16,2,16,2">
+                <UniformGrid x:Name="MetricRows" Columns="2"/>
+              </Border>
+
+              <TextBlock Text="Look" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE790;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Color" Style="{StaticResource Body}"/>
+                    <TextBlock x:Name="OsdThemeName" Text="Sirocco" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <RadioButton x:Name="ThSirocco" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#6FB1FF" Tag="sirocco" IsChecked="True" ToolTip="Sirocco"/>
+                    <RadioButton x:Name="ThEmber" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#FFB25C" Tag="ember" ToolTip="Ember"/>
+                    <RadioButton x:Name="ThVenom" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#7CF29B" Tag="venom" ToolTip="Venom"/>
+                    <RadioButton x:Name="ThViolet" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#B18CFF" Tag="violet" ToolTip="Violet"/>
+                    <RadioButton x:Name="ThCrimson" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#FF6B7E" Tag="crimson" ToolTip="Crimson"/>
+                    <RadioButton x:Name="ThMono" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#F2F4F7" Tag="mono" ToolTip="Mono"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7F4;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Position" Style="{StaticResource Body}"/>
+                    <TextBlock x:Name="OsdCornerName" Text="Top right" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <!-- a tiny screen with a spot per corner -->
+                  <Border Grid.Column="2" Width="84" Height="52" CornerRadius="5" BorderBrush="#5DFFFFFF" BorderThickness="1.5" Background="#0AFFFFFF">
+                    <Grid Margin="3">
+                      <RadioButton x:Name="CorTL" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Left" VerticalAlignment="Top" Tag="Top left"/>
+                      <RadioButton x:Name="CorTR" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Right" VerticalAlignment="Top" Tag="Top right" IsChecked="True"/>
+                      <RadioButton x:Name="CorBL" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Left" VerticalAlignment="Bottom" Tag="Bottom left"/>
+                      <RadioButton x:Name="CorBR" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Right" VerticalAlignment="Bottom" Tag="Bottom right"/>
+                    </Grid>
+                  </Border>
+                </Grid>
+              </Border>
+
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE740;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Size" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Scales the whole overlay" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <TextBlock Grid.Column="2" x:Name="OsdScaleV" Text="100%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                  <Slider Grid.Column="3" x:Name="OsdScale" Style="{StaticResource FluentSlider}" Minimum="60" Maximum="160" Value="100"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7B3;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Opacity" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Let a little of the game show through" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <TextBlock Grid.Column="2" x:Name="OsdOpacityV" Text="100%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                  <Slider Grid.Column="3" x:Name="OsdOpacity" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="100" Value="100"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7C2;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Exact position" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Drag the overlay anywhere on screen, or snap it back to its corner" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Style="{StaticResource FluentButton}" Content="Move on screen" FontSize="13" MinHeight="30" Padding="12,4"/>
+                    <Button Style="{StaticResource FluentButton}" Content="Reset" FontSize="13" MinHeight="30" Padding="12,4" Margin="8,0,0,0"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <TextBlock Text="Behavior" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE81E;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Show overlay" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Auto appears with a game and hides after it" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <Border Grid.Column="2" Style="{StaticResource SegHost}">
+                    <StackPanel Orientation="Horizontal">
+                      <RadioButton GroupName="OsdMode" Style="{StaticResource SegItem}" Content="Auto" IsChecked="True"/>
+                      <RadioButton GroupName="OsdMode" Style="{StaticResource SegItem}" Content="Always"/>
+                      <RadioButton GroupName="OsdMode" Style="{StaticResource SegItem}" Content="Off"/>
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7EF;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Hide from screen capture" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Invisible to OBS, Discord and screenshots" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7F4;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Show on the second display" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Keep the game screen completely clean" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
+                </Grid>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- =========================== SETTINGS ========================= -->
+          <ScrollViewer x:Name="PageSettings" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <StackPanel Margin="36,26,36,28">
+              <TextBlock Text="Settings" Style="{StaticResource PageTitle}"/>
+              <TextBlock Text="Appearance" Style="{StaticResource BodyStrong}" Margin="0,22,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xEB41;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Window material" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Mica matches Windows Settings and takes its tone from your theme; Acrylic shows what is behind" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <Border Grid.Column="2" Style="{StaticResource SegHost}">
+                    <StackPanel Orientation="Horizontal">
+                      <RadioButton x:Name="MatAcrylic" GroupName="Mat" Style="{StaticResource SegItem}" Content="Acrylic" Tag="3"/>
+                      <RadioButton x:Name="MatMica" GroupName="Mat" Style="{StaticResource SegItem}" Content="Mica" Tag="2" IsChecked="True"/>
+                      <RadioButton x:Name="MatMicaAlt" GroupName="Mat" Style="{StaticResource SegItem}" Content="Mica Alt" Tag="4"/>
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE790;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Accent color" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Follows the accent you picked in Windows" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock x:Name="AccentHex" Text="#4CC2FF" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    <Border Width="24" Height="24" CornerRadius="4" Background="{DynamicResource AccentBrush}" BorderBrush="#24FFFFFF" BorderThickness="1"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <TextBlock x:Name="ShortcutsTitle" Text="Shortcuts" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <!-- One card, many rows (built by Glass.ps1). Record listens for the next combo. -->
+              <Border Style="{StaticResource Card}" Padding="16,2,16,2">
+                <StackPanel x:Name="HotkeyRows"/>
+              </Border>
+
+              <TextBlock Text="Startup" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7E8;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Start with Windows" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Fans are under control from the moment you sign in" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7C4;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Keep running in the tray" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Closing the window leaves fan control on" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE9F3;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Check for updates automatically" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Downloads are verified before they install" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                </Grid>
+              </Border>
+
+              <TextBlock Text="About" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}">
+                    <Path Data="{StaticResource FanGeometry}" Style="{StaticResource FluentIcon}" Fill="{DynamicResource AccentBrush}"/>
+                  </Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Vento" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Version 1.8.0 &#xB7; design preview" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <Button Grid.Column="2" Style="{StaticResource FluentButton}" Content="Check for updates" VerticalAlignment="Center"/>
+                </Grid>
+              </Border>
+
+              <!-- Not part of the app: switches for trying the error and notice states -->
+              <TextBlock Text="Preview states" Style="{StaticResource BodyStrong}" Margin="0,20,0,2"/>
+              <TextBlock Text="Only in this design preview, to see how Vento looks when something needs you." Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE783;" Style="{StaticResource Glyph}" Foreground="#FF99A4" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Fan driver missing" Style="{StaticResource Body}"/>
+                    <TextBlock Text="What you see when PawnIO is uninstalled or stopped" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox x:Name="PrevNoDriver" Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xEA8F;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Notifications" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Real Windows notifications, as Vento sends them" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button x:Name="PrevToastTemp" Style="{StaticResource FluentButton}" Content="Temperature" FontSize="13" MinHeight="30" Padding="12,4"/>
+                    <Button x:Name="PrevToastBat" Style="{StaticResource FluentButton}" Content="Low battery" FontSize="13" MinHeight="30" Padding="12,4" Margin="8,0,0,0"/>
+                    <Button x:Name="PrevToastDrv" Style="{StaticResource FluentButton}" Content="Driver" FontSize="13" MinHeight="30" Padding="12,4" Margin="8,0,0,0"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>

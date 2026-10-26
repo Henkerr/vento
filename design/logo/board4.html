@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><title>Vento logo - kıvrım</title>
+<style>
+  * { box-sizing:border-box; margin:0 }
+  body { background:#0d0f13; color:#f2f4f8; font-family:"Segoe UI Variable Display","Segoe UI",sans-serif; padding:36px; width:1320px }
+  h1 { font-weight:600; font-size:30px } .sub { color:#98a1b1; margin:6px 0 24px; font-size:15px; line-height:1.5 }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px }
+  .card { background:radial-gradient(110% 80% at 50% 0%, #232a38 0%, #15181e 62%); border:1px solid #ffffff10; border-radius:18px; padding:22px; position:relative }
+  .num { position:absolute; top:16px; left:18px; font-size:13px; color:#98a1b1; font-weight:600 }
+  .hero { height:220px; display:grid; place-items:center } .hero svg { width:190px; height:190px }
+  .name { font-size:19px; font-weight:600 } .why { color:#98a1b1; font-size:13.5px; margin-top:4px; line-height:1.45; min-height:40px }
+  .sizes { display:flex; gap:12px; align-items:center; margin-top:14px; padding-top:14px; border-top:1px solid #ffffff10 }
+  .tb { background:#1c1c1c; border-radius:8px; padding:7px 10px; display:flex; gap:12px; align-items:center }
+  .lt { background:#f3f3f3; border-radius:8px; padding:7px 10px; display:flex; gap:12px; align-items:center }
+  .big { margin-left:auto }
+</style></head><body>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <filter id="soft" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#000" flood-opacity=".35"/></filter>
+  <filter id="heat" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+  <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34383F"/><stop offset="1" stop-color="#1D2025"/></linearGradient>
+  <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".5" stop-color="#fff" stop-opacity=".06"/></linearGradient>
+  <linearGradient id="th" gradientUnits="userSpaceOnUse" x1="20" y1="50" x2="95" y2="30"><stop offset="0" stop-color="#4CC2FF"/><stop offset=".6" stop-color="#4CC2FF"/><stop offset="1" stop-color="#FFB547"/></linearGradient>
+  <g id="tile">
+    <g filter="url(#soft)"><rect x="6" y="6" width="88" height="88" rx="22" fill="url(#glass)"/><rect x="6.5" y="6.5" width="87" height="87" rx="21.5" fill="none" stroke="url(#edge)"/></g>
+    <circle cx="78" cy="36" r="13" fill="#FFB547" opacity=".35" filter="url(#heat)"/>
+  </g>
+</defs></svg>
+<h1>V'nin kıvrımı — toparlanmış seçenekler</h1>
+<div class="sub">Kıvrım artık elle çizilmiş bir eğri değil: V'nin sağ koluna teğet gerçek daire yaylarıyla kuruldu, kalınlık ve uç şekli tutarlı. Hepsi seçtiğiniz cam karoda.</div>
+<div class="grid" id="grid"></div>
+<script>
+const S = 'fill="none" stroke="url(#th)" stroke-linecap="round" stroke-linejoin="round"';
+const V = 'M20,22 L47,80 L69,32';
+const C = [
+  ['Önceki hali', 'Karşılaştırma için tur 3\'teki kıvrım.',
+    `<path ${S} stroke-width="11" d="M20,22 L47,80 L69,32 C73,23 82,18 89,22 C95,26 94,35 88,37"/>`],
+  ['Geometrik kanca', 'Kola teğet tek bir daire yayı, 200 derece döner. Temiz ve sakin.',
+    `<path ${S} stroke-width="11" d="${V} A11,11 0 1 1 86.83,44.3"/>`],
+  ['Toplu kanca', 'Aynı kanca, ucunda yazı karakterlerindeki gibi yuvarlak bir top. Daha imzalı.',
+    `<path ${S} stroke-width="11" d="${V} A11,11 0 1 1 86.83,44.3"/><circle cx="86.2" cy="45.4" r="7.4" fill="url(#th)"/>`],
+  ['Spiral', 'İki yay: önce geniş, sonra daralan. Rüzgarın kendi etrafında dönmesi.',
+    `<path ${S} stroke-width="11" d="${V} A11,11 0 0 1 89,41.16 A6,6 0 0 1 77.58,39.22"/>`],
+  ['İncelen spiral', 'Spiral uca doğru inceliyor; fırça darbesi gibi akıyor.',
+    `<path ${S} stroke-width="11" d="${V} A11,11 0 0 1 83.58,26.58"/><path ${S} stroke-width="9.5" d="M83.58,26.58 A11,11 0 0 1 89,41.16"/><path ${S} stroke-width="7" d="M89,41.16 A6,6 0 0 1 77.58,39.22"/>`],
+  ['Geniş nefes', 'Daha büyük ve açık bir yay, uçta hafifçe incelerek biter. Ferah, havadar.',
+    `<path ${S} stroke-width="11" d="${V} A13,13 0 0 1 92.6,40.4"/><path ${S} stroke-width="8.5" d="M92.6,40.4 A13,13 0 0 1 84.27,49.96"/>`],
+];
+const g = document.getElementById('grid');
+C.forEach(([name,why,mark],i)=>{
+  const id = 'v'+i;
+  document.querySelector('defs').insertAdjacentHTML('beforeend', `<symbol id="${id}" viewBox="0 0 100 100"><use href="#tile"/><g transform="translate(50 51) scale(.6) translate(-57 -51)">${mark}</g></symbol>`);
+  const u = (s)=>`<svg width="${s}" height="${s}"><use href="#${id}"/></svg>`;
+  g.insertAdjacentHTML('beforeend', `<div class="card"><div class="num">${i}</div><div class="hero"><svg><use href="#${id}"/></svg></div>
+    <div class="name">${name}</div><div class="why">${why}</div>
+    <div class="sizes"><div class="tb">${u(32)}${u(24)}${u(16)}</div><div class="lt">${u(32)}${u(16)}</div><div class="big">${u(48)}</div></div></div>`);
+});
+// symbols added after parse need a re-render of the uses
+document.body.innerHTML += '';
+</script>
+</body></html>
