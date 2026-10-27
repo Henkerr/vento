@@ -8,9 +8,30 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ## 1.8.1 — 2026-10-27
 
-Devices, for real.
+Every page, live. The new design now drives everything the old window did, and a bit more.
 
 ### Added
+- **Fans:** each mode's sliders, the Quiet cooling boost, a drag-the-points curve editor showing
+  where the fans sit right now, and a 10-minute activity chart. Reset to defaults per mode.
+- **Alerts:** comfort targets, safety limits (named after your actual CPU and GPU), game
+  detection (switch to Performance or Curve, how busy the GPU must be, how long to keep going
+  after), and a switch for Windows notifications with a test button.
+- **Profiles:** cards for every profile with Apply and Edit, a New profile dialog (name, color,
+  fans, overlay, display preset), rename and delete for your own profiles, and profile chips on
+  Home. The tray menu and the hotkey stay in step.
+- **Displays:** a card per monitor read over DDC/CI - brightness, contrast, color preset, input
+  (with a 12-second automatic way back), and *More controls* for sharpness, volume, RGB gain,
+  picture mode, resets and power. Presets in one tap, your own presets with +, match brightness
+  across displays, the night schedule, and Identify.
+- **Overlay:** layout, the metrics and a color for each, theme, corner, size, opacity, drag it
+  anywhere on screen, show mode, hide from capture, second display - with a live preview.
+- **Settings:** record shortcuts right in the list (conflicts are named on the row), start with
+  Windows, start in the tray, keep running in the tray, sensor refresh rate, automatic updates
+  and a *Check for updates* button - also in the tray menu.
+- **Tray flyout:** a left click on the tray icon opens a Quick Settings style panel with the fan
+  modes, overlay, this mode's case fan speed, temperatures and your device's battery.
+- **Fan driver watch:** if the PawnIO driver goes missing, Home says so (and Windows notifies),
+  offers to install the official package, and asks for a restart once it is back.
 - **Every connected Bluetooth device** now shows on Home and the Devices page, with the battery
   level Windows reports for it - headphones, mice, keyboards, controllers. Paired devices that
   aren't connected stay out of the list. AirPods add left / right / case from their own

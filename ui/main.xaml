@@ -745,6 +745,7 @@
                            Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,300,0" TextTrimming="CharacterEllipsis"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                   <TextBlock x:Name="DispStatus" Text="Reading monitors..." Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                  <Button x:Name="DispIdentify" Style="{StaticResource FluentButton}" Content="Identify" FontSize="13" MinHeight="30" Padding="12,4" Margin="0,0,8,0" ToolTip="Flash each display so you can tell which card is which"/>
                   <Button x:Name="DispRescan" Style="{StaticResource FluentButton}" FontSize="13" MinHeight="30" Padding="10,4" ToolTip="Read the displays again">
                     <StackPanel Orientation="Horizontal">
                       <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -776,9 +777,12 @@
                     <TextBlock Text="Preset" Style="{StaticResource Body}"/>
                     <TextBlock Text="Brightness, contrast and color for every display in one tap" Style="{StaticResource Caption}"/>
                   </StackPanel>
-                  <Border Grid.Column="2" Style="{StaticResource SegHost}">
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                  <Border Style="{StaticResource SegHost}" ToolTip="Right-click a preset to update or delete it">
                     <StackPanel x:Name="DispPresets" Orientation="Horizontal"/>
                   </Border>
+                  <Button x:Name="DispPresetAdd" Style="{StaticResource IconButton}" Content="&#xE710;" Margin="6,0,0,0" ToolTip="Save the current levels as a new preset"/>
+                  </StackPanel>
                 </Grid>
               </Border>
               <!-- one card per display, built from the DDC snapshot -->
@@ -856,12 +860,13 @@
                       </Border>
                       <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
                         <TextBlock x:Name="PodName" Text="AirPods" Style="{StaticResource Subtitle}" FontSize="18"/>
-                        <TextBlock x:Name="PodSub" Text="Connected" Style="{StaticResource Caption}"/>
+                        <TextBlock x:Name="PodSub" Text="Connected" Style="{StaticResource Caption}" MaxWidth="330" TextWrapping="Wrap" HorizontalAlignment="Left"/>
                       </StackPanel>
                     </StackPanel>
                     <!-- on-demand read: listen for the AirPods' battery broadcast right now -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                       <TextBlock x:Name="PodsUpdated" Text="Updated 12 min ago" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                      <Button x:Name="PodsForget" Style="{StaticResource FluentButton}" Content="Forget" FontSize="13" MinHeight="30" Padding="12,4" Margin="0,0,8,0" ToolTip="Stop following this pair; the next AirPods held close to the PC take their place"/>
                       <Button x:Name="PodsCheck" Style="{StaticResource FluentButton}" FontSize="13" MinHeight="30" Padding="10,4" ToolTip="Read the battery now">
                         <StackPanel Orientation="Horizontal">
                           <TextBlock x:Name="PodsCheckIcon" Text="&#xE72C;" FontFamily="{StaticResource IconFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" RenderTransformOrigin="0.5,0.5">
@@ -1323,6 +1328,30 @@
                 </Grid>
               </Border>
 
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE73F;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Start in the tray" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Open quietly at sign-in without showing the window" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <CheckBox x:Name="StartMin" Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource SettingsCard}">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE916;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="Sensor refresh" Style="{StaticResource Body}"/>
+                    <TextBlock Text="How often temperatures and fan speeds are read" Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                  <TextBlock Grid.Column="2" x:Name="PollV" Text="2 s" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                  <Slider Grid.Column="3" x:Name="Poll" Style="{StaticResource FluentSlider}" Minimum="1" Maximum="10" Value="2" IsSnapToTickEnabled="True" TickFrequency="1"/>
+                </Grid>
+              </Border>
+
               <TextBlock Text="About" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
               <Border Style="{StaticResource SettingsCard}">
                 <Grid>
@@ -1391,6 +1420,33 @@
                 <Button x:Name="ProfCancel" Style="{StaticResource FluentButton}" Content="Cancel" MinWidth="110" Margin="8,0,0,0" IsCancel="True"/>
               </StackPanel>
             </Grid>
+          </Border>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <!-- New display preset: a name and a color; levels come from the displays -->
+    <Grid x:Name="PresetDialog" Visibility="Collapsed">
+      <Border x:Name="PresetBackdrop" Background="#99000000"/>
+      <Border Width="440" HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="8"
+              Background="#2B2B2B" BorderBrush="#33FFFFFF" BorderThickness="1">
+        <Border.Effect><DropShadowEffect BlurRadius="40" ShadowDepth="10" Opacity="0.5" Direction="270"/></Border.Effect>
+        <Grid>
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+          <StackPanel Margin="24,22,24,20">
+            <TextBlock Text="New display preset" Style="{StaticResource Subtitle}" FontSize="20"/>
+            <TextBlock Text="Saves the brightness, contrast and color the first display has right now." Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+            <TextBlock Text="Name" Style="{StaticResource Body}" Margin="0,16,0,6"/>
+            <TextBox x:Name="PresetName" Style="{StaticResource FluentTextBox}" MaxLength="16"/>
+            <TextBlock x:Name="PresetErr" Style="{StaticResource Caption}" Foreground="#FF99A4" Margin="0,6,0,0" Visibility="Collapsed"/>
+            <TextBlock Text="Color" Style="{StaticResource Body}" Margin="0,16,0,8"/>
+            <WrapPanel x:Name="PresetColors"/>
+          </StackPanel>
+          <Border Grid.Row="1" Background="#202020" CornerRadius="0,0,8,8" BorderBrush="#14FFFFFF" BorderThickness="0,1,0,0" Padding="24,20">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+              <Button x:Name="PresetSave" Style="{StaticResource AccentButton}" Content="Save" MinWidth="110" IsDefault="True"/>
+              <Button x:Name="PresetCancel" Style="{StaticResource FluentButton}" Content="Cancel" MinWidth="110" Margin="8,0,0,0" IsCancel="True"/>
+            </StackPanel>
           </Border>
         </Grid>
       </Border>

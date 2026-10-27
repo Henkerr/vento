@@ -4003,7 +4003,11 @@ function Show-DevPods([bool]$animate) {
     if ((G 'PodsPanel').Visibility -ne 'Visible') { return }
     $p = $script:pods
     $model = $(if ($p -and $script:podsModels.ContainsKey($p.Model)) { $script:podsModels[$p.Model] } else { $null })
-    (G 'PodSub').Text = $(if ($model) { "$model $($script:dot) Connected" } else { 'Connected' })
+    $bound = ([int]$script:settings.podsModel -ne 0)
+    (G 'PodsForget').Visibility = $(if ($bound) { 'Visible' } else { 'Collapsed' })
+    (G 'PodSub').Text = $(if ($p -and $p.Seen) { $(if ($model) { "$model $($script:dot) Connected" } else { 'Connected' }) }
+                         elseif ($bound) { 'Waiting for a battery broadcast. Open the case near the PC or press Check now.' }
+                         else { 'To read the battery, hold the AirPods next to the PC with the case open and press Check now.' })
     foreach ($t in @(@('L', 'L', 'ChgL'), @('R', 'R', 'ChgR'), @('C', 'Case', 'ChgCase'))) {
         $v = $(if ($p -and $p.Seen) { $p[$t[1]] } else { $null })
         $chg = [bool]($p -and $p[$t[2]])
@@ -4505,6 +4509,58 @@ function New-GMonCard([int]$idx, $m) {
         <TextBlock Text="Input" Style="{StaticResource Body}" Margin="0,0,0,6"/>
         <Border Style="{StaticResource SegHost}" HorizontalAlignment="Left"><WrapPanel x:Name="MIn"/></Border>
       </StackPanel>
+      <Button x:Name="MAdvBtn" Style="{StaticResource LinkButton}" Content="More controls" Margin="22,14,0,0" HorizontalAlignment="Left"/>
+      <StackPanel x:Name="MAdv" Visibility="Collapsed" Margin="0,10,0,0">
+        <Grid x:Name="MSharpRow" Margin="0,0,0,10">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+          <TextBlock Text="&#xE8B3;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
+          <TextBlock Grid.Column="1" Text="Sharpness" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+          <Slider Grid.Column="2" x:Name="MSharp" Style="{StaticResource FluentSlider}" IsSnapToTickEnabled="True" TickFrequency="1"/>
+          <TextBlock Grid.Column="3" x:Name="MSharpV" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+        </Grid>
+        <Grid x:Name="MVolRow" Margin="0,0,0,10">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+          <Button x:Name="MMute" Style="{StaticResource IconButton}" Content="&#xE767;" Width="26" Height="26" FontSize="13" HorizontalAlignment="Left" Margin="-6,0,0,0" ToolTip="Mute the display's speakers"/>
+          <TextBlock Grid.Column="1" Text="Volume" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+          <Slider Grid.Column="2" x:Name="MVol" Style="{StaticResource FluentSlider}" IsSnapToTickEnabled="True" TickFrequency="1"/>
+          <TextBlock Grid.Column="3" x:Name="MVolV" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+        </Grid>
+        <StackPanel x:Name="MRgbRow">
+          <Grid Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+            <Ellipse Width="10" Height="10" Fill="#FF7A7A" HorizontalAlignment="Left"/>
+            <TextBlock Grid.Column="1" Text="Red" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+            <Slider Grid.Column="2" x:Name="MRed" Style="{StaticResource FluentSlider}" IsSnapToTickEnabled="True" TickFrequency="1"/>
+            <TextBlock Grid.Column="3" x:Name="MRedV" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+          </Grid>
+          <Grid Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+            <Ellipse Width="10" Height="10" Fill="#7FE0A0" HorizontalAlignment="Left"/>
+            <TextBlock Grid.Column="1" Text="Green" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+            <Slider Grid.Column="2" x:Name="MGreen" Style="{StaticResource FluentSlider}" IsSnapToTickEnabled="True" TickFrequency="1"/>
+            <TextBlock Grid.Column="3" x:Name="MGreenV" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+          </Grid>
+          <Grid Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+            <Ellipse Width="10" Height="10" Fill="#6FB1FF" HorizontalAlignment="Left"/>
+            <TextBlock Grid.Column="1" Text="Blue" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+            <Slider Grid.Column="2" x:Name="MBlue" Style="{StaticResource FluentSlider}" IsSnapToTickEnabled="True" TickFrequency="1"/>
+            <TextBlock Grid.Column="3" x:Name="MBlueV" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+          </Grid>
+        </StackPanel>
+        <StackPanel x:Name="MModeRow" Margin="28,2,0,0">
+          <TextBlock Text="Picture mode" Style="{StaticResource Body}" Margin="0,0,0,6"/>
+          <Border Style="{StaticResource SegHost}" HorizontalAlignment="Left"><WrapPanel x:Name="MMode"/></Border>
+          <TextBlock x:Name="MModeHint" Text="This display doesn't report its current mode; pick one to set it." Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"/>
+        </StackPanel>
+        <WrapPanel Margin="28,14,0,0">
+          <Button x:Name="MResetColor" Style="{StaticResource FluentButton}" Content="Reset colors" FontSize="13" MinHeight="28" Padding="12,3" Margin="0,0,8,8"/>
+          <Button x:Name="MResetLevels" Style="{StaticResource FluentButton}" Content="Reset brightness" FontSize="13" MinHeight="28" Padding="12,3" Margin="0,0,8,8"/>
+          <Button x:Name="MOff" Style="{StaticResource FluentButton}" Content="Turn off" FontSize="13" MinHeight="28" Padding="12,3" Margin="0,0,8,8"/>
+          <Button x:Name="MFactory" Style="{StaticResource FluentButton}" Content="Factory reset" FontSize="13" MinHeight="28" Padding="12,3" Margin="0,0,8,8" Foreground="#FF99A4"/>
+        </WrapPanel>
+        <TextBlock x:Name="MNa" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="28,6,0,0"/>
+      </StackPanel>
     </StackPanel>
   </StackPanel>
 </Border>
@@ -4541,7 +4597,94 @@ function New-GMonCard([int]$idx, $m) {
             [void]$wp.Children.Add($rb)
         }
     }
+    Set-GMonAdvanced $c $idx $m
     $c
+}
+
+# "More controls": everything else the display answers to over DDC/CI, and
+# an honest line about what it keeps to itself.
+$script:gMonAdvOpen = @{}
+function Set-GMonAdvanced($c, [int]$idx, $m) {
+    $adv = $c.FindName('MAdv'); $btn = $c.FindName('MAdvBtn')
+    $btn.Tag = @($idx, $adv)
+    $open = [bool]$script:gMonAdvOpen[$idx]
+    $adv.Visibility = $(if ($open) { 'Visible' } else { 'Collapsed' })
+    $btn.Content = $(if ($open) { 'Fewer controls' } else { 'More controls' })
+    $btn.Add_Click({ param($s, $e)
+        $i = [int]$s.Tag[0]; $o = -not [bool]$script:gMonAdvOpen[$i]; $script:gMonAdvOpen[$i] = $o
+        $s.Tag[1].Visibility = $(if ($o) { 'Visible' } else { 'Collapsed' })
+        $s.Content = $(if ($o) { 'Fewer controls' } else { 'More controls' })
+    })
+    $na = @()
+    # sliders: name, current, max, VCP code
+    foreach ($r in @(@('MSharp', 'MSharpRow', $m.SharpCur, $m.SharpMax, 0x87, 'sharpness'), @('MVol', 'MVolRow', $m.VolCur, $m.VolMax, 0x62, 'speaker volume'),
+                     @('MRed', $null, $m.RCur, $m.RMax, 0x16, $null), @('MGreen', $null, $m.GCur, $m.GMax, 0x18, $null), @('MBlue', $null, $m.BCur, $m.BMax, 0x1A, $null))) {
+        $sl = $c.FindName($r[0])
+        if ($null -eq $r[2]) { if ($r[1]) { $c.FindName($r[1]).Visibility = 'Collapsed'; $na += $r[5] }; continue }
+        $sl.Maximum = [double][math]::Max(1, [int]$r[3]); $sl.Value = [double][int]$r[2]
+        $c.FindName("$($r[0])V").Text = '{0}' -f [int]$r[2]
+        $sl.Tag = @($idx, [int]$r[4], $c.FindName("$($r[0])V"))
+        $sl.Add_ValueChanged({ param($s, $e)
+            $s.Tag[2].Text = '{0}' -f [int]$s.Value
+            if (-not $script:gDispLoading) { Queue-DdcSet 'SetVcp' ([int]$s.Tag[0]) ([int]$s.Value) ([int]$s.Tag[1]) }
+        })
+    }
+    if ($null -eq $m.RCur -or $null -eq $m.GCur -or $null -eq $m.BCur) { $c.FindName('MRgbRow').Visibility = 'Collapsed'; $na += 'RGB gain' }
+    $mute = $c.FindName('MMute')
+    if ($null -eq $m.MuteCur) { $mute.Visibility = 'Hidden' } else {
+        $mute.Content = [string][char]$(if ([int]$m.MuteCur -eq 1) { 0xE74F } else { 0xE767 })
+        $mute.Tag = $idx
+        $mute.Add_Click({ param($s, $e)
+            $ms = @($sync.Ddc.Monitors); $i = [int]$s.Tag
+            if ($i -ge $ms.Count -or $null -eq $ms[$i].MuteCur) { return }
+            $new = $(if ([int]$ms[$i].MuteCur -eq 1) { 2 } else { 1 }); $ms[$i].MuteCur = $new
+            Queue-DdcSet 'SetVcp' $i $new 0x8D
+            $s.Content = [string][char]$(if ($new -eq 1) { 0xE74F } else { 0xE767 })
+        })
+    }
+    # picture modes, straight from the display's own list
+    $modes = @($m.Modes | Where-Object { $null -ne $_ })
+    if ($modes.Count -le 1) { $c.FindName('MModeRow').Visibility = 'Collapsed'; $na += 'picture modes' } else {
+        $wp = $c.FindName('MMode')
+        foreach ($code in $modes) {
+            $rb = New-Object System.Windows.Controls.RadioButton
+            $rb.GroupName = 'Mon{0}_DC' -f $idx; $rb.Style = $script:app.FindResource('SegItem')
+            $rb.Content = Get-MonModeName $m ([int]$code); $rb.Tag = @($idx, [int]$code, 0xDC)
+            $rb.IsChecked = ($null -ne $m.ModeCur -and [int]$m.ModeCur -eq [int]$code)
+            $rb.Add_Checked({ param($s, $e)
+                if ($script:gDispLoading) { return }
+                $ms = @($sync.Ddc.Monitors); $t = $s.Tag
+                if ([int]$t[0] -lt $ms.Count) { $ms[[int]$t[0]].ModeCur = [int]$t[1] }
+                Queue-DdcSet 'SetVcp' ([int]$t[0]) ([int]$t[1]) 0xDC
+            })
+            [void]$wp.Children.Add($rb)
+        }
+        if ($null -eq $m.ModeCur) { $c.FindName('MModeHint').Visibility = 'Visible' }
+    }
+    if (@($m.Inputs).Count -le 1) { $na += 'input switching' }
+    # one-shot actions; the destructive one wants a second click
+    foreach ($a in @(@('MResetColor', $m.HasColorReset, 0x08, 1), @('MResetLevels', $m.HasLevelReset, 0x05, 1), @('MOff', ($null -ne $m.PowerOff), 0xD6, $m.PowerOff), @('MFactory', $m.HasFactoryReset, 0x04, 1))) {
+        $b = $c.FindName($a[0])
+        if (-not $a[1]) { $b.Visibility = 'Collapsed'; continue }
+        $b.Tag = @($idx, [int]$a[2], [int]$a[3])
+        $b.Add_Click({ param($s, $e)
+            $t = $s.Tag
+            if ($t[1] -eq 0x04 -and [string]$s.Content -ne 'Click again to reset') {
+                $s.Content = 'Click again to reset'
+                $tm = New-Object System.Windows.Threading.DispatcherTimer; $tm.Interval = [TimeSpan]::FromSeconds(4); $tm.Tag = $s
+                $tm.Add_Tick({ param($x, $y) $x.Stop(); $x.Tag.Content = 'Factory reset' }); $tm.Start()
+                return
+            }
+            Queue-DdcSet 'SetVcp' ([int]$t[0]) ([int]$t[2]) ([int]$t[1])
+            if ($t[1] -eq 0x04) { $s.Content = 'Factory reset'; if ($script:psDdc) { $sync.DdcQueue.Enqueue(@{ Cmd = 'Enum' }) } }
+            if ($t[1] -in 0x05, 0x08) { if ($script:psDdc) { $sync.DdcQueue.Enqueue(@{ Cmd = 'Enum' }) } }
+        })
+    }
+    if ($m.PowerHard) { $c.FindName('MOff').ToolTip = 'Turns this display off. It may need its own power button to come back on.' }
+    else { $c.FindName('MOff').ToolTip = 'Puts this display to sleep. It wakes when video returns.' }
+    # no MCCS code exists for response time on consumer displays
+    $na += 'response time / 1ms mode'
+    $c.FindName('MNa').Text = 'Not available over DDC/CI on this display: {0}. Set those in its own menu.' -f ($na -join ', ')
 }
 
 # Brightness / contrast: with Match on, the worker's -1 target writes every
@@ -4619,6 +4762,7 @@ function Update-GDispPresets {
             $rb.GroupName = 'DispPreset'; $rb.Style = $script:app.FindResource('SegItem')
             $rb.Content = Format-ProfName $p.Name; $rb.Tag = [string]$p.Name
             $rb.IsChecked = ([string]$p.Name -eq [string]$script:settings.monProfile)
+            $rb.Add_MouseRightButtonUp({ param($s, $e) $e.Handled = $true; Open-GPresetMenu $s })
             $rb.Add_Checked({ param($s, $e)
                 if ($script:gDispLoading) { return }
                 $mp = Get-MonProfile ([string]$s.Tag)
@@ -5006,6 +5150,7 @@ $script:shell.Add_PreviewKeyDown({ param($s, $e)
 
 function Update-GlassSettings {
     Show-GHotkeys
+    Update-GSettingsExtra
     (G 'StartWin').IsChecked = [bool](Test-AutoStart)
     (G 'KeepTray').IsChecked = [bool]$script:settings.closeToTray
     (G 'AutoUpd').IsChecked = [bool]$script:settings.checkUpdates
@@ -5212,6 +5357,125 @@ foreach ($t in 'Quiet', 'Normal', 'Perf', 'Curve', 'Auto') {
 (F 'QOpen').Add_Click({ $script:fly.Hide(); Show-Main })
 (F 'QSettings').Add_Click({ $script:fly.Hide(); Show-Main; (G 'NavSettings').IsChecked = $true })
 $script:shell.Add_Closed({ try { $script:fly.Close() } catch { } })
+
+# --- Glass: remaining controls ---------------------------------------------------
+# Display identify + preset management, AirPods forget, and the two Settings
+# rows the legacy sheet had (start in tray, sensor refresh).
+
+# IDENTIFY: flash each display's brightness so cards can be matched to panels
+(G 'DispIdentify').Add_Click({
+    $mons = @($sync.Ddc.Monitors)
+    for ($i = 0; $i -lt $mons.Count; $i++) { if ($mons[$i].Ok) { Queue-DdcSet 'SetBri' $i ([int][math]::Max(0, [int]$mons[$i].BriMax - 5)) 0 } }
+    $t = New-Object System.Windows.Threading.DispatcherTimer; $t.Interval = [TimeSpan]::FromMilliseconds(900)
+    $t.Add_Tick({ param($s0, $e0)
+        $s0.Stop()
+        $ms = @($sync.Ddc.Monitors)
+        for ($i = 0; $i -lt $ms.Count; $i++) { if ($ms[$i].Ok) { Queue-DdcSet 'SetBri' $i ([int]$ms[$i].BriCur) 0 } }
+    })
+    $t.Start()
+})
+
+# presets: + saves the first display's current levels; right-click updates or deletes
+$script:gPresetColor = '#6FB1FF'
+function Show-GPresetColors {
+    $w = G 'PresetColors'; $w.Children.Clear()
+    foreach ($hex in $script:gProfColors) {
+        $b = New-Object System.Windows.Controls.Border
+        $b.Width = 28; $b.Height = 28; $b.CornerRadius = 14; $b.Margin = '0,0,8,8'; $b.Cursor = 'Hand'; $b.Background = Get-GBrush $hex; $b.Tag = $hex
+        if ($hex -eq $script:gPresetColor) { $b.BorderThickness = 2; $b.BorderBrush = Get-GBrush '#FFFFFF' }
+        $b.Add_MouseLeftButtonUp({ param($s, $e) $script:gPresetColor = [string]$s.Tag; Show-GPresetColors })
+        [void]$w.Children.Add($b)
+    }
+}
+function Get-GPresetSeed { @($sync.Ddc.Monitors | Where-Object { $_.Ok }) | Select-Object -First 1 }
+(G 'DispPresetAdd').Add_Click({
+    if (-not (Get-GPresetSeed)) { return }
+    $script:gPresetColor = '#6FB1FF'
+    (G 'PresetName').Text = 'My preset'; (G 'PresetErr').Visibility = 'Collapsed'
+    Show-GPresetColors
+    (G 'PresetDialog').Visibility = 'Visible'
+    [void](G 'PresetName').Focus(); (G 'PresetName').SelectAll()
+})
+(G 'PresetCancel').Add_Click({ (G 'PresetDialog').Visibility = 'Collapsed' })
+(G 'PresetBackdrop').Add_MouseLeftButtonUp({ (G 'PresetDialog').Visibility = 'Collapsed' })
+(G 'PresetSave').Add_Click({
+    $name = ([string](G 'PresetName').Text).Trim().ToUpperInvariant()
+    $err = G 'PresetErr'
+    if (-not $name) { $err.Text = 'Give the preset a name.'; $err.Visibility = 'Visible'; return }
+    if (Get-MonProfile $name) { $err.Text = 'A preset with this name already exists.'; $err.Visibility = 'Visible'; return }
+    $m = Get-GPresetSeed
+    if (-not $m) { (G 'PresetDialog').Visibility = 'Collapsed'; return }
+    $arr = @(Get-MonProfiles)
+    $arr += , @{ Name = $name; Color = $script:gPresetColor; Bri = [int]$m.BriCur
+                 Con = $(if ($null -ne $m.ConCur) { [int]$m.ConCur } else { 50 }); Preset = $(if ($null -ne $m.PreCur) { [int]$m.PreCur } else { 0 }); Builtin = $false }
+    Save-MonProfiles $arr
+    $script:settings.monProfile = $name
+    (G 'PresetDialog').Visibility = 'Collapsed'
+    Update-GDispPresets
+})
+function Open-GPresetMenu($rb) {
+    $name = [string]$rb.Tag; $p = Get-MonProfile $name
+    if (-not $p) { return }
+    $cm = New-Object System.Windows.Controls.ContextMenu; $cm.Style = $script:app.FindResource('FluentMenu')
+    $up = New-Object System.Windows.Controls.MenuItem; $up.Style = $script:app.FindResource('FluentMenuItem'); $up.Header = 'Update with current levels'; $up.Tag = $name
+    $up.Add_Click({ param($s, $e)
+        $m = Get-GPresetSeed; if (-not $m) { return }
+        $arr = @(Get-MonProfiles | ForEach-Object {
+            if ($_.Name -eq [string]$s.Tag) {
+                $_.Bri = [int]$m.BriCur
+                if ($null -ne $m.ConCur) { $_.Con = [int]$m.ConCur }
+                if ($null -ne $m.PreCur) { $_.Preset = [int]$m.PreCur }
+            }
+            , $_
+        })
+        Save-MonProfiles $arr
+    })
+    [void]$cm.Items.Add($up)
+    if (-not $p.Builtin) {
+        $del = New-Object System.Windows.Controls.MenuItem; $del.Style = $script:app.FindResource('FluentMenuItem'); $del.Header = 'Delete'; $del.Tag = $name
+        $del.Add_Click({ param($s, $e)
+            $n = [string]$s.Tag
+            Save-MonProfiles @(Get-MonProfiles | Where-Object { $_.Name -ne $n })
+            if ([string]$script:settings.monProfile -eq $n) { $script:settings.monProfile = '' }
+            # a Vento profile pointing at it falls back to leaving displays alone
+            $vps = @(Get-VentoProfiles | ForEach-Object { if ([string]$_.Display -eq $n) { $_.Display = '' }; , $_ })
+            Save-VentoProfiles $vps
+            Update-GDispPresets
+        })
+        [void]$cm.Items.Add($del)
+    }
+    $cm.PlacementTarget = $rb; $cm.IsOpen = $true
+}
+
+# AirPods: unbind, so the next pair held close to the PC is learned instead
+(G 'PodsForget').Add_Click({
+    $script:settings.podsModel = 0; $sync.Settings.podsModel = 0
+    if ('VentoNative.Pods' -as [type]) { try { [VentoNative.Pods]::SetModel(0) } catch { } }
+    $script:pods = $null; $script:podsLearn = $null; $script:podsFiltered = 0
+    $script:podsWarned = @{ L = $false; R = $false; C = $false }
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    $script:podsSniffUntil = [DateTime]::Now.AddSeconds($script:podsSniffLen)
+    try { Update-PodsTick } catch { }
+    $script:devViewKey = $null
+    (G 'PodSub').Text = 'Forgotten. Hold the AirPods you want next to the PC with the case open.'
+})
+
+# Settings: start in the tray, sensor refresh
+(G 'StartMin').Add_Click({ Set-GSetting 'startMinimized' ([bool](G 'StartMin').IsChecked) })
+(G 'Poll').Add_ValueChanged({ param($s, $e)
+    $v = [int][math]::Round($s.Value)
+    (G 'PollV').Text = '{0} s' -f $v
+    if ([int]$script:settings.updateIntervalMs -ne $v * 1000 -and -not $script:gPollLoading) { Set-GSetting 'updateIntervalMs' ($v * 1000) }
+})
+$script:gPollLoading = $false
+function Update-GSettingsExtra {
+    $script:gPollLoading = $true
+    try {
+        (G 'StartMin').IsChecked = [bool]$script:settings.startMinimized
+        (G 'Poll').Value = [math]::Round([int]$script:settings.updateIntervalMs / 1000)
+        (G 'PollV').Text = '{0} s' -f [int](G 'Poll').Value
+    } finally { $script:gPollLoading = $false }
+}
 # --- Glass: Profiles ---------------------------------------------------------
 # Cards for every Vento profile (settings.ventoProfiles - the same list the
 # tray submenu and the cycle hotkey use), chips on Home, and an editor
