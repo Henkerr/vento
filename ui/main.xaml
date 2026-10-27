@@ -464,54 +464,80 @@
                 </Grid>
               </Border>
 
-              <TextBlock x:Name="FansSection" Text="Quiet mode" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
+              <Grid Margin="0,20,0,8">
+                <TextBlock x:Name="FansSection" Text="Quiet mode" Style="{StaticResource BodyStrong}" VerticalAlignment="Center"/>
+                <Button x:Name="FansReset" Style="{StaticResource FluentButton}" Content="Reset to defaults" FontSize="13" MinHeight="28" Padding="12,3" HorizontalAlignment="Right"/>
+              </Grid>
+              <!-- Auto: the motherboard drives the fans -->
+              <Border x:Name="FAutoHint" Style="{StaticResource SettingsCard}" Visibility="Collapsed">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                  <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE946;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock Text="The motherboard is driving the fans" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Pick another mode to set the speeds yourself." Style="{StaticResource Caption}"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
               <StackPanel x:Name="SlidersPanel">
-                <Border Style="{StaticResource SettingsCard}">
+                <!-- Quiet only: the boost that wakes the case fans when the board heats up -->
+                <Border x:Name="FBoostCard" Style="{StaticResource SettingsCard}">
                   <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
-                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xEC4A;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
-                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
-                      <TextBlock Text="Case fan speed" Style="{StaticResource Body}"/>
-                      <TextBlock Text="While the board stays under the boost line" Style="{StaticResource Caption}"/>
-                    </StackPanel>
-                    <TextBlock Grid.Column="2" x:Name="V1" Text="30%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="3" x:Name="S1" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="30"/>
-                  </Grid>
-                </Border>
-                <Border Style="{StaticResource SettingsCard}">
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
-                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE9CA;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
-                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
-                      <TextBlock Text="Boost above" Style="{StaticResource Body}"/>
-                      <TextBlock Text="Board temperature that wakes the fans up" Style="{StaticResource Caption}"/>
-                    </StackPanel>
-                    <TextBlock Grid.Column="2" x:Name="V2" Text="75&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="3" x:Name="S2" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="95" Value="75"/>
-                  </Grid>
-                </Border>
-                <Border Style="{StaticResource SettingsCard}">
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
-                    <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xF1E8;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
-                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
-                      <TextBlock Text="Resume below" Style="{StaticResource Body}"/>
-                      <TextBlock Text="Fans settle back once the board cools to this" Style="{StaticResource Caption}"/>
-                    </StackPanel>
-                    <TextBlock Grid.Column="2" x:Name="V3" Text="65&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="3" x:Name="S3" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="95" Value="65"/>
-                  </Grid>
-                </Border>
-                <Border Style="{StaticResource SettingsCard}">
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE945;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                     <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
-                      <TextBlock Text="Boost speed" Style="{StaticResource Body}"/>
-                      <TextBlock Text="Case fan speed while boosting" Style="{StaticResource Caption}"/>
+                      <TextBlock Text="Cooling boost" Style="{StaticResource Body}"/>
+                      <TextBlock Text="Speeds the case fans up while the CPU or GPU runs hot, then settles back" Style="{StaticResource Caption}"/>
                     </StackPanel>
-                    <TextBlock Grid.Column="2" x:Name="V4" Text="80%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="3" x:Name="S4" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="80"/>
+                    <CheckBox x:Name="FBoostOn" Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
+                  </Grid>
+                </Border>
+                <Border x:Name="FSlot1" Style="{StaticResource SettingsCard}">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock x:Name="FI1" Text="&#xEC4A;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                      <TextBlock x:Name="FL1" Text="Setting" Style="{StaticResource Body}"/>
+                      <TextBlock x:Name="FC1" Text="" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" x:Name="V1" Text="" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="S1" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="1"/>
+                  </Grid>
+                </Border>
+                <Border x:Name="FSlot2" Style="{StaticResource SettingsCard}">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock x:Name="FI2" Text="&#xEC4A;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                      <TextBlock x:Name="FL2" Text="Setting" Style="{StaticResource Body}"/>
+                      <TextBlock x:Name="FC2" Text="" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" x:Name="V2" Text="" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="S2" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="1"/>
+                  </Grid>
+                </Border>
+                <Border x:Name="FSlot3" Style="{StaticResource SettingsCard}">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock x:Name="FI3" Text="&#xEC4A;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                      <TextBlock x:Name="FL3" Text="Setting" Style="{StaticResource Body}"/>
+                      <TextBlock x:Name="FC3" Text="" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" x:Name="V3" Text="" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="S3" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="1"/>
+                  </Grid>
+                </Border>
+                <Border x:Name="FSlot4" Style="{StaticResource SettingsCard}">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}"><TextBlock x:Name="FI4" Text="&#xEC4A;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
+                    <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                      <TextBlock x:Name="FL4" Text="Setting" Style="{StaticResource Body}"/>
+                      <TextBlock x:Name="FC4" Text="" Style="{StaticResource Caption}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" x:Name="V4" Text="" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <Slider Grid.Column="3" x:Name="S4" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="1"/>
                   </Grid>
                 </Border>
               </StackPanel>
@@ -522,7 +548,7 @@
                   <Grid Margin="0,0,0,6">
                     <StackPanel>
                       <TextBlock Text="Case fan curve" Style="{StaticResource Body}"/>
-                      <TextBlock Text="Drag a point up or down. Case fans follow the board temperature along this line." Style="{StaticResource Caption}"/>
+                      <TextBlock Text="Drag a point up or down. Case fans follow the hotter of CPU and GPU along this line." Style="{StaticResource Caption}"/>
                     </StackPanel>
                     <Button x:Name="CurveReset" Style="{StaticResource FluentButton}" Content="Reset" FontSize="13" MinHeight="28" Padding="12,3" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                   </Grid>

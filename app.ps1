@@ -4122,6 +4122,13 @@ function Update-Glass($d) {
         $key = Get-DevViewKey
         if ($script:glassReveal -or $key -ne $script:devViewKey) { $script:devViewKey = $key; Update-DevViews }
     }
+    if ((G 'PageFans').Visibility -eq 'Visible') {
+        if ($script:glassReveal -or [string]$d.ActiveMode -ne $script:gFansMode) { Update-GlassFans ([string]$d.ActiveMode) }
+        if ($script:glassReveal -or $script:histTick % 4 -eq 0) {
+            Show-GlassFansChart
+            if ((G 'CurvePanel').IsVisible -and $null -eq $script:gCurveDrag) { Show-GlassCurve }
+        }
+    }
     $script:glassReveal = $false
     Set-GlassModeCards ([string]$d.ActiveMode)
 }
@@ -4146,6 +4153,215 @@ foreach ($mi in $script:heroMenuItems) {
 }
 
 
+
+# --- Glass: Fans -------------------------------------------------------------
+# The sliders under the mode picker are the legacy mode panel's rows
+# ($script:modePanelDef) re-dressed: same settings keys, same ranges, same
+# Apply-ModeSetting path, so the engine sees exactly what it always did.
+# Any setting change from the new pages goes through Set-GSetting.
+function Set-GSetting([string]$key, $value) {
+    $script:settings[$key] = $value
+    $sync.Settings[$key] = $value
+    $sync.SettingsChanged = $true
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+}
+$script:gFanRow = @{
+    quietCase  = @('Case fan speed', 'While no boost is running', 0xEC4A)
+    boostHigh  = @('Boost above', 'CPU or GPU temperature that wakes the fans up', 0xE9CA)
+    boostLow   = @('Resume below', 'Fans settle back once CPU and GPU cool to this', 0xF1E8)
+    boostCase  = @('Boost speed', 'Case fan speed while boosting', 0xE945)
+    normalCase = @('Case fan speed', 'A steady speed for everyday use', 0xEC4A)
+    perfCase   = @('Case fan speed', 'Case fans in Performance', 0xEC4A)
+    perfCpu    = @('CPU fan speed', 'CPU cooler in Performance', 0xE950)
+}
+$script:gFansMode = $null
+$script:gFansLoading = $false
+function Update-GlassFans([string]$mode) {
+    $script:gFansMode = $mode
+    $name = $(switch ($mode) { 'quiet' { 'Quiet' } 'normal' { 'Normal' } 'performance' { 'Performance' } 'curve' { 'Curve' } default { 'Auto' } })
+    (G 'FansSection').Text = "$name mode"
+    $isAuto = ($mode -eq 'auto'); $isCurve = ($mode -eq 'curve')
+    (G 'FAutoHint').Visibility = $(if ($isAuto) { 'Visible' } else { 'Collapsed' })
+    (G 'FansReset').Visibility = $(if ($isAuto -or $isCurve) { 'Collapsed' } else { 'Visible' })
+    (G 'SlidersPanel').Visibility = $(if ($isAuto -or $isCurve) { 'Collapsed' } else { 'Visible' })
+    (G 'CurvePanel').Visibility = $(if ($isCurve) { 'Visible' } else { 'Collapsed' })
+    if ($isCurve) { [void](G 'CurveCanvas').Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Loaded, [action]{ Show-GlassCurve }) }
+    if ($isAuto -or $isCurve) { return }
+    $script:gFansLoading = $true
+    try {
+        (G 'FBoostCard').Visibility = $(if ($mode -eq 'quiet') { 'Visible' } else { 'Collapsed' })
+        (G 'FBoostOn').IsChecked = [bool]$script:settings.boostEnabled
+        $boostOff = ($mode -eq 'quiet' -and -not [bool]$script:settings.boostEnabled)
+        $def = @($script:modePanelDef[$mode])
+        for ($i = 1; $i -le 4; $i++) {
+            $slot = G "FSlot$i"; $sl = G "S$i"
+            if ($i -gt $def.Count) { $sl.Tag = $null; $slot.Visibility = 'Collapsed'; continue }
+            $row = $def[$i - 1]; $key = [string]$row[1]
+            $meta = $script:gFanRow[$key]
+            $sl.Tag = $null
+            $sl.Minimum = [double]$row[2]; $sl.Maximum = [double]$row[3]
+            if ($key -eq 'boostLow') { $sl.Maximum = [math]::Min([double]$row[3], [double]$script:settings.boostHigh - 3) }
+            $sl.Value = [double]$script:settings[$key]
+            $sl.Tag = $row
+            (G "FL$i").Text = $(if ($meta) { $meta[0] } else { [string]$row[0] })
+            (G "FC$i").Text = $(if ($meta) { $meta[1] } else { '' })
+            (G "FI$i").Text = [string][char]$(if ($meta) { $meta[2] } else { 0xEC4A })
+            (G "V$i").Text = '{0}{1}' -f [int]$sl.Value, $(if ([string]$row[4] -eq '%') { '%' } else { [string][char]0xB0 })
+            $dim = $boostOff -and (@('boostHigh', 'boostLow', 'boostCase') -contains $key)
+            $slot.IsEnabled = -not $dim; $slot.Opacity = $(if ($dim) { 0.45 } else { 1.0 })
+            $slot.Visibility = 'Visible'
+        }
+    } finally { $script:gFansLoading = $false }
+}
+foreach ($i in 1..4) {
+    (G "S$i").Add_ValueChanged({ param($s, $e)
+        $row = $s.Tag
+        if ($null -eq $row) { return }
+        $i = [int]($s.Name.Substring(1))
+        (G "V$i").Text = '{0}{1}' -f [int]$s.Value, $(if ([string]$row[4] -eq '%') { '%' } else { [string][char]0xB0 })
+        if ($script:gFansLoading) { return }
+        Apply-ModeSetting ([string]$row[1]) ([int]$s.Value)
+        if ([string]$row[1] -eq 'boostHigh') {
+            # keep 'Resume below' at least 3 degrees under 'Boost above'
+            foreach ($j in 1..4) {
+                $o = G "S$j"
+                if ($o.Tag -and [string]$o.Tag[1] -eq 'boostLow') { $o.Maximum = [math]::Min(85, [double]$s.Value - 3) }
+            }
+        }
+    })
+}
+(G 'FBoostOn').Add_Click({
+    Set-GSetting 'boostEnabled' ([bool](G 'FBoostOn').IsChecked)
+    Update-GlassFans $script:gFansMode
+})
+(G 'FansReset').Add_Click({
+    $mode = $script:gFansMode
+    if (-not $mode -or $mode -eq 'auto') { return }
+    $defaults = Get-DefaultSettings
+    foreach ($row in @($script:modePanelDef[$mode])) { Apply-ModeSetting ([string]$row[1]) ([int]$defaults[$row[1]]) }
+    Update-GlassFans $mode
+})
+
+# --- curve editor: four draggable points at 40/55/70/80 deg (curve40..80) ---
+$script:gCurveKeys = 40, 55, 70, 80
+$script:gCurveDrag = $null
+$script:gCv = @{ L = 44; R = 18; T = 34; B = 26 }
+function Get-GCurveX([double]$t) { $w = (G 'CurveCanvas').ActualWidth; $script:gCv.L + ($t - 30) / 60.0 * ($w - $script:gCv.L - $script:gCv.R) }
+function Get-GCurveY([double]$d) { $h = (G 'CurveCanvas').ActualHeight; $script:gCv.T + (1 - $d / 100.0) * ($h - $script:gCv.T - $script:gCv.B) }
+function Get-GCurveVal([int]$k) { [int]$script:settings["curve$k"] }
+function Get-GCurveDuty([double]$t) {
+    $k = $script:gCurveKeys
+    if ($t -le $k[0]) { return Get-GCurveVal $k[0] }
+    if ($t -ge $k[3]) { return Get-GCurveVal $k[3] }
+    for ($i = 0; $i -lt 3; $i++) {
+        if ($t -le $k[$i + 1]) { $a = Get-GCurveVal $k[$i]; $b = Get-GCurveVal $k[$i + 1]; return $a + ($b - $a) * ($t - $k[$i]) / ($k[$i + 1] - $k[$i]) }
+    }
+}
+function Show-GlassCurve {
+    $c = G 'CurveCanvas'; $c.Children.Clear()
+    $w = $c.ActualWidth; $h = $c.ActualHeight; if ($w -le 0) { return }
+    $deg = [char]0xB0
+    foreach ($d in 0, 25, 50, 75, 100) {
+        $y = Get-GCurveY $d
+        $gl = New-Object System.Windows.Shapes.Line
+        $gl.X1 = $script:gCv.L; $gl.X2 = $w - $script:gCv.R; $gl.Y1 = [math]::Round($y) + 0.5; $gl.Y2 = $gl.Y1; $gl.Stroke = Get-GBrush '#FFFFFF' 0x12
+        [void]$c.Children.Add($gl)
+        Add-GText $c "$d%" 0 ($y - 8)
+    }
+    for ($t = 30; $t -le 90; $t += 10) { Add-GText $c "$t$deg" ((Get-GCurveX $t) - 9) ($h - $script:gCv.B + 8) }
+    $pts = @(, @(30, (Get-GCurveVal 40))) + @($script:gCurveKeys | ForEach-Object { , @($_, (Get-GCurveVal $_)) }) + @(, @(90, (Get-GCurveVal 80)))
+    $line = 'M ' + (($pts | ForEach-Object { Format-GPt (Get-GCurveX $_[0]) (Get-GCurveY $_[1]) }) -join ' L ')
+    $g = New-Object System.Windows.Media.LinearGradientBrush
+    $g.StartPoint = '0,0'; $g.EndPoint = '0,1'
+    $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop (Get-GColor $script:acc.Light2 0x46), 0))
+    $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop (Get-GColor $script:acc.Light2 0x05), 1))
+    $f = New-Object System.Windows.Shapes.Path
+    $f.Data = [System.Windows.Media.Geometry]::Parse($line + ' L ' + (Format-GPt (Get-GCurveX 90) (Get-GCurveY 0)) + ' L ' + (Format-GPt (Get-GCurveX 30) (Get-GCurveY 0)) + ' Z'); $f.Fill = $g
+    [void]$c.Children.Add($f)
+    $l = New-Object System.Windows.Shapes.Path
+    $l.Data = [System.Windows.Media.Geometry]::Parse($line); $l.Stroke = Get-GBrush $script:acc.Light2; $l.StrokeThickness = 2; $l.StrokeLineJoin = 'Round'
+    [void]$c.Children.Add($l)
+    # where the engine is reading right now (hotter of CPU / GPU) and the speed it buys
+    $d0 = $sync.Data; $tNow = $null
+    if ($d0) { foreach ($v in @($d0.CpuTemp, $d0.GpuTemp)) { if ($null -ne $v -and ($null -eq $tNow -or [double]$v -gt $tNow)) { $tNow = [double]$v } } }
+    if ($null -ne $tNow) {
+        $tc = [math]::Max(30, [math]::Min(90, $tNow)); $now = Get-GCurveDuty $tNow; $bx = Get-GCurveX $tc
+        $vl = New-Object System.Windows.Shapes.Line
+        $vl.X1 = $bx; $vl.X2 = $bx; $vl.Y1 = Get-GCurveY 100; $vl.Y2 = Get-GCurveY 0; $vl.Stroke = Get-GBrush '#FFFFFF' 0x55
+        $vl.StrokeDashArray = New-Object System.Windows.Media.DoubleCollection (, [double[]]@(3, 3))
+        [void]$c.Children.Add($vl)
+        $bd = New-Object System.Windows.Shapes.Ellipse
+        $bd.Width = 10; $bd.Height = 10; $bd.Fill = Get-GBrush '#FFFFFF'
+        [System.Windows.Controls.Canvas]::SetLeft($bd, $bx - 5); [System.Windows.Controls.Canvas]::SetTop($bd, (Get-GCurveY $now) - 5)
+        [void]$c.Children.Add($bd)
+        $lbl = New-Object System.Windows.Controls.TextBlock
+        $lbl.Text = ('Now {0:0}{1}  {2}  {3:0}%' -f $tNow, $deg, [char]0x2192, $now); $lbl.Style = $script:app.FindResource('Caption'); $lbl.Foreground = Get-GBrush '#FFFFFF'
+        if ($bx -gt $w - 170) { [System.Windows.Controls.Canvas]::SetLeft($lbl, $bx - 160) } else { [System.Windows.Controls.Canvas]::SetLeft($lbl, $bx + 8) }
+        [System.Windows.Controls.Canvas]::SetTop($lbl, (Get-GCurveY 100) - 28)
+        [void]$c.Children.Add($lbl)
+    }
+    foreach ($k in $script:gCurveKeys) {
+        $x = Get-GCurveX $k; $y = Get-GCurveY (Get-GCurveVal $k)
+        $th = New-Object System.Windows.Controls.Grid
+        $th.Width = 22; $th.Height = 22; $th.Cursor = [System.Windows.Input.Cursors]::SizeNS
+        $o = New-Object System.Windows.Shapes.Ellipse; $o.Fill = Get-GBrush '#454545'; $o.Stroke = Get-GBrush '#FFFFFF' 0x33
+        $i = New-Object System.Windows.Shapes.Ellipse; $i.Width = $(if ($script:gCurveDrag -eq $k) { 10 } else { 12 }); $i.Height = $i.Width; $i.Fill = Get-GBrush $script:acc.Light2
+        [void]$th.Children.Add($o); [void]$th.Children.Add($i)
+        [System.Windows.Controls.Canvas]::SetLeft($th, $x - 11); [System.Windows.Controls.Canvas]::SetTop($th, $y - 11)
+        [void]$c.Children.Add($th)
+        $v = New-Object System.Windows.Controls.TextBlock
+        $v.Text = '{0}%' -f (Get-GCurveVal $k); $v.Style = $script:app.FindResource('BodyStrong'); $v.FontSize = 12; $v.Width = 30; $v.TextAlignment = 'Center'
+        [System.Windows.Controls.Canvas]::SetLeft($v, $x - 15); [System.Windows.Controls.Canvas]::SetTop($v, $y - 32)
+        [void]$c.Children.Add($v)
+    }
+}
+$script:gCurveCanvas = G 'CurveCanvas'
+$script:gCurveCanvas.Add_MouseLeftButtonDown({
+    param($s, $e)
+    $p = $e.GetPosition($script:gCurveCanvas)
+    foreach ($k in $script:gCurveKeys) {
+        if ([math]::Abs($p.X - (Get-GCurveX $k)) -lt 16 -and [math]::Abs($p.Y - (Get-GCurveY (Get-GCurveVal $k))) -lt 16) {
+            $script:gCurveDrag = $k; [void]$script:gCurveCanvas.CaptureMouse(); Show-GlassCurve; break
+        }
+    }
+})
+$script:gCurveCanvas.Add_MouseMove({
+    param($s, $e)
+    if ($null -eq $script:gCurveDrag) { return }
+    $p = $e.GetPosition($script:gCurveCanvas)
+    $h = $script:gCurveCanvas.ActualHeight
+    $d = [math]::Round((1 - ($p.Y - $script:gCv.T) / ($h - $script:gCv.T - $script:gCv.B)) * 100)
+    # a curve never dips: each point stays between its neighbours; the engine
+    # never runs case fans under 20%
+    $i = [array]::IndexOf($script:gCurveKeys, $script:gCurveDrag)
+    $min = $(if ($i -gt 0) { Get-GCurveVal $script:gCurveKeys[$i - 1] } else { 20 })
+    $max = $(if ($i -lt 3) { Get-GCurveVal $script:gCurveKeys[$i + 1] } else { 100 })
+    $v = [int][math]::Max([math]::Max(20, $min), [math]::Min($max, $d))
+    if ($v -ne (Get-GCurveVal $script:gCurveDrag)) { Apply-ModeSetting "curve$($script:gCurveDrag)" $v; Show-GlassCurve }
+})
+$script:gCurveCanvas.Add_MouseLeftButtonUp({ $script:gCurveDrag = $null; $script:gCurveCanvas.ReleaseMouseCapture(); Show-GlassCurve })
+$script:gCurveCanvas.Add_SizeChanged({ if ((G 'CurvePanel').IsVisible) { Show-GlassCurve } })
+(G 'CurveReset').Add_Click({
+    $defaults = Get-DefaultSettings
+    foreach ($k in $script:gCurveKeys) { Apply-ModeSetting "curve$k" ([int]$defaults["curve$k"]) }
+    Show-GlassCurve
+})
+
+# --- activity chart: the same 10-minute fan history the legacy graph used ---
+function Show-GlassFansChart {
+    $c = G 'FansChart'; $c.Children.Clear()
+    if ($c.ActualWidth -le 0 -or $script:histFanCpu.Count -lt 2) { return }
+    $mx = 800.0
+    foreach ($h in @($script:histFanCpu, $script:histFanCase)) { if ($h.Count) { $mx = [math]::Max($mx, ($h | Measure-Object -Maximum).Maximum) } }
+    $hi = [math]::Ceiling($mx * 1.1 / 100) * 100
+    Add-GHLine $c 2 '#FFFFFF' 0x10; Add-GHLine $c ($c.ActualHeight - 2) '#FFFFFF' 0x10
+    Add-GText $c ('{0} rpm' -f $hi) 0 4 -Right
+    # every 4th sample keeps the path light: 300 points over 10 minutes
+    $cpu = New-Object 'System.Collections.Generic.List[double]'; $case = New-Object 'System.Collections.Generic.List[double]'
+    for ($i = 0; $i -lt $script:histFanCpu.Count; $i += 4) { $cpu.Add($script:histFanCpu[$i]); $case.Add($script:histFanCase[$i]) }
+    Add-GSeries $c $cpu '#FFFFFF' 0 $hi 0x18 1.6
+    Add-GSeries $c $case $script:acc.Light2 0 $hi 0x40 2
+}
 # --- Glass: Profiles ---------------------------------------------------------
 # Cards for every Vento profile (settings.ventoProfiles - the same list the
 # tray submenu and the cycle hotkey use), chips on Home, and an editor
