@@ -404,6 +404,56 @@
     </Setter>
   </Style>
 
+  <!-- Hue picker: the track is the spectrum itself, no fill, a white-cored thumb -->
+  <Style x:Key="HueThumb" TargetType="Thumb">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Thumb">
+          <Grid Width="20" Height="20" Background="Transparent">
+            <Ellipse Fill="#454545" Stroke="#23FFFFFF" StrokeThickness="1"/>
+            <Ellipse Width="12" Height="12" Fill="#FFFFFF"/>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="HueSlider" TargetType="Slider">
+    <Setter Property="IsMoveToPointEnabled" Value="True"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Slider">
+          <Grid Height="24" Background="Transparent">
+            <Border Height="6" CornerRadius="3" VerticalAlignment="Center" Margin="2,0">
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                  <GradientStop Color="#FF0000" Offset="0"/>
+                  <GradientStop Color="#FFFF00" Offset="0.1667"/>
+                  <GradientStop Color="#00FF00" Offset="0.3333"/>
+                  <GradientStop Color="#00FFFF" Offset="0.5"/>
+                  <GradientStop Color="#0000FF" Offset="0.6667"/>
+                  <GradientStop Color="#FF00FF" Offset="0.8333"/>
+                  <GradientStop Color="#FF0000" Offset="1"/>
+                </LinearGradientBrush>
+              </Border.Background>
+            </Border>
+            <Track x:Name="PART_Track">
+              <Track.DecreaseRepeatButton>
+                <RepeatButton Command="Slider.DecreaseLarge" Style="{StaticResource SliderGapRB}"/>
+              </Track.DecreaseRepeatButton>
+              <Track.IncreaseRepeatButton>
+                <RepeatButton Command="Slider.IncreaseLarge" Style="{StaticResource SliderGapRB}"/>
+              </Track.IncreaseRepeatButton>
+              <Track.Thumb>
+                <Thumb Style="{StaticResource HueThumb}"/>
+              </Track.Thumb>
+            </Track>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- Buttons -->
   <Style x:Key="FluentButton" TargetType="Button">
     <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>

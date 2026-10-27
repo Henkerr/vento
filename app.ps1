@@ -432,6 +432,23 @@ function Get-DefaultSettings {
         devCheckMin      = 30          # Bluetooth device battery check, minutes (0 = only on Refresh)
         devLowOn         = $true       # low-battery notification for connected devices (threshold: podsWarn)
         toastsOn         = $true       # Windows notifications at all (off: nothing is shown, not even a balloon)
+        # Lights: a BLE LED strip (MR Star protocol). The page shows only where
+        # HKCU\Software\Vento\Lights = 1, so these are inert everywhere else.
+        ledAddr          = '4142C00A9E32' # the strip's Bluetooth address, hex
+        ledAutoConn      = $false      # connect when Vento starts (and keep the link)
+        ledOn            = $true       # last power state Vento sent
+        ledBri           = 100         # brightness %
+        ledHue           = 240         # static color, HSV hue 0-359
+        ledSat           = 100         # and saturation %
+        ledSpeed         = 50          # built-in effect speed 1-100
+        ledFx            = 91          # built-in effect number 1-117
+        ledKind          = 'color'     # what the strip shows: color | effect | loop
+        ledLoop          = ''          # the color loop playing (kind = loop)
+        ledLoops         = @(
+            @{ Name = 'Ocean';  Colors = @('#0040FF', '#00C8FF', '#7A3CFF'); Trans = 'fade'; Half = 8 },
+            @{ Name = 'Sunset'; Colors = @('#FF2D55', '#FF7A00', '#FFC400'); Trans = 'fade'; Half = 6 },
+            @{ Name = 'Police'; Colors = @('#FF0000', '#0030FF');            Trans = 'jump'; Half = 1 }
+        )
         osdCorner        = 'tr'        # overlay corner: tr | tl | bl | br
         osdScale         = 100         # overlay scale %
         osdOnSecondary   = $false      # place the overlay on the secondary monitor
@@ -667,6 +684,37 @@ function Import-Settings {
     if (@(0, 15, 30, 60) -notcontains [int]$s.devCheckMin) { $s.devCheckMin = 30 }
     $s.devLowOn = [bool]$s.devLowOn
     $s.toastsOn = [bool]$s.toastsOn
+    $s.ledAddr = ([string]$s.ledAddr).ToUpperInvariant() -replace '[^0-9A-F]', ''
+    if ($s.ledAddr.Length -ne 12) { $s.ledAddr = '4142C00A9E32' }
+    $s.ledAutoConn = [bool]$s.ledAutoConn
+    $s.ledOn       = [bool]$s.ledOn
+    try {
+        $s.ledBri   = [int](Limit $s.ledBri 1 100)
+        $s.ledHue   = [int](Limit $s.ledHue 0 359)
+        $s.ledSat   = [int](Limit $s.ledSat 0 100)
+        $s.ledSpeed = [int](Limit $s.ledSpeed 1 100)
+        $s.ledFx    = [int](Limit $s.ledFx 1 117)
+    } catch { $s.ledBri = 100; $s.ledHue = 240; $s.ledSat = 100; $s.ledSpeed = 50; $s.ledFx = 91 }
+    if (@('color', 'effect', 'loop') -notcontains [string]$s.ledKind) { $s.ledKind = 'color' }
+    $s.ledLoop = [string]$s.ledLoop
+    try {
+        $lnorm = @()
+        foreach ($p in @($s.ledLoops)) {
+            if ($null -eq $p) { continue }
+            $h = @{}
+            if ($p -is [hashtable]) { foreach ($k in $p.Keys) { $h[$k] = $p[$k] } }
+            else { foreach ($pp in $p.PSObject.Properties) { $h[$pp.Name] = $pp.Value } }
+            $nm = ([string]$h.Name).Trim()
+            if (-not $nm) { continue }
+            $cols = @(@($h.Colors) | Where-Object { [string]$_ -match '^#[0-9A-Fa-f]{6}$' } | ForEach-Object { ([string]$_).ToUpperInvariant() })
+            if ($cols.Count -lt 1) { continue }
+            $tr = [string]$h.Trans
+            if (@('fade', 'jump', 'breathe') -notcontains $tr) { $tr = 'fade' }
+            $half = 6; try { $half = [int](Limit $h.Half 1 60) } catch { }
+            $lnorm += , @{ Name = $nm; Colors = @($cols); Trans = $tr; Half = $half }
+        }
+        $s.ledLoops = @($lnorm)
+    } catch { $s.ledLoops = (Get-DefaultSettings).ledLoops }
     foreach ($k in 'osdColFps','osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan','osdColPods') {
         $v = [string]$s[$k]
         if ($v) { try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($v) } catch { $v = '' } }
@@ -3448,7 +3496,7 @@ function New-GAnim([double]$from, [double]$to, [int]$ms, [int]$delay = 0) {
 }
 
 # --- navigation: sliding selection pill + staggered page entrance ---
-$script:glassPages = 'PageHome', 'PageFans', 'PageAlerts', 'PageProfiles', 'PageDisplays', 'PagePods', 'PageOverlay', 'PageSettings'
+$script:glassPages = 'PageHome', 'PageFans', 'PageAlerts', 'PageProfiles', 'PageDisplays', 'PagePods', 'PageOverlay', 'PageLights', 'PageSettings'
 $script:glassReveal = $true
 function Move-NavPill($item, [bool]$animate) {
     if (-not $item -or $item.ActualHeight -le 0) { return }
@@ -3488,7 +3536,7 @@ function Show-GlassPage([string]$name, [bool]$animate = $true) {
     $script:glassReveal = $true
     [void]$pg.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Loaded, [action]{ try { Update-Glass $sync.Data } catch { } })
 }
-foreach ($n in 'NavHome', 'NavFans', 'NavAlerts', 'NavProfiles', 'NavDisplays', 'NavPods', 'NavOverlay', 'NavSettings') {
+foreach ($n in 'NavHome', 'NavFans', 'NavAlerts', 'NavProfiles', 'NavDisplays', 'NavPods', 'NavOverlay', 'NavLights', 'NavSettings') {
     (G $n).Add_Checked({ param($s, $e) Show-GlassPage ([string]$s.Tag); Move-NavPill $s $true })
 }
 # "Find a setting": as you type, jump to the page that owns the word
@@ -5694,6 +5742,854 @@ function Show-GlassUpdate([string]$ver) {
 (G 'PcName').Text = $env:COMPUTERNAME
 (G 'AboutVersion').Text = "Version $($script:AppVersion)"
 (G 'AccentHex').Text = $script:acc.Light2
+
+# --- Glass: Lights -----------------------------------------------------------
+# A BLE LED strip (MR Star / "GATT--DEMO", protocol read out of its Android app):
+# frames are BC cmd len payload 55. The page exists only where
+# HKCU\Software\Vento\Lights = 1. The user connects and disconnects by hand;
+# the strip takes one central at a time, so while Vento holds it the phone
+# app can't. Nothing here ever sends 0x02 (RGB order) or 0x03 (LED count):
+# those are persistent settings inside the strip, and the native class
+# refuses them too.
+$script:ledEnabled = $false
+try { $script:ledEnabled = [int](Get-ItemProperty 'HKCU:\Software\Vento' -Name Lights -ErrorAction Stop).Lights -eq 1 } catch { }
+
+$script:ledCs = @'
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using Windows.Devices.Bluetooth;
+using Windows.Devices.Bluetooth.Advertisement;
+using Windows.Devices.Bluetooth.GenericAttributeProfile;
+using Windows.Foundation;
+using Windows.Storage.Streams;
+
+namespace VentoNative {
+  // MR Star BLE strip link. The user connects and disconnects by hand: the
+  // strip takes one central at a time, so while Vento holds it the phone app
+  // can't, and Disconnect hands it back. One worker thread owns the link.
+  // Frames that only set state (colour, effect, speed, brightness) replace an
+  // unsent frame of the same command, so a fast animation never builds a
+  // backlog. Commands 0x02 (RGB order) and 0x03 (LED count) are persistent
+  // settings inside the strip and are refused outright.
+  public static class Led {
+    static readonly object Gate = new object();
+    static readonly List<byte[]> s_q = new List<byte[]>();
+    static Thread s_th;
+    static BluetoothLEDevice s_dev;
+    static GattDeviceService s_svc;
+    static GattCharacteristic s_ch;
+    static ulong s_addr;
+    static bool s_want;          // user asked to be connected
+    static string s_state = "disconnected";
+    static string s_err = "";
+    static int s_connectMs = -1;
+    static readonly Guid Svc = new Guid("0000fff0-0000-1000-8000-00805f9b34fb");
+    static readonly Guid Chr = new Guid("0000fff3-0000-1000-8000-00805f9b34fb");
+
+    public static void Connect(ulong addr) {
+      lock (Gate) {
+        s_addr = addr; s_want = true; s_err = "";
+        if (s_th == null) { s_th = new Thread(Run); s_th.IsBackground = true; s_th.Name = "VentoLed"; s_th.Start(); }
+        Monitor.PulseAll(Gate);
+      }
+    }
+    public static void Disconnect() { lock (Gate) { s_want = false; s_q.Clear(); Monitor.PulseAll(Gate); } }
+
+    public static bool Send(byte[] f) {
+      if (f == null || f.Length < 4 || f[0] != 0xBC || f[f.Length - 1] != 0x55 || f[2] != f.Length - 4) return false;
+      if (f[1] == 0x02 || f[1] == 0x03) return false;
+      lock (Gate) {
+        if (!s_want) return false;
+        if (f[1] != 0x01) {
+          for (int i = 0; i < s_q.Count; i++) if (s_q[i][1] == f[1]) { s_q[i] = f; Monitor.PulseAll(Gate); return true; }
+        }
+        if (s_q.Count > 32) s_q.RemoveAt(0);
+        s_q.Add(f);
+        Monitor.PulseAll(Gate);
+      }
+      return true;
+    }
+
+    // "state;connectMs;queued;err"  state: disconnected|connecting|connected|retrying
+    public static string Status() { lock (Gate) { return s_state + ";" + s_connectMs + ";" + s_q.Count + ";" + s_err; } }
+
+    // WinRT async without AsTask (its overloads need the full Windows.winmd union)
+    static T Wait<T>(IAsyncOperation<T> op) {
+      int t0 = Environment.TickCount;
+      while (op.Status == AsyncStatus.Started) {
+        if (Environment.TickCount - t0 > 10000) { try { op.Cancel(); } catch { } throw new TimeoutException("timed out"); }
+        Thread.Sleep(15);
+      }
+      if (op.Status != AsyncStatus.Completed) throw (op.ErrorCode ?? new Exception(op.Status.ToString()));
+      return op.GetResults();
+    }
+
+    static void Drop() {
+      if (s_dev != null) { try { s_dev.ConnectionStatusChanged -= OnStatus; } catch { } }
+      try { if (s_svc != null) s_svc.Dispose(); } catch { }
+      try { if (s_dev != null) s_dev.Dispose(); } catch { }
+      s_svc = null; s_dev = null; s_ch = null;
+    }
+
+    static void OnStatus(BluetoothLEDevice d, object o) {
+      if (d.ConnectionStatus == BluetoothConnectionStatus.Disconnected) lock (Gate) { s_lost = true; Monitor.PulseAll(Gate); }
+    }
+    static bool s_lost;
+
+    static bool Open(ulong addr) {
+      int t0 = Environment.TickCount;
+      try {
+        // hear the strip first: its advertisement carries the address type
+        // (it uses a random address), which a bare connect by address guesses wrong
+        BluetoothAddressType at = Listen(addr, 15000);
+        if (at == BluetoothAddressType.Unspecified) throw new Exception("Strip not found. Is it powered, and is the phone app closed?");
+        var dev = Wait(BluetoothLEDevice.FromBluetoothAddressAsync(addr, at));
+        if (dev == null) throw new Exception("Strip not found. Is it powered, and is the phone app closed?");
+        s_dev = dev;
+        GattDeviceServicesResult sr = null;
+        for (int i = 0; i < 3; i++) {
+          sr = Wait(dev.GetGattServicesForUuidAsync(Svc, BluetoothCacheMode.Uncached));
+          if (sr.Status == GattCommunicationStatus.Success && sr.Services.Count > 0) break;
+          Thread.Sleep(500);
+        }
+        if (sr.Status != GattCommunicationStatus.Success || sr.Services.Count == 0)
+          throw new Exception("The strip did not answer (" + sr.Status + "). Close the phone app and try again.");
+        s_svc = sr.Services[0];
+        var cr = Wait(s_svc.GetCharacteristicsForUuidAsync(Chr, BluetoothCacheMode.Uncached));
+        if (cr.Status != GattCommunicationStatus.Success || cr.Characteristics.Count == 0) throw new Exception("characteristic " + cr.Status);
+        s_ch = cr.Characteristics[0];
+        lock (Gate) { s_lost = false; }
+        dev.ConnectionStatusChanged += OnStatus;
+        lock (Gate) { s_state = "connected"; s_connectMs = Environment.TickCount - t0; s_err = ""; }
+        return true;
+      } catch (Exception e) {
+        Exception x = e is AggregateException && e.InnerException != null ? e.InnerException : e;
+        Drop();
+        lock (Gate) { s_err = x.Message.Replace(";", ","); }
+        return false;
+      }
+    }
+
+    static BluetoothAddressType Listen(ulong addr, int ms) {
+      var found = BluetoothAddressType.Unspecified;
+      var hit = new ManualResetEvent(false);
+      var w = new BluetoothLEAdvertisementWatcher();
+      w.ScanningMode = BluetoothLEScanningMode.Active;
+      w.Received += (sender, a) => { if (a.BluetoothAddress == addr) { found = a.BluetoothAddressType; hit.Set(); } };
+      w.Start();
+      try { hit.WaitOne(ms); } finally { try { w.Stop(); } catch { } }
+      return found;
+    }
+
+    static IBuffer Buf(byte[] f) { var w = new DataWriter(); w.WriteBytes(f); return w.DetachBuffer(); }
+
+    static void Run() {
+      int fails = 0;
+      while (true) {
+        byte[] f = null; bool want; ulong addr;
+        lock (Gate) {
+          // a link Windows reports lost is reopened on the next pass
+          if (s_lost && s_ch != null) { s_lost = false; Drop(); }
+          if (s_want == (s_ch != null) && s_q.Count == 0) Monitor.Wait(Gate, s_ch != null ? 2000 : Timeout.Infinite);
+          want = s_want; addr = s_addr;
+          if (s_q.Count > 0 && s_ch != null) { f = s_q[0]; s_q.RemoveAt(0); }
+        }
+        if (!want) {
+          if (s_ch != null || s_dev != null) Drop();
+          lock (Gate) { s_state = "disconnected"; s_q.Clear(); }
+          fails = 0; continue;
+        }
+        if (s_ch == null) {
+          lock (Gate) { s_state = fails == 0 ? "connecting" : "retrying"; }
+          if (!Open(addr)) {
+            fails++;
+            // keep trying while the user wants the link, slower each time
+            int nap = Math.Min(20000, 2000 * fails);
+            lock (Gate) { s_state = "retrying"; if (s_want) Monitor.Wait(Gate, nap); }
+          } else fails = 0;
+          continue;
+        }
+        if (f == null) continue;
+        try {
+          var st = Wait(s_ch.WriteValueAsync(Buf(f), GattWriteOption.WriteWithoutResponse));
+          if (st != GattCommunicationStatus.Success) throw new Exception("write " + st);
+          // the strip drops frames sent back to back
+          Thread.Sleep(25);
+        } catch (Exception e) {
+          Exception x = e is AggregateException && e.InnerException != null ? e.InnerException : e;
+          Drop(); lock (Gate) { s_err = x.Message.Replace(";", ","); }
+        }
+      }
+    }
+  }
+}
+'@
+
+# the strip's built-in effects, numbered as the strip numbers them
+$script:ledFxList = @(
+@'
+1|Automatic loop
+2|Symphony
+3|Colorful energy
+4|Colorful jumps
+5|Red-green-blue jumps
+6|Yellow-blue-purple jumps
+7|7 colors strobe
+8|Red-green-blue strobe
+9|Yellow-purple-blue strobe
+10|7 colors gradient
+11|Alternate red-yellow gradient
+12|Alternate red-purple gradient
+13|Green-green alternate gradient
+14|Alternate green-yellow gradient
+15|Blue-purple alternating gradient
+16|Red racing
+17|Green racing
+18|Blue racing
+19|Yellow racing
+20|Cyan racing
+21|Purple racing
+22|White racing
+23|Colorful chasing light
+24|Red-green-blue follow-up
+25|Yellow-cyan-purple follow-up light
+26|Colorful fluttering
+27|Red-green-blue fluttering
+28|Yellow-cyan-purple fluttering
+29|Colorful brushing
+30|Red-green-blue color brushing
+31|Yellow-cyan-purple color brushing
+32|Colorful brush color brush closed-pull
+33|Red-green-blue color brush closed-pull
+34|Yellow-cyan-purple color brush closed-pull
+35|7 colors opening-closing
+36|Red-green-blue opening-closing
+37|Yellow-cyan-purple opening-closing
+38|Red opening-closing
+39|Green opening-closing
+40|Blue opening-closing
+41|Yellow opening-closing
+42|Cyan opening-closing
+43|Purple opening-closing
+44|White opening-closing
+45|7 colors light-dark transition
+46|Blue-red-green light-dark transition
+47|Violet-green-yellow light-dark transition
+48|6 colors light-dark transition red
+49|6 colors light-dark transition green
+50|6 colors light-dark transition blue
+51|6 colors light-dark transition cyan
+52|6 colors light-dark transition yellow
+53|6 colors light-dark transition purple
+54|6 colors light-dark transition white
+55|7 colors flowing water
+56|Blue-green-red running water
+57|Purple-green-yellow running water
+58|Red-green running water
+59|Green-blue running water
+60|Yellow-blue running water
+61|Yellow-cyan running water
+62|Blue-purple running water
+63|Black-white running water
+64|White-red-white flow
+65|White-green-white flow
+66|White-blue-white flow
+67|White-yellow-white flow
+68|White-green-white flow
+69|White-purple-white flow
+70|Red-white-red flow
+71|Green-white-green flow
+72|Blue-white-blue flow
+73|Yellow-white-yellow flow
+74|Blue-white-blue flow
+75|Purple-white-purple flow
+76|7 colors trailing
+77|Red trailing
+78|Green trailing
+79|Blue trailing
+80|Yellow trailing
+81|Cyan trailing
+82|Purple trailing
+83|White trailing
+84|Red running
+85|Green running
+86|Blue running
+87|Yellow running
+88|Cyan running
+89|Purple running
+90|White running
+91|7 colors running
+92|Blue-green-red running
+93|Purple-cyan-yellow running
+94|Blue-purple-cyan-yellow running
+95|Blue-green-cyan-yellow running
+96|Red dot on white background running
+97|Red background and green dot running
+98|Green background and blue dot running
+99|Yellow dot on the blue background running
+100|Yellow background and blue dots running
+101|Blue background and purple dots running
+102|White dots running on purple background
+103|Red background and white dots running
+104|7 colors running with red background
+105|7 colors running with green background
+106|7 colors running with blue background
+107|7 colors yellow background running
+108|Green background 7 colors running
+109|7 colors running with purple background
+110|7 colors running on white background
+111|Blue background and green dot running
+112|Red background and green dot running
+113|Red dot on the blue background running
+114|Yellow background and blue dots running
+115|Yellow dots running on purple background
+116|Yellow background and white dots running
+117|Yellow dots on white background running
+'@ -split "`r?`n" | Where-Object { $_ } | ForEach-Object { $p = $_ -split '\|', 2; @{ N = [int]$p[0]; Name = $p[1] } })
+
+$script:ledWordColors = [ordered]@{
+    red = '#FF3B30'; green = '#30D158'; blue = '#2F6BFF'; yellow = '#FFD60A'; cyan = '#32D4F5'
+    purple = '#B04CFF'; violet = '#B04CFF'; white = '#F2F2F2'; black = '#1A1A1A'
+}
+$script:ledRainbow = @('#FF3B30', '#FF9500', '#FFD60A', '#30D158', '#32D4F5', '#2F6BFF', '#B04CFF')
+$script:ledSep = ' ' + [char]0xB7 + ' '
+# loop timing is stored in half seconds
+function Format-LedSec($half) { ([double][int]$half * 0.5).ToString('0.#', [Globalization.CultureInfo]::InvariantCulture) }
+$script:ledSwatchHex = @('#FF0000', '#FF5A00', '#FFB000', '#FFE600', '#7CFF00', '#00FF40', '#00FFC8', '#00B4FF', '#0040FF', '#5A00FF', '#B400FF', '#FF00B4', '#FFFFFF')
+
+# colors an effect's name promises, in order; "7 colors" and friends mean the rainbow
+function Get-LedFxColors([string]$name) {
+    $l = $name.ToLowerInvariant()
+    $hits = @()
+    foreach ($m in [regex]::Matches($l, '[a-z]+')) {
+        $w = $m.Value
+        if ($script:ledWordColors.Contains($w)) { $c = $script:ledWordColors[$w]; if ($hits -notcontains $c) { $hits += $c } }
+    }
+    if ($l -match '7 colors|colorful|symphony|automatic' -or $hits.Count -eq 0) {
+        if ($l -match 'background|dot') { return @($hits) + $script:ledRainbow }
+        return $script:ledRainbow
+    }
+    @($hits)
+}
+function Get-LedFxGroup([string]$name) {
+    $l = $name.ToLowerInvariant()
+    if ($l -match 'dot|background') { return 'dots' }
+    if ($l -match 'strobe|jump') { return 'strobe' }
+    if ($l -match 'flow|water|flutter') { return 'flow' }
+    if ($l -match 'running|racing|trailing|chasing|follow') { return 'running' }
+    'fade'
+}
+function New-LedGradient([string[]]$cols, [bool]$hard = $false) {
+    $g = New-Object System.Windows.Media.LinearGradientBrush
+    $g.StartPoint = New-Object System.Windows.Point 0, 0.5; $g.EndPoint = New-Object System.Windows.Point 1, 0.5
+    $n = $cols.Count
+    if ($n -eq 1) { $cols = @($cols[0], $cols[0]); $n = 2 }
+    for ($i = 0; $i -lt $n; $i++) {
+        $c = Get-GColor $cols[$i]
+        if ($hard) {
+            $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop $c, ($i / $n)))
+            $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop $c, (($i + 1) / $n)))
+        } else { $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop $c, ($i / ($n - 1)))) }
+    }
+    $g.Freeze(); $g
+}
+# background + dots: the first color fills, the rest sit on it as dots
+function New-LedFxBrush([string]$name) {
+    $cols = @(Get-LedFxColors $name)
+    if ((Get-LedFxGroup $name) -eq 'dots' -and $cols.Count -ge 2) {
+        $seq = @()
+        $dots = @($cols | Select-Object -Skip 1)
+        for ($i = 0; $i -lt 12; $i++) { $seq += $(if ($i % 3 -eq 1) { $dots[[int][math]::Floor($i / 3) % $dots.Count] } else { $cols[0] }) }
+        return New-LedGradient $seq $true
+    }
+    New-LedGradient $cols ($name -match '(?i)strobe|jump')
+}
+
+# --- color math: the strip takes HSV (hue 0-359, saturation x1000) ---
+function ConvertTo-LedHsv([string]$hex) {
+    $c = Get-GColor $hex
+    $r = $c.R / 255.0; $g = $c.G / 255.0; $b = $c.B / 255.0
+    $max = [math]::Max($r, [math]::Max($g, $b)); $min = [math]::Min($r, [math]::Min($g, $b)); $d = $max - $min
+    $h = 0.0
+    if ($d -gt 0) {
+        if ($max -eq $r) { $h = 60 * ((($g - $b) / $d) % 6) }
+        elseif ($max -eq $g) { $h = 60 * ((($b - $r) / $d) + 2) }
+        else { $h = 60 * ((($r - $g) / $d) + 4) }
+    }
+    if ($h -lt 0) { $h += 360 }
+    $s = $(if ($max -gt 0) { $d / $max } else { 0 })
+    @(([int][math]::Round($h) % 360), [int][math]::Round($s * 100))
+}
+function ConvertFrom-LedHsv([double]$h, [double]$s) {
+    $s = $s / 100.0; $c = $s; $x = $c * (1 - [math]::Abs((($h / 60) % 2) - 1)); $m = 1 - $c
+    $rgb = switch ([int][math]::Floor($h / 60) % 6) { 0 { $c, $x, 0 } 1 { $x, $c, 0 } 2 { 0, $c, $x } 3 { 0, $x, $c } 4 { $x, 0, $c } default { $c, 0, $x } }
+    '#{0:X2}{1:X2}{2:X2}' -f [int](($rgb[0] + $m) * 255), [int](($rgb[1] + $m) * 255), [int](($rgb[2] + $m) * 255)
+}
+function Mix-LedHex([string]$a, [string]$b, [double]$t) {
+    $ca = Get-GColor $a; $cb = Get-GColor $b
+    '#{0:X2}{1:X2}{2:X2}' -f [int]($ca.R + ($cb.R - $ca.R) * $t), [int]($ca.G + ($cb.G - $ca.G) * $t), [int]($ca.B + ($cb.B - $ca.B) * $t)
+}
+
+# --- frames ---
+function New-LedFrame([int]$cmd, [int[]]$payload) {
+    $f = New-Object 'byte[]' ($payload.Count + 4)
+    $f[0] = 0xBC; $f[1] = $cmd; $f[2] = $payload.Count
+    for ($i = 0; $i -lt $payload.Count; $i++) { $f[3 + $i] = [byte]($payload[$i] -band 0xFF) }
+    $f[$f.Length - 1] = 0x55
+    , $f
+}
+function Send-Led([int]$cmd, [int[]]$payload) {
+    if ($cmd -eq 0x02 -or $cmd -eq 0x03) { return $false }
+    if (-not ('VentoNative.Led' -as [type])) { return $false }
+    [VentoNative.Led]::Send((New-LedFrame $cmd $payload))
+}
+function Send-LedPower([bool]$on) { Send-Led 0x01 @([int]$on) }
+function Send-LedBri([int]$pct) { $v = [int](Limit $pct 1 100) * 10; Send-Led 0x13 @(($v -shr 8), ($v -band 0xFF)) }
+function Send-LedHsv([int]$h, [int]$s) { $sv = [int](Limit $s 0 100) * 10; Send-Led 0x04 @(($h -shr 8), ($h -band 0xFF), ($sv -shr 8), ($sv -band 0xFF), 0, 0) }
+function Send-LedHex([string]$hex) { $hs = ConvertTo-LedHsv $hex; Send-LedHsv $hs[0] $hs[1] }
+function Send-LedFx([int]$n) { Send-Led 0x06 @([int][math]::Floor($n / 255), ($n % 255)) }
+function Send-LedSpeed([int]$v) { Send-Led 0x08 @([int](Limit $v 1 100)) }
+
+# --- the native link, compiled off the UI thread the first time it is needed ---
+$script:ledCompileStarted = $false
+function Start-LedCompile {
+    if ($script:ledCompileStarted -or ('VentoNative.Led' -as [type])) { return }
+    $script:ledCompileStarted = $true
+    $body = {
+        param($sync, $cs)
+        try {
+            $gac = "$env:SystemRoot\Microsoft.NET\assembly\GAC_MSIL"
+            $refs = @(
+                "$env:SystemRoot\System32\WinMetadata\Windows.Devices.winmd"
+                "$env:SystemRoot\System32\WinMetadata\Windows.Foundation.winmd"
+                "$env:SystemRoot\System32\WinMetadata\Windows.Storage.winmd"
+                'System.dll'
+            )
+            foreach ($n in 'System.Runtime', 'System.Runtime.WindowsRuntime', 'System.Runtime.InteropServices.WindowsRuntime') {
+                $dll = Get-ChildItem (Join-Path $gac $n) -Recurse -Filter "$n.dll" -ErrorAction Stop | Select-Object -First 1
+                if (-not $dll) { throw "facade missing: $n" }
+                $refs += $dll.FullName
+            }
+            $cp = New-Object System.CodeDom.Compiler.CompilerParameters
+            $cp.ReferencedAssemblies.AddRange([string[]]$refs)
+            Add-Type -CompilerParameters $cp -TypeDefinition $cs
+            $sync.LedReady = $true
+        } catch { $sync.LedErr = "$_" }
+    }
+    $script:ledRunspace = [runspacefactory]::CreateRunspace()
+    $script:ledRunspace.Open()
+    $script:psLed = [powershell]::Create()
+    $script:psLed.Runspace = $script:ledRunspace
+    [void]$script:psLed.AddScript($body.ToString()).AddArgument($sync).AddArgument($script:ledCs)
+    [void]$script:psLed.BeginInvoke()
+}
+$script:ledWantConnect = $false
+function Connect-Led {
+    $script:ledWantConnect = $true
+    (G 'LedErr').Text = ''
+    Start-LedCompile
+    if ('VentoNative.Led' -as [type]) { [VentoNative.Led]::Connect([Convert]::ToUInt64([string]$script:settings.ledAddr, 16)) }
+    Update-LedStatus
+}
+function Disconnect-Led {
+    $script:ledWantConnect = $false
+    Stop-LedLoop
+    if ('VentoNative.Led' -as [type]) { [VentoNative.Led]::Disconnect() }
+    Update-LedStatus
+}
+
+# --- status: the dot, the button, and whether the controls can be used ---
+$script:ledLastState = ''
+function Get-LedState {
+    if ($script:ledWantConnect -and -not ('VentoNative.Led' -as [type])) {
+        if ($sync.LedErr) { return @('error', '', "Bluetooth support failed to load: $($sync.LedErr)") }
+        return @('connecting', '', '')
+    }
+    if (-not ('VentoNative.Led' -as [type])) { return @('disconnected', '', '') }
+    $p = ([VentoNative.Led]::Status()) -split ';', 4
+    @($p[0], $p[1], $p[3])
+}
+function Update-LedStatus {
+    if (-not $script:ledEnabled) { return }
+    # the compile finished after Connect was pressed: carry the request through
+    if ($script:ledWantConnect -and ('VentoNative.Led' -as [type]) -and ([VentoNative.Led]::Status()) -like 'disconnected*') {
+        [VentoNative.Led]::Connect([Convert]::ToUInt64([string]$script:settings.ledAddr, 16))
+    }
+    $st = Get-LedState
+    $state = [string]$st[0]
+    $txt = switch ($state) {
+        'connected'  { 'Connected' }
+        'connecting' { 'Connecting...' }
+        'retrying'   { 'Trying again...' }
+        'error'      { 'Bluetooth unavailable' }
+        default      { 'Not connected' }
+    }
+    (G 'LedState').Text = $txt
+    (G 'LedDot').Fill = $(switch ($state) {
+        'connected' { Get-GBrush '#6CCB5F' }
+        { $_ -in 'connecting', 'retrying' } { Get-GBrush '#FCE100' }
+        'error' { Get-GBrush '#FF99A4' }
+        default { $script:app.FindResource('TextTertiaryBrush') } })
+    $err = [string]$st[2]
+    (G 'LedErr').Text = $(if ($state -ne 'connected' -and $err) { $err } else { '' })
+    $wanted = $script:ledWantConnect
+    $btn = G 'LedConnect'
+    $btn.Content = $(if ($wanted) { 'Disconnect' } else { 'Connect' })
+    $btn.Style = $script:app.FindResource($(if ($wanted) { 'FluentButton' } else { 'AccentButton' }))
+    $on = $state -eq 'connected'
+    $ctl = G 'LedControls'
+    $ctl.IsEnabled = $on; $ctl.Opacity = $(if ($on) { 1 } else { 0.45 })
+    if ($on -and $script:ledLastState -ne 'connected') {
+        # a loop the user left playing picks up where the link comes back
+        if ([string]$script:settings.ledKind -eq 'loop' -and $script:settings.ledLoop -and -not $script:ledLoopTimer.IsEnabled) {
+            $lp = Get-LedLoop ([string]$script:settings.ledLoop)
+            if ($lp) { Start-LedLoop $lp }
+        }
+    }
+    $script:ledLastState = $state
+}
+
+# --- the preview bar mirrors what Vento last told the strip ---
+function Update-LedPreview([string]$liveHex = '') {
+    $s = $script:settings
+    $bar = G 'LedBar'; $halo = G 'LedHalo'
+    if (-not $s.ledOn) {
+        $bar.Background = Get-GBrush '#2A2A2A'; $halo.Background = $null
+        (G 'LedNow').Text = 'Off'
+        return
+    }
+    $kind = [string]$s.ledKind
+    if ($kind -eq 'effect') {
+        $fx = $script:ledFxList | Where-Object { $_.N -eq [int]$s.ledFx } | Select-Object -First 1
+        $br = New-LedFxBrush ([string]$fx.Name)
+        (G 'LedNow').Text = 'Effect {0}{1}{2}' -f $fx.N, $script:ledSep, $fx.Name
+    } elseif ($kind -eq 'loop' -and $liveHex) {
+        $br = Get-GBrush $liveHex
+        (G 'LedNow').Text = 'Loop{0}{1}' -f $script:ledSep, $s.ledLoop
+    } elseif ($kind -eq 'loop') {
+        $lp = Get-LedLoop ([string]$s.ledLoop)
+        $br = $(if ($lp) { New-LedGradient @($lp.Colors) } else { Get-GBrush '#2A2A2A' })
+        (G 'LedNow').Text = 'Loop{0}{1}' -f $script:ledSep, $s.ledLoop
+    } else {
+        $hex = ConvertFrom-LedHsv $s.ledHue $s.ledSat
+        $br = Get-GBrush $hex
+        (G 'LedNow').Text = '{0}{1}{2}%' -f $hex, $script:ledSep, $s.ledBri
+    }
+    $bar.Background = $br; $halo.Background = $br
+    $halo.Opacity = 0.25 + 0.45 * ([int]$s.ledBri / 100.0)
+}
+
+# --- color: swatches and the hue / saturation sliders ---
+$script:ledSync = $false
+foreach ($hex in $script:ledSwatchHex) {
+    $rb = New-Object System.Windows.Controls.RadioButton
+    $rb.Style = $script:app.FindResource('Swatch'); $rb.GroupName = 'LedSw'; $rb.Background = Get-GBrush $hex; $rb.Tag = $hex; $rb.ToolTip = $hex
+    $rb.Add_Click({ param($sd, $e)
+        $hs = ConvertTo-LedHsv ([string]$sd.Tag)
+        $script:ledSync = $true
+        try { (G 'LedHue').Value = $hs[0]; (G 'LedSat').Value = $hs[1] } finally { $script:ledSync = $false }
+        Set-LedColor $hs[0] $hs[1]
+    })
+    [void](G 'LedSwatches').Children.Add($rb)
+}
+function Set-LedColor([int]$h, [int]$s) {
+    Stop-LedLoop
+    $script:settings.ledHue = $h; $script:settings.ledSat = $s; $script:settings.ledKind = 'color'
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    [void](Send-LedHsv $h $s)
+    (G 'LedHuePrev').Background = Get-GBrush (ConvertFrom-LedHsv $h $s)
+    (G 'LedSatV').Text = '{0}%' -f $s
+    Update-LedFxChecks
+    Update-LedPreview
+}
+(G 'LedHue').Add_ValueChanged({ param($sd, $e)
+    (G 'LedHuePrev').Background = Get-GBrush (ConvertFrom-LedHsv $sd.Value (G 'LedSat').Value)
+    if (-not $script:ledSync) { Set-LedColor ([int]$sd.Value) ([int](G 'LedSat').Value) }
+})
+(G 'LedSat').Add_ValueChanged({ param($sd, $e)
+    (G 'LedSatV').Text = '{0}%' -f [int]$sd.Value
+    if (-not $script:ledSync) { Set-LedColor ([int](G 'LedHue').Value) ([int]$sd.Value) }
+})
+
+# --- power, brightness, speed ---
+(G 'LedPower').Add_Click({
+    $on = [bool](G 'LedPower').IsChecked
+    $script:settings.ledOn = $on; $script:saveTimer.Stop(); $script:saveTimer.Start()
+    if (-not $on) { Stop-LedLoop }
+    [void](Send-LedPower $on)
+    Update-LedPreview
+})
+(G 'LedBri').Add_ValueChanged({ param($sd, $e)
+    $v = [int]$sd.Value
+    (G 'LedBriV').Text = '{0}%' -f $v
+    if ($script:ledSync) { return }
+    $script:settings.ledBri = $v; $script:saveTimer.Stop(); $script:saveTimer.Start()
+    [void](Send-LedBri $v)
+    Update-LedPreview
+})
+(G 'LedSpeed').Add_ValueChanged({ param($sd, $e)
+    $v = [int]$sd.Value
+    (G 'LedSpeedV').Text = '{0}' -f $v
+    if ($script:ledSync) { return }
+    $script:settings.ledSpeed = $v; $script:saveTimer.Stop(); $script:saveTimer.Start()
+    [void](Send-LedSpeed $v)
+})
+(G 'LedConnect').Add_Click({ if ($script:ledWantConnect) { Disconnect-Led } else { Connect-Led } })
+(G 'LedAutoConn').Add_Click({ Set-GSetting 'ledAutoConn' ([bool](G 'LedAutoConn').IsChecked) })
+
+# --- built-in effects: filter chips and one tile per effect ---
+$script:ledFilter = 'all'
+$script:ledFxBuilt = $false
+foreach ($f in @(@('all', 'All'), @('rainbow', 'Rainbow'), @('running', 'Running'), @('flow', 'Flow'), @('strobe', 'Strobe'), @('fade', 'Fades'), @('dots', 'Dots'))) {
+    $rb = New-Object System.Windows.Controls.RadioButton
+    $rb.Style = $script:app.FindResource('SegItem'); $rb.GroupName = 'LedFilter'; $rb.Content = $f[1]; $rb.Tag = $f[0]
+    if ($f[0] -eq 'all') { $rb.IsChecked = $true }
+    $rb.Add_Checked({ param($sd, $e) $script:ledFilter = [string]$sd.Tag; Update-LedFxFilter })
+    [void](G 'LedFilters').Children.Add($rb)
+}
+function Build-LedEffects {
+    if ($script:ledFxBuilt) { return }
+    $script:ledFxBuilt = $true
+    $wp = G 'LedEffects'
+    foreach ($fx in $script:ledFxList) {
+        $rb = New-Object System.Windows.Controls.RadioButton
+        $rb.Style = $script:app.FindResource('ModeCard'); $rb.GroupName = 'LedFx'; $rb.Width = 172; $rb.Margin = '4,0,4,8'; $rb.Padding = '10,10,10,9'
+        $rb.Tag = $fx.N
+        $sp = New-Object System.Windows.Controls.StackPanel
+        $bar = New-Object System.Windows.Controls.Border
+        $bar.Height = 8; $bar.CornerRadius = 4; $bar.Margin = '0,2,24,10'; $bar.Background = New-LedFxBrush $fx.Name
+        $nm = New-Object System.Windows.Controls.TextBlock
+        $nm.Text = $fx.Name; $nm.Style = $script:app.FindResource('Body'); $nm.FontSize = 13; $nm.TextWrapping = 'Wrap'; $nm.Height = 36
+        $no = New-Object System.Windows.Controls.TextBlock
+        $no.Text = '#{0}' -f $fx.N; $no.Style = $script:app.FindResource('CaptionTertiary'); $no.Margin = '0,2,0,0'
+        [void]$sp.Children.Add($bar); [void]$sp.Children.Add($nm); [void]$sp.Children.Add($no)
+        $rb.Content = $sp
+        $rb.Add_Click({ param($sd, $e) Set-LedEffect ([int]$sd.Tag) })
+        $lname = $fx.Name.ToLowerInvariant()
+        $rb.Resources['grp'] = Get-LedFxGroup $fx.Name
+        $rb.Resources['rainbow'] = [bool]($lname -match '7 colors|colorful|symphony|automatic')
+        [void]$wp.Children.Add($rb)
+    }
+    Update-LedFxFilter
+    Update-LedFxChecks
+}
+function Update-LedFxFilter {
+    foreach ($rb in (G 'LedEffects').Children) {
+        $show = switch ($script:ledFilter) {
+            'all' { $true }
+            'rainbow' { [bool]$rb.Resources['rainbow'] }
+            default { [string]$rb.Resources['grp'] -eq $script:ledFilter }
+        }
+        $rb.Visibility = $(if ($show) { 'Visible' } else { 'Collapsed' })
+    }
+}
+function Update-LedFxChecks {
+    $cur = $(if ([string]$script:settings.ledKind -eq 'effect') { [int]$script:settings.ledFx } else { -1 })
+    foreach ($rb in (G 'LedEffects').Children) { $rb.IsChecked = ([int]$rb.Tag -eq $cur) }
+}
+function Set-LedEffect([int]$n) {
+    Stop-LedLoop
+    $script:settings.ledFx = $n; $script:settings.ledKind = 'effect'
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    [void](Send-LedFx $n)
+    Update-LedFxChecks
+    Update-LedPreview
+}
+
+# --- my color loops: Vento plays them, one color frame per tick ---
+function Get-LedLoop([string]$name) { @($script:settings.ledLoops) | Where-Object { $_.Name -eq $name } | Select-Object -First 1 }
+$script:ledLoopTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:ledLoopTimer.Interval = [TimeSpan]::FromMilliseconds(70)
+$script:ledLoopRun = $null
+$script:ledLoopLast = ''
+function Get-LedLoopFrame($lp, [double]$t) {
+    # returns @(hex, brightnessFactor 0..1)
+    $cols = @($lp.Colors); $n = $cols.Count
+    $seg = [double]$lp.Half * 0.5
+    $pos = $t / $seg; $i = [int][math]::Floor($pos) % $n; $u = $pos - [math]::Floor($pos)
+    switch ([string]$lp.Trans) {
+        'jump' { return @($cols[$i], 1.0) }
+        'breathe' { return @($cols[$i], (0.08 + 0.92 * [math]::Sin([math]::PI * $u))) }
+        default {
+            # hold the color for 40% of its time, then blend into the next
+            if ($u -lt 0.4 -or $n -eq 1) { return @($cols[$i], 1.0) }
+            $k = ($u - 0.4) / 0.6; $k = $k * $k * (3 - 2 * $k)
+            return @((Mix-LedHex $cols[$i] $cols[($i + 1) % $n] $k), 1.0)
+        }
+    }
+}
+$script:ledLoopTimer.Add_Tick({
+    $r = $script:ledLoopRun
+    if (-not $r) { $script:ledLoopTimer.Stop(); return }
+    $t = ([DateTime]::Now - $r.Start).TotalSeconds
+    $fr = Get-LedLoopFrame $r.Loop $t
+    $hex = [string]$fr[0]
+    $key = '{0}/{1:0.00}' -f $hex, $fr[1]
+    if ($key -eq $script:ledLoopLast) { return }
+    $script:ledLoopLast = $key
+    [void](Send-LedHex $hex)
+    if ([string]$r.Loop.Trans -eq 'breathe') { [void](Send-LedBri ([int][math]::Max(1, [int]$script:settings.ledBri * $fr[1]))) }
+    if ((G 'PageLights').Visibility -eq 'Visible') { Update-LedPreview $hex }
+})
+function Start-LedLoop($lp) {
+    $script:ledLoopRun = @{ Loop = $lp; Start = [DateTime]::Now }
+    $script:ledLoopLast = ''
+    $script:settings.ledKind = 'loop'; $script:settings.ledLoop = [string]$lp.Name
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    $script:ledLoopTimer.Start()
+    Update-LedFxChecks
+    Show-LedLoops
+}
+function Stop-LedLoop {
+    if (-not $script:ledLoopRun) { return }
+    $was = $script:ledLoopRun
+    $script:ledLoopRun = $null; $script:ledLoopTimer.Stop()
+    # breathing leaves the brightness wherever it was; put the slider's value back
+    if ([string]$was.Loop.Trans -eq 'breathe') { [void](Send-LedBri ([int]$script:settings.ledBri)) }
+    Show-LedLoops
+}
+function Show-LedLoops {
+    $host0 = G 'LedLoops'; $host0.Children.Clear()
+    foreach ($lp in @($script:settings.ledLoops)) {
+        $playing = $script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Name -eq [string]$lp.Name
+        $b = New-Object System.Windows.Controls.Border
+        $b.Style = $script:app.FindResource('SettingsCard')
+        if ($playing) { $b.BorderBrush = $script:app.FindResource('AccentBrush') }
+        $g = New-Object System.Windows.Controls.Grid
+        foreach ($w in '120', '*', 'Auto') { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $w; [void]$g.ColumnDefinitions.Add($cd) }
+        $bar = New-Object System.Windows.Controls.Border
+        $bar.Height = 10; $bar.CornerRadius = 5; $bar.VerticalAlignment = 'Center'
+        $bar.Background = New-LedGradient @($lp.Colors) ([string]$lp.Trans -eq 'jump')
+        $txt = New-Object System.Windows.Controls.StackPanel; $txt.Margin = '16,0'; $txt.VerticalAlignment = 'Center'
+        [System.Windows.Controls.Grid]::SetColumn($txt, 1)
+        $t1 = New-Object System.Windows.Controls.TextBlock; $t1.Text = $lp.Name; $t1.Style = $script:app.FindResource('Body')
+        $trName = @{ fade = 'Fade'; jump = 'Jump'; breathe = 'Breathe' }[[string]$lp.Trans]
+        $t2 = New-Object System.Windows.Controls.TextBlock; $t2.Style = $script:app.FindResource('Caption')
+        $t2.Text = '{0} colors{1}{2}{1}{3} s each{4}' -f @($lp.Colors).Count, $script:ledSep, $trName, (Format-LedSec $lp.Half), $(if ($playing) { $script:ledSep + 'Playing' } else { '' })
+        [void]$txt.Children.Add($t1); [void]$txt.Children.Add($t2)
+        $btns = New-Object System.Windows.Controls.StackPanel; $btns.Orientation = 'Horizontal'; $btns.VerticalAlignment = 'Center'
+        [System.Windows.Controls.Grid]::SetColumn($btns, 2)
+        foreach ($spec in @(@($(if ($playing) { [char]0xE71A } else { [char]0xE768 }), 'play', $(if ($playing) { 'Stop' } else { 'Play' })), @([char]0xE70F, 'edit', 'Edit'), @([char]0xE74D, 'del', 'Delete'))) {
+            $bt = New-Object System.Windows.Controls.Button
+            $bt.Style = $script:app.FindResource('IconButton'); $bt.Content = [string]$spec[0]; $bt.FontSize = 14; $bt.ToolTip = $spec[2]
+            $bt.Tag = @{ Act = $spec[1]; Name = [string]$lp.Name }
+            $bt.Add_Click({ param($sd, $e)
+                $a = $sd.Tag; $l = Get-LedLoop $a.Name
+                if (-not $l) { return }
+                switch ($a.Act) {
+                    'play' { if ($script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Name -eq $a.Name) { Stop-LedLoop; $script:settings.ledKind = 'color'; Update-LedPreview } else { Start-LedLoop $l } }
+                    'edit' { Open-LedLoopEditor $l }
+                    'del' {
+                        if ($script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Name -eq $a.Name) { Stop-LedLoop }
+                        Set-GSetting 'ledLoops' @(@($script:settings.ledLoops) | Where-Object { $_.Name -ne $a.Name })
+                        if ([string]$script:settings.ledLoop -eq $a.Name) { $script:settings.ledLoop = '' }
+                        Show-LedLoops
+                    }
+                }
+            })
+            [void]$btns.Children.Add($bt)
+        }
+        [void]$g.Children.Add($bar); [void]$g.Children.Add($txt); [void]$g.Children.Add($btns)
+        $b.Child = $g
+        [void]$host0.Children.Add($b)
+    }
+}
+
+# --- loop editor ---
+$script:ledEdit = $null
+function Show-LedEditColors {
+    $wp = G 'LedLoopColors'; $wp.Children.Clear()
+    $i = 0
+    foreach ($hex in @($script:ledEdit.Colors)) {
+        $bt = New-Object System.Windows.Controls.Button
+        $bt.Style = $script:app.FindResource('IconButton'); $bt.Width = 34; $bt.Height = 34; $bt.Margin = '0,0,6,6'; $bt.Tag = $i
+        $dot = New-Object System.Windows.Shapes.Ellipse; $dot.Width = 24; $dot.Height = 24; $dot.Fill = Get-GBrush $hex; $dot.Stroke = Get-GBrush '#FFFFFF' 0x30
+        $bt.Content = $dot; $bt.ToolTip = "$hex - click to remove"
+        $bt.Add_Click({ param($sd, $e)
+            $k = [int]$sd.Tag; $c = [System.Collections.ArrayList]@($script:ledEdit.Colors); $c.RemoveAt($k); $script:ledEdit.Colors = @($c); Show-LedEditColors
+        })
+        [void]$wp.Children.Add($bt); $i++
+    }
+    if (@($script:ledEdit.Colors).Count -lt 12) {
+        $add = New-Object System.Windows.Controls.Button
+        $add.Style = $script:app.FindResource('FluentButton'); $add.MinHeight = 34; $add.Padding = '10,0'; $add.Margin = '0,0,6,6'; $add.FontSize = 13
+        $cur = ConvertFrom-LedHsv (G 'LedHue').Value (G 'LedSat').Value
+        $sp = New-Object System.Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
+        $dot = New-Object System.Windows.Shapes.Ellipse; $dot.Width = 14; $dot.Height = 14; $dot.Fill = Get-GBrush $cur; $dot.VerticalAlignment = 'Center'
+        $tx = New-Object System.Windows.Controls.TextBlock; $tx.Text = 'Add this color'; $tx.Margin = '8,0,0,0'; $tx.VerticalAlignment = 'Center'
+        [void]$sp.Children.Add($dot); [void]$sp.Children.Add($tx); $add.Content = $sp
+        $add.Add_Click({ $script:ledEdit.Colors = @($script:ledEdit.Colors) + @(ConvertFrom-LedHsv (G 'LedHue').Value (G 'LedSat').Value); Show-LedEditColors })
+        [void]$wp.Children.Add($add)
+    }
+}
+function Open-LedLoopEditor($lp) {
+    if ($lp) { $script:ledEdit = @{ Orig = [string]$lp.Name; Colors = @($lp.Colors); Trans = [string]$lp.Trans; Half = [int]$lp.Half }; (G 'LedLoopName').Text = $lp.Name }
+    else { $script:ledEdit = @{ Orig = ''; Colors = @(); Trans = 'fade'; Half = 6 }; (G 'LedLoopName').Text = 'My loop' }
+    foreach ($t in 'Fade', 'Jump', 'Breathe') { $r = G "LedTr$t"; $r.IsChecked = ([string]$r.Tag -eq $script:ledEdit.Trans) }
+    (G 'LedLoopSec').Value = $script:ledEdit.Half
+    (G 'LedLoopErr').Text = ''
+    Show-LedEditColors
+    (G 'LedLoopEdit').Visibility = 'Visible'
+    [void](G 'LedLoopName').Focus(); (G 'LedLoopName').SelectAll()
+}
+(G 'LedLoopSec').Add_ValueChanged({ param($sd, $e) (G 'LedLoopSecV').Text = '{0} s' -f (Format-LedSec $sd.Value) })
+(G 'LedLoopNew').Add_Click({ Open-LedLoopEditor $null })
+(G 'LedLoopCancel').Add_Click({ (G 'LedLoopEdit').Visibility = 'Collapsed'; $script:ledEdit = $null })
+(G 'LedLoopSave').Add_Click({
+    $e = $script:ledEdit; if (-not $e) { return }
+    $name = ([string](G 'LedLoopName').Text).Trim()
+    $err = G 'LedLoopErr'
+    if (-not $name) { $err.Text = 'Give the loop a name.'; return }
+    if (@($e.Colors).Count -lt 2) { $err.Text = 'Add at least two colors.'; return }
+    if ($name -ne $e.Orig -and (Get-LedLoop $name)) { $err.Text = 'A loop with this name already exists.'; return }
+    $tr = 'fade'; foreach ($t in 'Fade', 'Jump', 'Breathe') { if ((G "LedTr$t").IsChecked) { $tr = [string](G "LedTr$t").Tag } }
+    $new = @{ Name = $name; Colors = @($e.Colors); Trans = $tr; Half = [int](G 'LedLoopSec').Value }
+    $list = @()
+    $placed = $false
+    foreach ($l in @($script:settings.ledLoops)) {
+        if ($e.Orig -and $l.Name -eq $e.Orig) { $list += , $new; $placed = $true } else { $list += , $l }
+    }
+    if (-not $placed) { $list += , $new }
+    Set-GSetting 'ledLoops' @($list)
+    (G 'LedLoopEdit').Visibility = 'Collapsed'; $script:ledEdit = $null
+    if ($script:ledLoopRun) { Stop-LedLoop }
+    Start-LedLoop $new
+})
+
+# --- page load / periodic refresh ---
+function Update-GlassLights {
+    if (-not $script:ledEnabled) { return }
+    Build-LedEffects
+    $s = $script:settings
+    $script:ledSync = $true
+    try {
+        (G 'LedAutoConn').IsChecked = [bool]$s.ledAutoConn
+        (G 'LedPower').IsChecked = [bool]$s.ledOn
+        (G 'LedBri').Value = [int]$s.ledBri; (G 'LedBriV').Text = '{0}%' -f [int]$s.ledBri
+        (G 'LedHue').Value = [int]$s.ledHue
+        (G 'LedSat').Value = [int]$s.ledSat; (G 'LedSatV').Text = '{0}%' -f [int]$s.ledSat
+        (G 'LedHuePrev').Background = Get-GBrush (ConvertFrom-LedHsv $s.ledHue $s.ledSat)
+        (G 'LedSpeed').Value = [int]$s.ledSpeed; (G 'LedSpeedV').Text = '{0}' -f [int]$s.ledSpeed
+        (G 'LedLoopSecV').Text = '{0} s' -f (Format-LedSec (G 'LedLoopSec').Value)
+    } finally { $script:ledSync = $false }
+    Update-LedFxChecks
+    Show-LedLoops
+    Update-LedPreview
+    Update-LedStatus
+}
+if ($script:ledEnabled) {
+    (G 'NavLights').Visibility = 'Visible'
+    $script:searchMap['Lights'] = 'lights led strip leds rgb lighting effects loop bluetooth'
+    $script:ledStatusTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $script:ledStatusTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+    $script:ledStatusTimer.Add_Tick({ try { Update-LedStatus } catch { } })
+    $script:ledStatusTimer.Start()
+    (G 'NavLights').Add_Checked({ try { Update-GlassLights } catch { } })
+    if ($script:settings.ledAutoConn) { Connect-Led }
+    $script:shell.Add_Closed({ try { Stop-LedLoop; if ('VentoNative.Led' -as [type]) { [VentoNative.Led]::Disconnect() } } catch { } })
+}
+# --- Glass: Lights end -------------------------------------------------------
 
 function New-Brush([string]$hex) {
     $b = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color][System.Windows.Media.ColorConverter]::ConvertFromString($hex))
