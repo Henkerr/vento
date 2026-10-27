@@ -4146,6 +4146,9 @@ function Update-Glass($d) {
             (G 'OsdMove').Content = $(if ($script:osdEditing) { 'Done' } else { 'Move on screen' })
         }
     }
+    if ((G 'PageSettings').Visibility -eq 'Visible') {
+        if ($script:glassReveal) { Update-GlassSettings } elseif ($script:histTick % 2 -eq 0) { Update-GUpdateRow }
+    }
     if ($script:glassReveal) {
         if ((G 'PageAlerts').Visibility -eq 'Visible') { Update-GlassAlerts }
         if ((G 'PageProfiles').Visibility -eq 'Visible') { Update-GlassProfiles }
@@ -4898,6 +4901,151 @@ foreach ($n in 'OmAuto', 'OmOn', 'OmOff') {
     (G 'OsdCornerName').Text = $script:gOsdCornerNames[[string]$script:settings.osdCorner]
     (G 'OsdResetPos').Visibility = 'Collapsed'
 })
+
+# --- Glass: Settings ---------------------------------------------------------------
+# Shortcuts are recorded straight into hk* settings and re-registered at once;
+# a combination the OS refuses or another Vento action already owns is said
+# on its row. Startup toggles call the same task code as the installer.
+function New-GKeycap([string]$text) {
+    $b = New-Object System.Windows.Controls.Border; $b.Style = $script:app.FindResource('Keycap')
+    $t = New-Object System.Windows.Controls.TextBlock; $t.Text = $text; $b.Child = $t; $b
+}
+function Set-GKeys($panel, [string]$combo) {
+    $panel.Children.Clear()
+    if (-not $combo) {
+        $t = New-Object System.Windows.Controls.TextBlock; $t.Text = 'Not set'; $t.Style = $script:app.FindResource('CaptionTertiary'); $t.VerticalAlignment = 'Center'
+        [void]$panel.Children.Add($t); return
+    }
+    foreach ($k in ((Format-HotkeyText $combo) -split ' \+ ')) { [void]$panel.Children.Add((New-GKeycap $k)) }
+}
+$script:gHkRec = $null
+$script:gHkRows = @{}
+function Show-GHotkeys([hashtable]$problems = @{}) {
+    $rows = G 'HotkeyRows'; $rows.Children.Clear(); $script:gHkRows = @{}
+    $acts = @($script:hotkeyActions)
+    for ($i = 0; $i -lt $acts.Count; $i++) {
+        $a = $acts[$i]
+        $g = New-Object System.Windows.Controls.Grid; $g.MinHeight = 54
+        foreach ($w in '*', 'Auto', 'Auto') {
+            $cd = New-Object System.Windows.Controls.ColumnDefinition
+            $cd.Width = $(if ($w -eq '*') { New-Object System.Windows.GridLength 1, 'Star' } else { [System.Windows.GridLength]::Auto }); $g.ColumnDefinitions.Add($cd)
+        }
+        $sp = New-Object System.Windows.Controls.StackPanel; $sp.VerticalAlignment = 'Center'
+        $t = New-Object System.Windows.Controls.TextBlock; $t.Text = $(if ($a.Id -eq 'profile') { 'Next profile' } else { $a.Label }); $t.Style = $script:app.FindResource('Body')
+        [void]$sp.Children.Add($t)
+        if ($problems.ContainsKey($a.Label)) {
+            $w0 = New-Object System.Windows.Controls.TextBlock; $w0.Text = $problems[$a.Label]; $w0.Style = $script:app.FindResource('Caption'); $w0.Foreground = Get-GBrush '#FF99A4'
+            [void]$sp.Children.Add($w0)
+        }
+        $kp = New-Object System.Windows.Controls.StackPanel; $kp.Orientation = 'Horizontal'; $kp.VerticalAlignment = 'Center'
+        [System.Windows.Controls.Grid]::SetColumn($kp, 1); Set-GKeys $kp ([string]$script:settings[$a.Set])
+        $btn = New-Object System.Windows.Controls.Button; $btn.Style = $script:app.FindResource('FluentButton')
+        $btn.Content = $(if ([string]$script:settings[$a.Set]) { 'Change' } else { 'Record' })
+        $btn.FontSize = 13; $btn.MinHeight = 28; $btn.Padding = '12,3'; $btn.Margin = '14,0,0,0'; $btn.VerticalAlignment = 'Center'; $btn.MinWidth = 96
+        [System.Windows.Controls.Grid]::SetColumn($btn, 2)
+        $btn.Tag = @{ Act = $a; Panel = $kp }
+        $btn.Add_Click({ param($s, $e)
+            if ($script:gHkRec) { Stop-GHkRecord }
+            $script:gHkRec = $s
+            $s.Content = 'Press keys...'
+            $kp = $s.Tag.Panel; $kp.Children.Clear()
+            $w = New-Object System.Windows.Controls.TextBlock; $w.Text = 'Esc cancels, Backspace clears'; $w.Style = $script:app.FindResource('Caption'); $w.Foreground = $script:app.FindResource('AccentTextBrush')
+            [void]$kp.Children.Add($w)
+            [void]$s.Focus()
+        })
+        $btn.Add_LostKeyboardFocus({ param($s, $e) if ($script:gHkRec -eq $s) { Stop-GHkRecord } })
+        [void]$g.Children.Add($sp); [void]$g.Children.Add($kp); [void]$g.Children.Add($btn)
+        [void]$rows.Children.Add($g)
+        if ($i -lt $acts.Count - 1) { $dv = New-Object System.Windows.Controls.Border; $dv.Height = 1; $dv.Background = $script:app.FindResource('DividerBrush'); [void]$rows.Children.Add($dv) }
+    }
+    # the Profiles page's shortcut row shows the same binding
+    $hp = [string]$script:settings.hkProfile
+    (G 'CycleKeyText').Text = $(if ($hp) { 'Step through your profiles from anywhere with {0}' -f (Format-HotkeyText $hp) } else { 'Step through your profiles from anywhere' })
+    (G 'GoHotkeys').Content = $(if ($hp) { 'Change' } else { 'Set in Settings' })
+}
+function Stop-GHkRecord {
+    $b = $script:gHkRec; $script:gHkRec = $null
+    if (-not $b) { return }
+    $set = [string]$b.Tag.Act.Set
+    Set-GKeys $b.Tag.Panel ([string]$script:settings[$set])
+    $b.Content = $(if ([string]$script:settings[$set]) { 'Change' } else { 'Record' })
+}
+function Save-GHotkey([string]$set, [string]$combo) {
+    $script:settings[$set] = $combo; $sync.Settings[$set] = $combo
+    $script:hotkeyStage[$set] = $combo
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+    $r = Register-Hotkeys
+    $probs = @{}
+    foreach ($l in @($r.Conflicts)) { if ($l) { $probs[$l] = 'Another app already uses this combination' } }
+    foreach ($l in @($r.Dupes)) { if ($l) { $probs[$l] = 'Another Vento shortcut has this combination' } }
+    Show-GHotkeys $probs
+}
+$script:shell.Add_PreviewKeyDown({ param($s, $e)
+    $b = $script:gHkRec
+    if (-not $b) { return }
+    $e.Handled = $true
+    $key = $e.Key
+    if ($key -eq [System.Windows.Input.Key]::System) { $key = $e.SystemKey }
+    $name = $key.ToString()
+    if (@('LeftCtrl', 'RightCtrl', 'LeftAlt', 'RightAlt', 'LeftShift', 'RightShift', 'LWin', 'RWin', 'System', 'None') -contains $name) { return }
+    if ($key -eq [System.Windows.Input.Key]::Escape) { Stop-GHkRecord; return }
+    $set = [string]$b.Tag.Act.Set
+    if ($key -eq [System.Windows.Input.Key]::Back -or $key -eq [System.Windows.Input.Key]::Delete) { $script:gHkRec = $null; Save-GHotkey $set ''; return }
+    $m = [int][System.Windows.Input.Keyboard]::Modifiers
+    if ($m -eq 0) { $b.Content = 'Add Ctrl, Alt or Shift'; return }
+    $parts = @()
+    if ($m -band [int][System.Windows.Input.ModifierKeys]::Control) { $parts += 'Ctrl' }
+    if ($m -band [int][System.Windows.Input.ModifierKeys]::Alt) { $parts += 'Alt' }
+    if ($m -band [int][System.Windows.Input.ModifierKeys]::Shift) { $parts += 'Shift' }
+    if ($m -band [int][System.Windows.Input.ModifierKeys]::Windows) { $parts += 'Win' }
+    $norm = ($parts + $name) -join '+'
+    if (-not (Parse-Hotkey $norm)) { $b.Content = 'Unsupported key'; return }
+    $script:gHkRec = $null
+    Save-GHotkey $set $norm
+})
+
+function Update-GlassSettings {
+    Show-GHotkeys
+    (G 'StartWin').IsChecked = [bool](Test-AutoStart)
+    (G 'KeepTray').IsChecked = [bool]$script:settings.closeToTray
+    (G 'AutoUpd').IsChecked = [bool]$script:settings.checkUpdates
+    Update-GUpdateRow
+}
+(G 'StartWin').Add_Click({
+    $want = [bool](G 'StartWin').IsChecked
+    $err = Set-AutoStart $want
+    if ($err) {
+        (G 'StartWin').IsChecked = [bool](Test-AutoStart)
+        [void][System.Windows.MessageBox]::Show(('Start with Windows could not be changed:{0}{0}{1}' -f [Environment]::NewLine, $err), 'Vento', 'OK', 'Warning')
+    }
+})
+(G 'KeepTray').Add_Click({ Set-GSetting 'closeToTray' ([bool](G 'KeepTray').IsChecked) })
+(G 'AutoUpd').Add_Click({ Set-GSetting 'checkUpdates' ([bool](G 'AutoUpd').IsChecked) })
+
+# --- updates: the About row checks on demand and installs what it finds ---
+$script:gUpdAsked = $false
+function Update-GUpdateRow {
+    $b = G 'AboutUpdate'; $t = G 'AboutUpdText'
+    if ($sync.Update) {
+        $b.Content = 'Install {0}' -f $sync.Update.Version; $b.IsEnabled = $true
+        $t.Text = 'Vento {0} is ready to install.' -f $sync.Update.Version; $t.Visibility = 'Visible'
+    } elseif ($script:updAr -and -not $script:updAr.IsCompleted) {
+        $b.Content = 'Checking...'; $b.IsEnabled = $false; $t.Visibility = 'Collapsed'
+    } else {
+        $b.Content = 'Check for updates'; $b.IsEnabled = $true
+        if ($script:gUpdAsked -and $sync.UpdChecked) {
+            $t.Text = $(if ($sync.UpdFailed) { 'Could not reach GitHub. Check the connection and try again.' } else { 'You have the latest version.' })
+            $t.Visibility = 'Visible'
+        } else { $t.Visibility = 'Collapsed' }
+    }
+}
+function Request-GUpdateCheck {
+    $script:gUpdAsked = $true
+    Start-UpdateCheck
+    Update-GUpdateRow
+}
+(G 'AboutUpdate').Add_Click({ if ($sync.Update) { Install-Update } else { Request-GUpdateCheck } })
+
 # --- Glass: Profiles ---------------------------------------------------------
 # Cards for every Vento profile (settings.ventoProfiles - the same list the
 # tray submenu and the cycle hotkey use), chips on Home, and an editor
@@ -5109,7 +5257,7 @@ function Close-ProfileDialog { (G 'ProfileDialog').Visibility = 'Collapsed'; $sc
 function Show-GlassUpdate([string]$ver) {
     (G 'InfoTitle').Text = "Vento $ver is ready"
     (G 'InfoMsg').Text = 'Install it now and Vento restarts itself when it is done.'
-    (G 'InfoRestart').Content = 'Install now'
+    (G 'InfoRestart').Content = 'Install now'; (G 'InfoRestart').Visibility = 'Visible'
     (G 'InfoBar').Visibility = 'Visible'
 }
 (G 'PcName').Text = $env:COMPUTERNAME
@@ -9409,6 +9557,9 @@ $script:osdModePrev = $null
 $script:miOsd.add_Click({ Toggle-Overlay })
 $script:miOsdMove = $menu.Items.Add('Move overlay')
 $script:miOsdMove.add_Click({ Set-OsdEdit (-not $script:osdEditing) })
+# Opens Settings on the About row and checks right away; the row says the result.
+$script:miCheckUpd = $menu.Items.Add('Check for updates')
+$script:miCheckUpd.add_Click({ Show-Main; (G 'NavSettings').IsChecked = $true; Request-GUpdateCheck })
 $script:miUpdate = $menu.Items.Add('Install update')
 $script:miUpdate.Visible = $false
 $script:miUpdate.add_Click({ Install-Update })
@@ -9431,7 +9582,14 @@ Update-ModePanel ([string]$sync.Data.ActiveMode)
 # --- Update check (GitHub releases, once per launch) -----------------
 $script:psUpd = $null
 $script:updRunspace = $null
-if ($script:settings.checkUpdates -and $script:settings.updateRepo) {
+# Once per launch when enabled, and on demand (Settings > Check for updates,
+# the tray). $sync.UpdChecked flips when a pass ends, found or not.
+$script:updAr = $null
+function Start-UpdateCheck {
+    if (-not $script:settings.updateRepo) { return }
+    if ($script:updAr -and -not $script:updAr.IsCompleted) { return }
+    if ($script:psUpd) { try { $script:psUpd.Dispose(); $script:updRunspace.Dispose() } catch { } }
+    $sync.UpdChecked = $false; $sync.UpdFailed = $false
     $updWorker = {
         param($sync, $repo, $current)
         try {
@@ -9463,15 +9621,17 @@ if ($script:settings.checkUpdates -and $script:settings.updateRepo) {
                     Sha256    = $sha
                 }
             }
-        } catch { }
+        } catch { $sync.UpdFailed = $true }
+        $sync.UpdChecked = $true
     }
     $script:updRunspace = [runspacefactory]::CreateRunspace()
     $script:updRunspace.Open()
     $script:psUpd = [powershell]::Create()
     $script:psUpd.Runspace = $script:updRunspace
     [void]$script:psUpd.AddScript($updWorker.ToString()).AddArgument($sync).AddArgument($script:settings.updateRepo).AddArgument($script:AppVersion)
-    [void]$script:psUpd.BeginInvoke()
+    $script:updAr = $script:psUpd.BeginInvoke()
 }
+if ($script:settings.checkUpdates -and $script:settings.updateRepo) { Start-UpdateCheck }
 
 # --- UI refresh timer ------------------------------------------------
 $script:histCpu = New-Object 'System.Collections.Generic.List[double]'

@@ -1283,7 +1283,7 @@
               </Border>
 
               <TextBlock x:Name="ShortcutsTitle" Text="Shortcuts" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
-              <!-- One card, many rows (built by Glass.ps1). Record listens for the next combo. -->
+              <!-- One card, a row per action (built by app.ps1). Record listens for the next combo. -->
               <Border Style="{StaticResource Card}" Padding="16,2,16,2">
                 <StackPanel x:Name="HotkeyRows"/>
               </Border>
@@ -1297,7 +1297,7 @@
                     <TextBlock Text="Start with Windows" Style="{StaticResource Body}"/>
                     <TextBlock Text="Fans are under control from the moment you sign in" Style="{StaticResource Caption}"/>
                   </StackPanel>
-                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                  <CheckBox x:Name="StartWin" Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
                 </Grid>
               </Border>
               <Border Style="{StaticResource SettingsCard}">
@@ -1308,7 +1308,7 @@
                     <TextBlock Text="Keep running in the tray" Style="{StaticResource Body}"/>
                     <TextBlock Text="Closing the window leaves fan control on" Style="{StaticResource Caption}"/>
                   </StackPanel>
-                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                  <CheckBox x:Name="KeepTray" Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
                 </Grid>
               </Border>
               <Border Style="{StaticResource SettingsCard}">
@@ -1319,7 +1319,7 @@
                     <TextBlock Text="Check for updates automatically" Style="{StaticResource Body}"/>
                     <TextBlock Text="Downloads are verified before they install" Style="{StaticResource Caption}"/>
                   </StackPanel>
-                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                  <CheckBox x:Name="AutoUpd" Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
                 </Grid>
               </Border>
 
@@ -1333,6 +1333,7 @@
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
                     <TextBlock Text="Vento" Style="{StaticResource Body}"/>
                     <TextBlock x:Name="AboutVersion" Text="Version" Style="{StaticResource Caption}"/>
+                    <TextBlock x:Name="AboutUpdText" Style="{StaticResource Caption}" Visibility="Collapsed"/>
                   </StackPanel>
                   <Button x:Name="AboutUpdate" Grid.Column="2" Style="{StaticResource FluentButton}" Content="Check for updates" VerticalAlignment="Center"/>
                 </Grid>
