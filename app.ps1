@@ -5355,6 +5355,7 @@ foreach ($t in 'Quiet', 'Normal', 'Perf', 'Curve', 'Auto') {
     if ($key -and [int]$script:settings[$key] -ne [int]$s.Value) { Apply-ModeSetting $key ([int]$s.Value) }
 })
 (F 'QOpen').Add_Click({ $script:fly.Hide(); Show-Main })
+(F 'QExpand').Add_Click({ $script:fly.Hide(); Show-Main })
 (F 'QSettings').Add_Click({ $script:fly.Hide(); Show-Main; (G 'NavSettings').IsChecked = $true })
 $script:shell.Add_Closed({ try { $script:fly.Close() } catch { } })
 

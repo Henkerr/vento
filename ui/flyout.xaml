@@ -18,6 +18,8 @@
       <StackPanel Margin="18,16,18,14">
         <Grid>
           <StackPanel Orientation="Horizontal">
+            <!-- expand: leave the mini panel for the full window -->
+            <Button x:Name="QExpand" Style="{StaticResource IconButton}" Content="&#xE740;" FontSize="13" Margin="-8,-4,4,-4" ToolTip="Open the full window"/>
             <Image Source="__LOGO__vento-40.png" Width="20" Height="20" RenderOptions.BitmapScalingMode="HighQuality"/>
             <TextBlock Text="Vento" Style="{StaticResource BodyStrong}" Margin="10,0,0,0" VerticalAlignment="Center"/>
           </StackPanel>

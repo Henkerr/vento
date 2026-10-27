@@ -29,7 +29,7 @@ Every page, live. The new design now drives everything the old window did, and a
   Windows, start in the tray, keep running in the tray, sensor refresh rate, automatic updates
   and a *Check for updates* button - also in the tray menu.
 - **Tray flyout:** a left click on the tray icon opens a Quick Settings style panel with the fan
-  modes, overlay, this mode's case fan speed, temperatures and your device's battery.
+  modes, overlay, this mode's case fan speed, temperatures and your device's battery. The expand button in its corner opens the full window.
 - **Fan driver watch:** if the PawnIO driver goes missing, Home says so (and Windows notifies),
   offers to install the official package, and asks for a restart once it is back.
 - **Every connected Bluetooth device** now shows on Home and the Devices page, with the battery
