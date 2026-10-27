@@ -18,10 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build icon and launcher
+      # assets/vento.ico and the logo PNGs are committed (1.8 logo);
+      # build\make-icon.ps1 would overwrite them with the old swirl.
+      - name: Build launcher
         shell: powershell
         run: |
-          .\build\make-icon.ps1
           .\build\build-exe.ps1
 
       - name: Install Inno Setup

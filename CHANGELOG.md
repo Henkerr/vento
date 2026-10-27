@@ -6,6 +6,27 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.0 — 2026-10-27
+
+A new look, built like Windows 11.
+
+### Added
+- **Glass main window.** Mica backdrop, a Settings-style side menu and your Windows accent
+  color, updated live when you change it. Pick Mica, Mica Alt or Acrylic in Settings.
+- **New Home.** The hottest sensor against its comfort target, a 10-minute chart, headroom
+  meter, every sensor and fan at a glance, and one-click fan modes.
+- **AirPods battery** on Home, with an on-demand Bluetooth listener and a battery-only tray
+  flyout.
+- **New logo and app icon.**
+
+### Known gaps
+- This is the first stage of the redesign: Home is fully live. Fans, Alerts, Profiles,
+  Displays, Devices, Overlay and Settings pages show the new design and are being wired to
+  the engine in the next updates. Your existing settings, hotkeys, overlay and profiles
+  keep working in the background.
+
+---
+
 ## 1.7.3 — 2026-09-03
 
 The sleep fix that actually reaches the chip.
