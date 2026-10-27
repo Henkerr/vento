@@ -3628,7 +3628,7 @@ function Set-GlassModeCards([string]$mode) {
     try {
         foreach ($p in 'M', 'F') { $rb = G "$p$tag"; if ($rb -and -not $rb.IsChecked) { $rb.IsChecked = $true } }
         $name = $(if ($tag -eq 'Perf') { 'Performance' } else { $tag })
-        (G 'HomeFansMode').Text = $name
+        (G 'HomeFansMode').Text = $(if ($script:gDrvState -and $script:gDrvState -ne 'ok') { 'Paused' } else { $name })
     } finally { $script:glassModeSync = $false }
 }
 foreach ($k in $script:glassModeMap.Keys) {
@@ -5046,6 +5046,172 @@ function Request-GUpdateCheck {
 }
 (G 'AboutUpdate').Add_Click({ if ($sync.Update) { Install-Update } else { Request-GUpdateCheck } })
 
+
+# --- Glass: fan driver watch -----------------------------------------------------
+# LibreHardwareMonitor reaches the SuperIO chip through the PawnIO kernel
+# driver. When it is missing (uninstalled with other tools, say) the fans fall
+# back to their BIOS settings without a word - so Home says it, offers the
+# official package, and once the driver is back asks for the restart that
+# lets the sensor library open it.
+Add-Type -AssemblyName System.ServiceProcess
+$script:gDrvHadAtStart = $null
+$script:gDrvState = $null      # 'ok' | 'missing' | 'restart'
+$script:gDrvDismissed = $false
+$script:gDrvNext = [DateTime]::MinValue
+function Test-PawnIO {
+    try { return [bool]@([System.ServiceProcess.ServiceController]::GetDevices() | Where-Object { $_.ServiceName -eq 'PawnIO' }).Count } catch { return $true }
+}
+function Update-DriverWatch {
+    $now = [DateTime]::Now
+    if ($now -lt $script:gDrvNext) { return }
+    $script:gDrvNext = $now.AddSeconds($(if ($script:gDrvState -eq 'missing') { 10 } else { 60 }))
+    $has = Test-PawnIO
+    if ($null -eq $script:gDrvHadAtStart) { $script:gDrvHadAtStart = $has }
+    $state = $(if (-not $has) { 'missing' } elseif (-not $script:gDrvHadAtStart) { 'restart' } else { 'ok' })
+    if ($state -eq $script:gDrvState) { return }
+    $script:gDrvState = $state; $script:gDrvDismissed = $false
+    $bar = G 'DriverBar'
+    switch ($state) {
+        'missing' {
+            (G 'DriverTitle').Text = 'Fan control is paused'
+            (G 'DriverMsg').Text = "Vento can't reach the fan controller: the PawnIO driver is missing. Your fans are running on their BIOS settings until it is back."
+            (G 'DriverFix').Content = 'Install driver'
+            $bar.Visibility = 'Visible'
+            [void](Show-Toast 'Fan control is paused' 'The PawnIO driver is missing, so your fans are on their BIOS settings. Open Vento to install it again.' 'vento-driver')
+        }
+        'restart' {
+            (G 'DriverTitle').Text = 'Driver installed'
+            (G 'DriverMsg').Text = 'Restart Vento so it can take the fans back.'
+            (G 'DriverFix').Content = 'Restart Vento'
+            $bar.Visibility = 'Visible'
+        }
+        default { $bar.Visibility = 'Collapsed' }
+    }
+}
+function Restart-Vento {
+    $exe = Join-Path $script:AppRoot 'Vento.exe'
+    if (-not (Test-Path $exe)) { return }
+    # the single-instance lock is released when this one exits; start the new
+    # one a moment later
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', ("Start-Sleep -Seconds 3; Start-Process -FilePath '{0}'" -f $exe.Replace("'", "''"))
+    Quit-App
+}
+(G 'DriverFix').Add_Click({
+    if ($script:gDrvState -eq 'restart') { Restart-Vento; return }
+    # The official package through winget, in a window the user can follow;
+    # without winget, the project's own download page.
+    $wg = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if ($wg) { Start-Process -FilePath $wg.Source -ArgumentList 'install', '--id', 'namazso.PawnIO', '-e', '--accept-source-agreements', '--accept-package-agreements' }
+    else { Start-Process 'https://pawnio.eu/' }
+    (G 'DriverMsg').Text = 'Installing PawnIO. This bar changes as soon as the driver is in place.'
+    $script:gDrvNext = [DateTime]::Now.AddSeconds(5)
+})
+(G 'DriverClose').Add_Click({ (G 'DriverBar').Visibility = 'Collapsed'; $script:gDrvDismissed = $true })
+
+# --- Glass: tray flyout ------------------------------------------------------------
+# A left click on the tray icon opens a Quick Settings style panel above the
+# taskbar: mode tiles, the overlay switch, this mode's case fan speed, the
+# key numbers and the first connected device's battery. It closes when it
+# loses focus, like the Windows flyouts it imitates.
+$script:fly = Read-UiXaml 'flyout.xaml'
+$script:flyHiddenAt = [DateTime]::MinValue
+$script:flySync = $false
+function F([string]$n) { $script:fly.FindName($n) }
+$script:fly.Add_SourceInitialized({
+    $h = (New-Object System.Windows.Interop.WindowInteropHelper $script:fly).Handle
+    [System.Windows.Interop.HwndSource]::FromHwnd($h).CompositionTarget.BackgroundColor = [System.Windows.Media.Colors]::Transparent
+    $m = New-Object VentoNative.Dwm+MARGINS; $m.l = -1; $m.r = -1; $m.t = -1; $m.b = -1
+    [void][VentoNative.Dwm]::DwmExtendFrameIntoClientArea($h, [ref]$m)
+    $one = 1; [void][VentoNative.Dwm]::DwmSetWindowAttribute($h, 20, [ref]$one, 4)
+    $round = 2; [void][VentoNative.Dwm]::DwmSetWindowAttribute($h, 33, [ref]$round, 4)
+    $acr = 3; $hr = [VentoNative.Dwm]::DwmSetWindowAttribute($h, 38, [ref]$acr, 4)
+    if ($hr -ne 0) { (F 'FTint').Background = Get-GBrush '#202020' }
+})
+$script:fly.Add_Deactivated({ if ($script:fly.IsVisible) { $script:fly.Hide(); $script:flyHiddenAt = [DateTime]::Now } })
+$script:fly.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Escape') { $script:fly.Hide() } })
+
+# which setting the slider moves in each mode; Curve and Auto have none
+$script:flyCaseKey = @{ quiet = 'quietCase'; normal = 'normalCase'; performance = 'perfCase' }
+function Update-GFlyout($d) {
+    if (-not $script:fly.IsVisible -or -not $d) { return }
+    $deg = [char]0xB0
+    $script:flySync = $true
+    try {
+        $tag = $script:glassModeMap[[string]$d.ActiveMode]
+        if ($tag) { $rb = F "Q$tag"; if (-not $rb.IsChecked) { $rb.IsChecked = $true } }
+        (F 'QOverlay').IsChecked = ([string]$script:settings.osdMode -ne 'off')
+        $key = $script:flyCaseKey[[string]$d.ActiveMode]
+        $sl = F 'QCase'
+        if ($key) {
+            $sl.IsEnabled = $true
+            if (-not $sl.IsMouseCaptureWithin) { $sl.Value = [double]$script:settings[$key] }
+            (F 'QCaseV').Text = '{0}%' -f [int]$sl.Value
+        } else {
+            $sl.IsEnabled = $false
+            (F 'QCaseV').Text = $(if ($null -ne $d.CurveTarget) { '{0}%' -f $d.CurveTarget } else { 'Auto' })
+        }
+    } finally { $script:flySync = $false }
+    (F 'FBoard').Text = $(if ($null -ne $d.MbTemp) { 'Board {0}{1}' -f [int]$d.MbTemp, $deg } else { '' })
+    (F 'QCpu').Text = $(if ($null -ne $d.CpuTemp) { '{0}{1}' -f [int]$d.CpuTemp, $deg } else { '--' })
+    (F 'QGpu').Text = $(if ($null -ne $d.GpuTemp) { '{0}{1}' -f [int]$d.GpuTemp, $deg } else { '--' })
+    (F 'QRpm').Text = $(if ($null -ne $d.CpuFan) { '{0}' -f $d.CpuFan } else { '--' })
+    $vp = [string]$script:settings.ventoProfile
+    (F 'QProfile').Text = $(if ($vp) { 'Profile: {0}' -f (Format-ProfName $vp) } else { 'No profile' })
+    # device row
+    $dev = @(Get-DevSorted | Where-Object { $_.Apple -or $null -ne $_.Battery }) | Select-Object -First 1
+    $row = F 'QDevRow'
+    if (-not $dev) { $row.Visibility = 'Collapsed'; return }
+    $row.Visibility = 'Visible'
+    (F 'QPodName').Text = $dev.Name; (F 'QDevGlyph').Text = $dev.Glyph
+    $vals = F 'QDevVals'; $vals.Children.Clear()
+    $pairs = @()
+    if ($dev.Apple) {
+        $p = $script:pods
+        if ($p -and $p.Seen) { $pairs = @(@('L', $p.L), @('R', $p.R), @('Case', $p.Case)) } else { $pairs = @(, @('', $null)) }
+    } else { $pairs = @(, @('', $dev.Battery)) }
+    for ($i = 0; $i -lt $pairs.Count; $i++) {
+        if ($pairs[$i][0]) {
+            $l = New-Object System.Windows.Controls.TextBlock; $l.Text = $pairs[$i][0]; $l.Style = $script:app.FindResource('CaptionTertiary'); $l.VerticalAlignment = 'Center'
+            [void]$vals.Children.Add($l)
+        }
+        $v = New-Object System.Windows.Controls.TextBlock; $v.Style = $script:app.FindResource('BodyStrong'); $v.FontSize = 13
+        $v.Text = $(if ($null -ne $pairs[$i][1]) { '{0}%' -f $pairs[$i][1] } else { [string][char]0x2014 })
+        $v.Margin = $(if ($i -lt $pairs.Count - 1) { '5,0,12,0' } else { '5,0,0,0' })
+        if (Test-DevLow $pairs[$i][1] $false) { $v.Foreground = Get-GBrush '#FF99A4' }
+        [void]$vals.Children.Add($v)
+    }
+}
+function Show-GFlyout {
+    # a click on the tray icon while it is open first deactivates it; don't reopen
+    if (([DateTime]::Now - $script:flyHiddenAt).TotalMilliseconds -lt 350) { return }
+    $script:fly.Show()
+    $wa = [System.Windows.SystemParameters]::WorkArea
+    $script:fly.UpdateLayout()
+    $script:fly.Left = $wa.Right - $script:fly.ActualWidth - 12
+    $script:fly.Top = $wa.Bottom - $script:fly.ActualHeight - 12
+    [void]$script:fly.Activate()
+    Update-GFlyout $sync.Data
+    $b = F 'FBody'
+    $tt = New-Object System.Windows.Media.TranslateTransform; $b.RenderTransform = $tt
+    $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-GAnim 24 0 260))
+    $b.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-GAnim 0 1 180))
+}
+function Toggle-GFlyout { if ($script:fly.IsVisible) { $script:fly.Hide(); $script:flyHiddenAt = [DateTime]::Now } else { Show-GFlyout } }
+foreach ($t in 'Quiet', 'Normal', 'Perf', 'Curve', 'Auto') {
+    $rb = F "Q$t"
+    $rb.Tag = ($script:glassModeMap.GetEnumerator() | Where-Object { $_.Value -eq $t } | Select-Object -First 1).Key
+    $rb.Add_Checked({ param($s, $e) if (-not $script:flySync) { Set-UserMode ([string]$s.Tag) } })
+}
+(F 'QOverlay').Add_Click({ Toggle-Overlay })
+(F 'QCase').Add_ValueChanged({ param($s, $e)
+    (F 'QCaseV').Text = '{0}%' -f [int]$s.Value
+    if ($script:flySync) { return }
+    $key = $script:flyCaseKey[[string]$sync.Data.ActiveMode]
+    if ($key -and [int]$script:settings[$key] -ne [int]$s.Value) { Apply-ModeSetting $key ([int]$s.Value) }
+})
+(F 'QOpen').Add_Click({ $script:fly.Hide(); Show-Main })
+(F 'QSettings').Add_Click({ $script:fly.Hide(); Show-Main; (G 'NavSettings').IsChecked = $true })
+$script:shell.Add_Closed({ try { $script:fly.Close() } catch { } })
 # --- Glass: Profiles ---------------------------------------------------------
 # Cards for every Vento profile (settings.ventoProfiles - the same list the
 # tray submenu and the cycle hotkey use), chips on Home, and an editor
@@ -9567,7 +9733,7 @@ $miExit = $menu.Items.Add($script:L.TrayExit)
 $miExit.add_Click({ Quit-App })
 $script:notify.ContextMenuStrip = $menu
 $script:notify.add_MouseClick({ param($s, $e)
-    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Show-Main }
+    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Toggle-GFlyout }
 })
 $script:notify.add_BalloonTipClicked({
     if ($script:lastBalloon -eq 'update' -and $sync.Update) { Start-Process $sync.Update.Url }
@@ -9961,6 +10127,8 @@ $script:timer.Add_Tick({
     # --- the Glass window draws from the same data ---
     try { Update-Glass $d } catch { }
     try { Update-DevTick } catch { }
+    try { Update-DriverWatch } catch { }
+    try { Update-GFlyout $d } catch { }
 
     # --- OSD overlay ---
     $osdWant = if ($script:osdEditing) { $true } else {

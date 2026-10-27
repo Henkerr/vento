@@ -175,8 +175,8 @@
                     <TextBlock Text="!" FontFamily="Segoe UI" FontWeight="Bold" FontSize="12" Foreground="#000000" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
                   </Border>
                   <StackPanel Grid.Column="1" Margin="12,0,12,0">
-                    <TextBlock Text="Fan control is paused" Style="{StaticResource BodyStrong}"/>
-                    <TextBlock Text="Vento can't reach the fan controller: the PawnIO driver is missing or stopped. Your fans are running on their BIOS settings until it is back." Style="{StaticResource Body}" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                    <TextBlock x:Name="DriverTitle" Text="Fan control is paused" Style="{StaticResource BodyStrong}"/>
+                    <TextBlock x:Name="DriverMsg" Text="Vento can't reach the fan controller: the PawnIO driver is missing. Your fans are running on their BIOS settings until it is back." Style="{StaticResource Body}" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
                   </StackPanel>
                   <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button x:Name="DriverFix" Style="{StaticResource AccentButton}" Content="Install driver" FontSize="13" MinHeight="28" Padding="12,3"/>

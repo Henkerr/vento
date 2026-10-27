@@ -1,7 +1,7 @@
 <!--
   Vento's tray flyout, shaped like Windows 11 Quick Settings: acrylic, a row
   of tiles for the fan modes, one slider, the numbers that matter, and a
-  footer that opens the full app. Opened from the tray icon (Glass.ps1).
+  footer that opens the full app. Opened from the tray icon (app.ps1).
 -->
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -29,7 +29,7 @@
 
         <UniformGrid Columns="3" Margin="-4,14,-4,0">
           <StackPanel Margin="4,0,4,10">
-            <RadioButton x:Name="QQuiet" GroupName="QMode" Style="{StaticResource QuickTile}" Tag="Quiet" IsChecked="True">
+            <RadioButton x:Name="QQuiet" GroupName="QMode" Style="{StaticResource QuickTile}" Tag="Quiet">
               <TextBlock Text="&#xF1E8;" FontFamily="{StaticResource IconFont}" FontSize="16"/>
             </RadioButton>
             <TextBlock Text="Quiet" Style="{StaticResource Caption}" Foreground="{StaticResource TextPrimaryBrush}" HorizontalAlignment="Center" Margin="0,6,0,0"/>
@@ -59,7 +59,7 @@
             <TextBlock Text="Auto" Style="{StaticResource Caption}" Foreground="{StaticResource TextPrimaryBrush}" HorizontalAlignment="Center" Margin="0,6,0,0"/>
           </StackPanel>
           <StackPanel Margin="4,0,4,0">
-            <CheckBox x:Name="QOverlay" Style="{StaticResource QuickTile}" IsChecked="True">
+            <CheckBox x:Name="QOverlay" Style="{StaticResource QuickTile}">
               <TextBlock Text="&#xE81E;" FontFamily="{StaticResource IconFont}" FontSize="16"/>
             </CheckBox>
             <TextBlock Text="Overlay" Style="{StaticResource Caption}" Foreground="{StaticResource TextPrimaryBrush}" HorizontalAlignment="Center" Margin="0,6,0,0"/>
@@ -71,7 +71,7 @@
           <Viewbox Width="16" Height="16" HorizontalAlignment="Left">
             <Path Data="{StaticResource FanGeometrySmall}" Style="{StaticResource FluentIcon}" Fill="{StaticResource TextPrimaryBrush}"/>
           </Viewbox>
-          <Slider x:Name="QCase" Grid.Column="1" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="30" ToolTip="Case fan speed"/>
+          <Slider x:Name="QCase" Grid.Column="1" Style="{StaticResource FluentSlider}" Minimum="20" Maximum="100" Value="30" IsSnapToTickEnabled="True" TickFrequency="1" ToolTip="Case fan speed in this mode"/>
           <TextBlock x:Name="QCaseV" Grid.Column="2" Text="30%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
         </Grid>
 
@@ -96,19 +96,13 @@
           </Border>
         </UniformGrid>
 
-        <Grid Margin="0,14,0,0">
+        <!-- the first connected Bluetooth device with a battery (AirPods first) -->
+        <Grid x:Name="QDevRow" Margin="0,14,0,0">
           <StackPanel Orientation="Horizontal">
-            <TextBlock Text="&#xE7F6;" Style="{StaticResource Glyph}" FontSize="15"/>
+            <TextBlock x:Name="QDevGlyph" Text="&#xE7F6;" Style="{StaticResource Glyph}" FontSize="15"/>
             <TextBlock x:Name="QPodName" Text="AirPods" Style="{StaticResource Body}" Margin="12,0,0,0" VerticalAlignment="Center" MaxWidth="150" TextTrimming="CharacterEllipsis"/>
           </StackPanel>
-          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-            <TextBlock Text="L" Style="{StaticResource CaptionTertiary}" VerticalAlignment="Center"/>
-            <TextBlock Text="100%" Style="{StaticResource BodyStrong}" FontSize="13" Margin="5,0,12,0"/>
-            <TextBlock Text="R" Style="{StaticResource CaptionTertiary}" VerticalAlignment="Center"/>
-            <TextBlock Text="90%" Style="{StaticResource BodyStrong}" FontSize="13" Margin="5,0,12,0"/>
-            <TextBlock Text="Case" Style="{StaticResource CaptionTertiary}" VerticalAlignment="Center"/>
-            <TextBlock Text="30%" Style="{StaticResource BodyStrong}" FontSize="13" Margin="5,0,0,0"/>
-          </StackPanel>
+          <StackPanel x:Name="QDevVals" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"/>
         </Grid>
       </StackPanel>
 
