@@ -6,6 +6,13 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.2 — 2026-10-28
+
+Groundwork for an opt-in page for a Bluetooth LED strip. It stays hidden unless switched on for this PC,
+so nothing changes for anyone else. The tray flyout and every other page are as in 1.8.1.
+
+---
+
 ## 1.8.1 — 2026-10-27
 
 Every page, live. The new design now drives everything the old window did, and a bit more.
