@@ -1004,7 +1004,7 @@
                   </Ellipse>
                   <Border x:Name="OsdMock" CornerRadius="8" Background="{DynamicResource OsdPanelBrush}" BorderBrush="{DynamicResource OsdBorderBrush}" BorderThickness="1"
                           HorizontalAlignment="Right" VerticalAlignment="Top" Margin="16" Padding="12,7">
-                    <!-- built by Glass.ps1 from the metrics switched on below -->
+                    <!-- built by app.ps1 from the metrics switched on below, with live values -->
                     <StackPanel x:Name="OsdItems" Orientation="Horizontal"/>
                   </Border>
                   <TextBlock Text="Preview" Style="{StaticResource Caption}" Foreground="#99FFFFFF" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="14,10"/>
@@ -1013,7 +1013,7 @@
 
               <TextBlock Text="Layout" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
               <UniformGrid Columns="4" Margin="-4,0">
-                <RadioButton x:Name="LayBlade" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8" IsChecked="True">
+                <RadioButton x:Name="LayBlade" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8" Tag="blade">
                   <StackPanel>
                     <Border Style="{StaticResource MiniScene}">
                       <Border Background="{DynamicResource OsdPanelBrush}" BorderBrush="{DynamicResource OsdAccentBrush}" BorderThickness="2,0,0,0" CornerRadius="3" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" Padding="6,3">
@@ -1026,7 +1026,7 @@
                     <TextBlock Text="Blade" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
                   </StackPanel>
                 </RadioButton>
-                <RadioButton x:Name="LayStrip" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8">
+                <RadioButton x:Name="LayStrip" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8" Tag="strip">
                   <StackPanel>
                     <Border Style="{StaticResource MiniScene}">
                       <Border Background="{DynamicResource OsdPanelBrush}" CornerRadius="8" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" Padding="7,2">
@@ -1039,7 +1039,7 @@
                     <TextBlock Text="Strip" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
                   </StackPanel>
                 </RadioButton>
-                <RadioButton x:Name="LayHero" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8">
+                <RadioButton x:Name="LayHero" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8" Tag="hero">
                   <StackPanel>
                     <Border Style="{StaticResource MiniScene}">
                       <Border Background="{DynamicResource OsdPanelBrush}" CornerRadius="4" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" Padding="7,2,7,4">
@@ -1055,7 +1055,7 @@
                     <TextBlock Text="Hero" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
                   </StackPanel>
                 </RadioButton>
-                <RadioButton x:Name="LayPills" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8">
+                <RadioButton x:Name="LayPills" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,8" Tag="pills">
                   <StackPanel>
                     <Border Style="{StaticResource MiniScene}">
                       <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8">
@@ -1067,7 +1067,7 @@
                     <TextBlock Text="Pills" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
                   </StackPanel>
                 </RadioButton>
-                <RadioButton x:Name="LayGhost" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,0">
+                <RadioButton x:Name="LayGhost" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,0" Tag="ghost">
                   <StackPanel>
                     <Border Style="{StaticResource MiniScene}">
                       <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="9,6">
@@ -1079,7 +1079,7 @@
                     <TextBlock Text="Ghost" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
                   </StackPanel>
                 </RadioButton>
-                <RadioButton x:Name="LayMicro" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,0">
+                <RadioButton x:Name="LayMicro" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,0" Tag="micro">
                   <StackPanel>
                     <Border Style="{StaticResource MiniScene}">
                       <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8,7">
@@ -1091,7 +1091,7 @@
                     <TextBlock Text="Micro" Style="{StaticResource Body}" FontSize="13" Margin="2,0,0,2"/>
                   </StackPanel>
                 </RadioButton>
-                <RadioButton x:Name="LayThermo" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,0">
+                <RadioButton x:Name="LayThermo" GroupName="Lay" Style="{StaticResource ModeCard}" Padding="8" Margin="4,0,4,0" Tag="thermo">
                   <StackPanel>
                     <Border Style="{StaticResource MiniScene}">
                       <Border Background="{DynamicResource OsdPanelBrush}" CornerRadius="4" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" Padding="5,4,8,4">
@@ -1119,7 +1119,7 @@
 
               <TextBlock Text="What it shows" Style="{StaticResource BodyStrong}" Margin="0,20,0,2"/>
               <TextBlock Text="The first one switched on is the big number. Each can have its own color." Style="{StaticResource Caption}" Margin="0,0,0,8"/>
-              <!-- one row per metric (built by Glass.ps1): color dot, name, switch -->
+              <!-- one row per metric (built by app.ps1): color dot, name, switch -->
               <Border Style="{StaticResource Card}" Padding="16,2,16,2">
                 <UniformGrid x:Name="MetricRows" Columns="2"/>
               </Border>
@@ -1134,7 +1134,7 @@
                     <TextBlock x:Name="OsdThemeName" Text="Sirocco" Style="{StaticResource Caption}"/>
                   </StackPanel>
                   <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <RadioButton x:Name="ThSirocco" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#6FB1FF" Tag="sirocco" IsChecked="True" ToolTip="Sirocco"/>
+                    <RadioButton x:Name="ThSirocco" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#6FB1FF" Tag="sirocco" ToolTip="Sirocco"/>
                     <RadioButton x:Name="ThEmber" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#FFB25C" Tag="ember" ToolTip="Ember"/>
                     <RadioButton x:Name="ThVenom" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#7CF29B" Tag="venom" ToolTip="Venom"/>
                     <RadioButton x:Name="ThViolet" GroupName="OsdTh" Style="{StaticResource Swatch}" Background="#B18CFF" Tag="violet" ToolTip="Violet"/>
@@ -1154,10 +1154,10 @@
                   <!-- a tiny screen with a spot per corner -->
                   <Border Grid.Column="2" Width="84" Height="52" CornerRadius="5" BorderBrush="#5DFFFFFF" BorderThickness="1.5" Background="#0AFFFFFF">
                     <Grid Margin="3">
-                      <RadioButton x:Name="CorTL" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Left" VerticalAlignment="Top" Tag="Top left"/>
-                      <RadioButton x:Name="CorTR" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Right" VerticalAlignment="Top" Tag="Top right" IsChecked="True"/>
-                      <RadioButton x:Name="CorBL" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Left" VerticalAlignment="Bottom" Tag="Bottom left"/>
-                      <RadioButton x:Name="CorBR" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Right" VerticalAlignment="Bottom" Tag="Bottom right"/>
+                      <RadioButton x:Name="CorTL" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Left" VerticalAlignment="Top" Tag="tl"/>
+                      <RadioButton x:Name="CorTR" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Right" VerticalAlignment="Top" Tag="tr"/>
+                      <RadioButton x:Name="CorBL" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Left" VerticalAlignment="Bottom" Tag="bl"/>
+                      <RadioButton x:Name="CorBR" GroupName="Cor" Style="{StaticResource CornerDot}" HorizontalAlignment="Right" VerticalAlignment="Bottom" Tag="br"/>
                     </Grid>
                   </Border>
                 </Grid>
@@ -1172,7 +1172,7 @@
                     <TextBlock Text="Scales the whole overlay" Style="{StaticResource Caption}"/>
                   </StackPanel>
                   <TextBlock Grid.Column="2" x:Name="OsdScaleV" Text="100%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                  <Slider Grid.Column="3" x:Name="OsdScale" Style="{StaticResource FluentSlider}" Minimum="60" Maximum="160" Value="100"/>
+                  <Slider Grid.Column="3" x:Name="OsdScale" Style="{StaticResource FluentSlider}" Minimum="75" Maximum="200" Value="100" IsSnapToTickEnabled="True" TickFrequency="5"/>
                 </Grid>
               </Border>
               <Border Style="{StaticResource SettingsCard}">
@@ -1184,7 +1184,7 @@
                     <TextBlock Text="Let a little of the game show through" Style="{StaticResource Caption}"/>
                   </StackPanel>
                   <TextBlock Grid.Column="2" x:Name="OsdOpacityV" Text="100%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                  <Slider Grid.Column="3" x:Name="OsdOpacity" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="100" Value="100"/>
+                  <Slider Grid.Column="3" x:Name="OsdOpacity" Style="{StaticResource FluentSlider}" Minimum="30" Maximum="100" Value="100" IsSnapToTickEnabled="True" TickFrequency="5"/>
                 </Grid>
               </Border>
               <Border Style="{StaticResource SettingsCard}">
@@ -1196,8 +1196,8 @@
                     <TextBlock Text="Drag the overlay anywhere on screen, or snap it back to its corner" Style="{StaticResource Caption}"/>
                   </StackPanel>
                   <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Style="{StaticResource FluentButton}" Content="Move on screen" FontSize="13" MinHeight="30" Padding="12,4"/>
-                    <Button Style="{StaticResource FluentButton}" Content="Reset" FontSize="13" MinHeight="30" Padding="12,4" Margin="8,0,0,0"/>
+                    <Button x:Name="OsdMove" Style="{StaticResource FluentButton}" Content="Move on screen" FontSize="13" MinHeight="30" Padding="12,4"/>
+                    <Button x:Name="OsdResetPos" Style="{StaticResource FluentButton}" Content="Back to corner" FontSize="13" MinHeight="30" Padding="12,4" Margin="8,0,0,0"/>
                   </StackPanel>
                 </Grid>
               </Border>
@@ -1213,9 +1213,9 @@
                   </StackPanel>
                   <Border Grid.Column="2" Style="{StaticResource SegHost}">
                     <StackPanel Orientation="Horizontal">
-                      <RadioButton GroupName="OsdMode" Style="{StaticResource SegItem}" Content="Auto" IsChecked="True"/>
-                      <RadioButton GroupName="OsdMode" Style="{StaticResource SegItem}" Content="Always"/>
-                      <RadioButton GroupName="OsdMode" Style="{StaticResource SegItem}" Content="Off"/>
+                      <RadioButton x:Name="OmAuto" GroupName="OsdMode" Style="{StaticResource SegItem}" Content="Auto" Tag="auto"/>
+                      <RadioButton x:Name="OmOn" GroupName="OsdMode" Style="{StaticResource SegItem}" Content="Always" Tag="on"/>
+                      <RadioButton x:Name="OmOff" GroupName="OsdMode" Style="{StaticResource SegItem}" Content="Off" Tag="off"/>
                     </StackPanel>
                   </Border>
                 </Grid>
@@ -1228,7 +1228,7 @@
                     <TextBlock Text="Hide from screen capture" Style="{StaticResource Body}"/>
                     <TextBlock Text="Invisible to OBS, Discord and screenshots" Style="{StaticResource Caption}"/>
                   </StackPanel>
-                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                  <CheckBox x:Name="OsdCapSafe" Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
                 </Grid>
               </Border>
               <Border Style="{StaticResource SettingsCard}">
@@ -1239,7 +1239,7 @@
                     <TextBlock Text="Show on the second display" Style="{StaticResource Body}"/>
                     <TextBlock Text="Keep the game screen completely clean" Style="{StaticResource Caption}"/>
                   </StackPanel>
-                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
+                  <CheckBox x:Name="OsdSecond" Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
                 </Grid>
               </Border>
             </StackPanel>

@@ -4139,6 +4139,13 @@ function Update-Glass($d) {
         }
         if ($sync.Ddc.WGen -ne $script:gDispWGen) { $script:gDispWGen = $sync.Ddc.WGen; Show-GDispWrite $sync.Ddc.LastWrite }
     }
+    if ((G 'PageOverlay').Visibility -eq 'Visible') {
+        if ($script:glassReveal) { Update-GlassOverlay }
+        elseif ($script:histTick % 2 -eq 0) {
+            Update-GOsdPreview
+            (G 'OsdMove').Content = $(if ($script:osdEditing) { 'Done' } else { 'Move on screen' })
+        }
+    }
     if ($script:glassReveal) {
         if ((G 'PageAlerts').Visibility -eq 'Visible') { Update-GlassAlerts }
         if ((G 'PageProfiles').Visibility -eq 'Visible') { Update-GlassProfiles }
@@ -4692,6 +4699,204 @@ function Step-GNight([string]$key, [int]$delta) {
     # the schedule needs the displays enumerated to act on them
     if ([bool]$script:settings.monNight) { Start-DdcWorker; Test-NightShift }
     else { Test-NightShift }
+})
+
+# --- Glass: Overlay --------------------------------------------------------------
+# Every control writes the same osd* settings the legacy sheet did and then
+# rebuilds the live overlay (Update-OsdLayout), so a change is visible on the
+# game screen right away. The preview card mirrors the chosen theme, metrics
+# and per-metric colors with live values.
+$script:gOsdNames = @{ fps = 'FPS'; cpu = 'CPU temperature'; gpu = 'GPU temperature'; load = 'GPU load'; ram = 'Memory'
+                       ssd = 'SSD temperature'; mb = 'Board temperature'; fan = 'Fan speed'; pods = 'AirPods battery' }
+$script:gOsdCornerNames = @{ tl = 'Top left'; tr = 'Top right'; bl = 'Bottom left'; br = 'Bottom right' }
+$script:gOsdSwatches = @('#6FB1FF', '#7CF29B', '#FFB25C', '#FF6B7E', '#B18CFF', '#6FE0FF', '#FF6FD8', '#F2F4F7')
+$script:gOsdLoading = $false
+$script:gOsdPrevVals = @{}
+
+function Set-GOsd([string]$key, $value) {
+    Set-GSetting $key $value
+    try { Update-OsdLayout } catch { }
+    Update-GOsdPreview
+}
+function Update-GOsdTheme {
+    $t = Get-OsdTheme
+    foreach ($p in @(@('OsdAccentBrush', $t.Acc), @('OsdPanelBrush', $t.Panel), @('OsdBorderBrush', $t.Border), @('OsdInkBrush', $t.Ink), @('OsdLabBrush', $t.Lab))) {
+        [VentoNative.Res]::SetBrush($script:shell.Resources, $p[0], (Get-GColor $p[1]))
+    }
+}
+function Get-GOsdValues {
+    $d = $sync.Data; $deg = [char]0xB0; $mid = $script:dot
+    if (-not $d) { return @{} }
+    $f = { param($v, $u) if ($null -ne $v) { '{0}{1}' -f [int]$v, $u } else { '--' } }
+    $fps = '--'
+    if ($script:fpsOn -and ('VentoNative.Fps' -as [type])) { try { $n = [VentoNative.Fps]::Current($PID); if ($n -gt 0) { $fps = "$n" } } catch { } }
+    $pd = $script:pods
+    @{
+        fps = $fps; cpu = (& $f $d.CpuTemp $deg); gpu = (& $f $d.GpuTemp $deg); load = (& $f $d.GpuLoad '%')
+        ram = $(if ($null -ne $d.RamLoad -and $null -ne $d.RamTemp) { '{0}% {1} {2}{3}' -f [int]$d.RamLoad, $mid, [int]$d.RamTemp, $deg } else { & $f $d.RamLoad '%' })
+        ssd = (& $f $d.SsdTemp $deg); mb = (& $f $d.MbTemp $deg)
+        fan = '{0} {1} {2}' -f $(if ($null -ne $d.CpuFan) { $d.CpuFan } else { '--' }), $mid, $(if ($null -ne $d.CaseFan) { $d.CaseFan } else { '--' })
+        pods = $(if ($pd -and $pd.Seen) { '{0}{1}{2}' -f $(if ($null -ne $pd.L) { $pd.L } else { '-' }), $mid, $(if ($null -ne $pd.R) { $pd.R } else { '-' }) } else { '--' })
+    }
+}
+function Update-GOsdPreview {
+    $hostO = G 'OsdItems'; $hostO.Children.Clear()
+    $s = $script:settings
+    $on = @($script:osdMetricDef | Where-Object { [bool]$s[$_.Key] })
+    $vals = Get-GOsdValues
+    for ($i = 0; $i -lt $on.Count; $i++) {
+        $m = $on[$i]; $hero = ($i -eq 0)
+        $v = New-Object System.Windows.Controls.TextBlock
+        $v.Text = $(if ($vals.ContainsKey($m.Id)) { $vals[$m.Id] } else { '--' }); $v.FontWeight = 'Bold'; $v.FontSize = $(if ($hero) { 16 } else { 13 }); $v.VerticalAlignment = 'Center'
+        $col = [string]$s[$m.Col]
+        if ($col) { $v.Foreground = Get-GBrush $col }
+        elseif ($hero) { $v.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'OsdAccentBrush') }
+        else { $v.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'OsdInkBrush') }
+        [System.Windows.Documents.Typography]::SetNumeralAlignment($v, 'Tabular')
+        $l = New-Object System.Windows.Controls.TextBlock; $l.Text = $m.Lab; $l.FontWeight = 'Bold'; $l.FontSize = 10; $l.VerticalAlignment = 'Center'
+        $l.Margin = $(if ($i -lt $on.Count - 1) { '4,2,12,0' } else { '4,2,0,0' })
+        $l.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'OsdLabBrush')
+        [void]$hostO.Children.Add($v); [void]$hostO.Children.Add($l)
+    }
+    $mock = G 'OsdMock'
+    $k = [double]$s.osdScale / 100.0
+    $mock.LayoutTransform = New-Object System.Windows.Media.ScaleTransform $k, $k
+    $mock.Opacity = [double]$s.osdOpacity / 100.0
+    $mock.HorizontalAlignment = $(if ([string]$s.osdCorner -in 'tl', 'bl') { 'Left' } else { 'Right' })
+    $mock.VerticalAlignment = $(if ([string]$s.osdCorner -in 'bl', 'br') { 'Bottom' } else { 'Top' })
+    $mock.Visibility = $(if ([string]$s.osdMode -eq 'off') { 'Hidden' } else { 'Visible' })
+}
+
+# per-metric color: theme color, a swatch, or a custom pick
+function Open-GOsdColorMenu($dot) {
+    $m = $dot.Tag
+    $cm = New-Object System.Windows.Controls.ContextMenu; $cm.Style = $script:app.FindResource('FluentMenu')
+    $items = @(@('', 'Theme color')) + @($script:gOsdSwatches | ForEach-Object { , @($_, $_) }) + @(, @('*', 'Custom...'))
+    foreach ($it in $items) {
+        $mi = New-Object System.Windows.Controls.MenuItem; $mi.Style = $script:app.FindResource('FluentMenuItem')
+        $mi.IsChecked = ($it[0] -eq [string]$script:settings[$m.Col])
+        if ($it[0] -and $it[0] -ne '*') {
+            $sp = New-Object System.Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
+            $e = New-Object System.Windows.Shapes.Ellipse; $e.Width = 14; $e.Height = 14; $e.Fill = Get-GBrush $it[0]; $e.Margin = '0,0,10,0'
+            $tx = New-Object System.Windows.Controls.TextBlock; $tx.Text = $it[1]; $tx.VerticalAlignment = 'Center'
+            [void]$sp.Children.Add($e); [void]$sp.Children.Add($tx); $mi.Header = $sp
+        } else { $mi.Header = $it[1] }
+        $mi.Tag = @($m.Col, $it[0])
+        $mi.Add_Click({ param($s, $e)
+            $key = [string]$s.Tag[0]; $hex = [string]$s.Tag[1]
+            if ($hex -eq '*') { $hex = Show-ColorPicker $(if ([string]$script:settings[$key]) { [string]$script:settings[$key] } else { '#6FB1FF' }); if (-not $hex) { return } }
+            Set-GOsd $key $hex
+            Show-GOsdMetrics
+        })
+        [void]$cm.Items.Add($mi)
+    }
+    $cm.PlacementTarget = $dot; $cm.Placement = 'Bottom'; $cm.IsOpen = $true
+}
+function Show-GOsdMetrics {
+    $rows = G 'MetricRows'; $rows.Children.Clear()
+    foreach ($m in $script:osdMetricDef) {
+        $g = New-Object System.Windows.Controls.Grid; $g.MinHeight = 50; $g.Margin = '0,0,16,0'
+        foreach ($w in -2, -1, -2) {
+            $cd = New-Object System.Windows.Controls.ColumnDefinition
+            $cd.Width = $(if ($w -eq -1) { New-Object System.Windows.GridLength 1, 'Star' } else { [System.Windows.GridLength]::Auto }); $g.ColumnDefinitions.Add($cd)
+        }
+        $dot = New-Object System.Windows.Controls.Border; $dot.Width = 14; $dot.Height = 14; $dot.CornerRadius = 7; $dot.VerticalAlignment = 'Center'
+        $dot.BorderBrush = Get-GBrush '#FFFFFF' 0x40; $dot.BorderThickness = 1; $dot.Cursor = [System.Windows.Input.Cursors]::Hand; $dot.ToolTip = 'Change its color'
+        $col = [string]$script:settings[$m.Col]
+        if ($col) { $dot.Background = Get-GBrush $col } else { $dot.SetResourceReference([System.Windows.Controls.Border]::BackgroundProperty, 'OsdInkBrush') }
+        $dot.Tag = $m
+        $dot.Add_MouseLeftButtonUp({ param($s, $e) Open-GOsdColorMenu $s })
+        $t = New-Object System.Windows.Controls.TextBlock; $t.Text = $script:gOsdNames[$m.Id]; $t.Style = $script:app.FindResource('Body'); $t.VerticalAlignment = 'Center'; $t.Margin = '12,0,0,0'
+        [System.Windows.Controls.Grid]::SetColumn($t, 1)
+        $sw = New-Object System.Windows.Controls.CheckBox; $sw.Style = $script:app.FindResource('ToggleSwitch'); $sw.IsChecked = [bool]$script:settings[$m.Key]; $sw.Tag = $m.Key
+        $sw.Add_Click({ param($s, $e)
+            Set-GOsd ([string]$s.Tag) ([bool]$s.IsChecked)
+            # the AirPods metric is also the Devices page's overlay switch
+            if ([string]$s.Tag -eq 'osdPods') { (G 'DevOsd').IsChecked = [bool]$s.IsChecked }
+        })
+        [System.Windows.Controls.Grid]::SetColumn($sw, 2)
+        [void]$g.Children.Add($dot); [void]$g.Children.Add($t); [void]$g.Children.Add($sw)
+        [void]$rows.Children.Add($g)
+    }
+}
+
+function Update-GlassOverlay {
+    $s = $script:settings
+    $script:gOsdLoading = $true
+    try {
+        Update-GOsdTheme
+        foreach ($n in 'LayBlade', 'LayStrip', 'LayHero', 'LayPills', 'LayGhost', 'LayMicro', 'LayThermo') { (G $n).IsChecked = ([string](G $n).Tag -eq [string]$s.osdLayout) }
+        foreach ($n in 'ThSirocco', 'ThEmber', 'ThVenom', 'ThViolet', 'ThCrimson', 'ThMono') { (G $n).IsChecked = ([string](G $n).Tag -eq [string]$s.osdTheme) }
+        (G 'OsdThemeName').Text = (Get-Culture).TextInfo.ToTitleCase([string]$s.osdTheme)
+        foreach ($n in 'CorTL', 'CorTR', 'CorBL', 'CorBR') { (G $n).IsChecked = ([string](G $n).Tag -eq [string]$s.osdCorner) }
+        (G 'OsdCornerName').Text = $(if ([bool]$s.osdFree) { 'Where you dragged it' } else { $script:gOsdCornerNames[[string]$s.osdCorner] })
+        (G 'OsdResetPos').Visibility = $(if ([bool]$s.osdFree) { 'Visible' } else { 'Collapsed' })
+        (G 'OsdMove').Content = $(if ($script:osdEditing) { 'Done' } else { 'Move on screen' })
+        (G 'OsdScale').Value = [double]$s.osdScale; (G 'OsdScaleV').Text = '{0}%' -f [int]$s.osdScale
+        (G 'OsdOpacity').Value = [double]$s.osdOpacity; (G 'OsdOpacityV').Text = '{0}%' -f [int]$s.osdOpacity
+        foreach ($n in 'OmAuto', 'OmOn', 'OmOff') { (G $n).IsChecked = ([string](G $n).Tag -eq [string]$s.osdMode) }
+        (G 'OsdCapSafe').IsChecked = [bool]$s.osdCapSafe
+        (G 'OsdSecond').IsChecked = [bool]$s.osdOnSecondary
+        Show-GOsdMetrics
+    } finally { $script:gOsdLoading = $false }
+    Update-GOsdPreview
+}
+foreach ($n in 'LayBlade', 'LayStrip', 'LayHero', 'LayPills', 'LayGhost', 'LayMicro', 'LayThermo') {
+    (G $n).Add_Checked({ param($s, $e) if (-not $script:gOsdLoading) { Set-GOsd 'osdLayout' ([string]$s.Tag) } })
+}
+foreach ($n in 'ThSirocco', 'ThEmber', 'ThVenom', 'ThViolet', 'ThCrimson', 'ThMono') {
+    (G $n).Add_Checked({ param($s, $e)
+        if ($script:gOsdLoading) { return }
+        Set-GOsd 'osdTheme' ([string]$s.Tag)
+        try { Update-OsdAccent } catch { }
+        Update-GOsdTheme
+        (G 'OsdThemeName').Text = (Get-Culture).TextInfo.ToTitleCase([string]$s.Tag)
+    })
+}
+foreach ($n in 'CorTL', 'CorTR', 'CorBL', 'CorBR') {
+    (G $n).Add_Checked({ param($s, $e)
+        if ($script:gOsdLoading) { return }
+        # picking a corner is an explicit snap back from a dragged position
+        $script:settings.osdFree = $false; $sync.Settings.osdFree = $false
+        Set-GOsd 'osdCorner' ([string]$s.Tag)
+        (G 'OsdCornerName').Text = $script:gOsdCornerNames[[string]$s.Tag]; (G 'OsdResetPos').Visibility = 'Collapsed'
+    })
+}
+foreach ($p in @(@('OsdScale', 'OsdScaleV', 'osdScale'), @('OsdOpacity', 'OsdOpacityV', 'osdOpacity'))) {
+    (G $p[0]).Tag = $p
+    (G $p[0]).Add_ValueChanged({ param($s, $e)
+        $p = $s.Tag; $v = [int][math]::Round($s.Value)
+        (G $p[1]).Text = '{0}%' -f $v
+        if ($script:gOsdLoading -or [int]$script:settings[$p[2]] -eq $v) { return }
+        if ($p[2] -eq 'osdOpacity') {
+            # opacity needs no rebuild, just the window's own Opacity
+            Set-GSetting 'osdOpacity' $v
+            if ($script:osd) { $script:osd.Opacity = $v / 100.0 }
+            Update-GOsdPreview
+        } else { Set-GOsd $p[2] $v }
+    })
+}
+foreach ($n in 'OmAuto', 'OmOn', 'OmOff') {
+    (G $n).Add_Checked({ param($s, $e)
+        if ($script:gOsdLoading) { return }
+        $m = [string]$s.Tag
+        if ($m -ne 'off') { $script:osdModePrev = $m }
+        $script:osdModePick = $m
+        Set-GSetting 'osdMode' $m
+        Update-GOsdPreview
+    })
+}
+(G 'OsdCapSafe').Add_Click({ Set-GSetting 'osdCapSafe' ([bool](G 'OsdCapSafe').IsChecked); try { Set-OsdCapSafe } catch { } })
+(G 'OsdSecond').Add_Click({ Set-GOsd 'osdOnSecondary' ([bool](G 'OsdSecond').IsChecked); try { Position-Osd } catch { } })
+(G 'OsdMove').Add_Click({
+    try { Set-OsdEdit (-not $script:osdEditing) } catch { }
+    (G 'OsdMove').Content = $(if ($script:osdEditing) { 'Done' } else { 'Move on screen' })
+})
+(G 'OsdResetPos').Add_Click({
+    Set-GSetting 'osdFree' $false
+    try { Position-Osd } catch { }
+    (G 'OsdCornerName').Text = $script:gOsdCornerNames[[string]$script:settings.osdCorner]
+    (G 'OsdResetPos').Visibility = 'Collapsed'
 })
 # --- Glass: Profiles ---------------------------------------------------------
 # Cards for every Vento profile (settings.ventoProfiles - the same list the
