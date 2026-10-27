@@ -441,7 +441,7 @@ function Get-DefaultSettings {
         ledHue           = 240         # static color, HSV hue 0-359
         ledSat           = 100         # and saturation %
         ledSpeed         = 50          # built-in effect speed 1-100
-        ledFx            = 91          # built-in effect number 1-117
+        ledFx            = 91          # built-in effect number (the 71 the strip's app offers)
         ledKind          = 'color'     # what the strip shows: color | effect | loop
         ledLoop          = ''          # the color loop playing (kind = loop)
         ledLoops         = @(
@@ -693,7 +693,8 @@ function Import-Settings {
         $s.ledHue   = [int](Limit $s.ledHue 0 359)
         $s.ledSat   = [int](Limit $s.ledSat 0 100)
         $s.ledSpeed = [int](Limit $s.ledSpeed 1 100)
-        $s.ledFx    = [int](Limit $s.ledFx 1 117)
+        $s.ledFx    = [int](Limit $s.ledFx 1 93)
+        if (@(5, 6, 8, 9, 28, 33, 34) -contains $s.ledFx -or ($s.ledFx -ge 11 -and $s.ledFx -le 25)) { $s.ledFx = 91 }
     } catch { $s.ledBri = 100; $s.ledHue = 240; $s.ledSat = 100; $s.ledSpeed = 50; $s.ledFx = 91 }
     if (@('color', 'effect', 'loop') -notcontains [string]$s.ledKind) { $s.ledKind = 'color' }
     $s.ledLoop = [string]$s.ledLoop
@@ -5794,7 +5795,8 @@ namespace VentoNative {
         Monitor.PulseAll(Gate);
       }
     }
-    public static void Disconnect() { lock (Gate) { s_want = false; s_q.Clear(); Monitor.PulseAll(Gate); } }
+    public static int Gap = 120;
+    public static void Disconnect() {    public static void Disconnect() { lock (Gate) { s_want = false; s_q.Clear(); Monitor.PulseAll(Gate); } }
 
     public static bool Send(byte[] f) {
       if (f == null || f.Length < 4 || f[0] != 0xBC || f[f.Length - 1] != 0x55 || f[2] != f.Length - 4) return false;
@@ -5914,8 +5916,9 @@ namespace VentoNative {
         try {
           var st = Wait(s_ch.WriteValueAsync(Buf(f), GattWriteOption.WriteWithoutResponse));
           if (st != GattCommunicationStatus.Success) throw new Exception("write " + st);
-          // the strip drops frames sent back to back
-          Thread.Sleep(25);
+          // the strip garbles frames that arrive close together (its own app
+          // sends one per finished gesture), so writes are spaced out
+          Thread.Sleep(Gap);
         } catch (Exception e) {
           Exception x = e is AggregateException && e.InnerException != null ? e.InnerException : e;
           Drop(); lock (Gate) { s_err = x.Message.Replace(";", ","); }
@@ -6047,6 +6050,10 @@ $script:ledFxList = @(
 116|Yellow background and white dots running
 117|Yellow dots on white background running
 '@ -split "`r?`n" | Where-Object { $_ } | ForEach-Object { $p = $_ -split '\|', 2; @{ N = [int]$p[0]; Name = $p[1] } })
+# the strip's app carries names for 117, but offers (and this strip runs) only these;
+# the rest do nothing at all
+$script:ledFxOk = @(1, 2, 3, 4, 7, 10, 26, 27) + (29..32) + (35..93)
+$script:ledFxList = @($script:ledFxList | Where-Object { $script:ledFxOk -contains $_.N })
 
 $script:ledWordColors = [ordered]@{
     red = '#FF3B30'; green = '#30D158'; blue = '#2F6BFF'; yellow = '#FFD60A'; cyan = '#32D4F5'
@@ -6289,15 +6296,26 @@ foreach ($hex in $script:ledSwatchHex) {
         $hs = ConvertTo-LedHsv ([string]$sd.Tag)
         $script:ledSync = $true
         try { (G 'LedHue').Value = $hs[0]; (G 'LedSat').Value = $hs[1] } finally { $script:ledSync = $false }
-        Set-LedColor $hs[0] $hs[1]
+        Set-LedColor $hs[0] $hs[1] -Now
     })
     [void](G 'LedSwatches').Children.Add($rb)
 }
-function Set-LedColor([int]$h, [int]$s) {
+$script:ledPending = @{}
+$script:ledDeb = New-Object System.Windows.Threading.DispatcherTimer
+$script:ledDeb.Interval = [TimeSpan]::FromMilliseconds(280)
+$script:ledDeb.Add_Tick({
+    $script:ledDeb.Stop()
+    $p = $script:ledPending; $script:ledPending = @{}
+    if ($p.ContainsKey('hsv')) { [void](Send-LedHsv $p.hsv[0] $p.hsv[1]) }
+    if ($p.ContainsKey('bri')) { [void](Send-LedBri $p.bri) }
+    if ($p.ContainsKey('speed')) { [void](Send-LedSpeed $p.speed) }
+})
+function Defer-Led([string]$key, $value) { $script:ledPending[$key] = $value; $script:ledDeb.Stop(); $script:ledDeb.Start() }
+function Set-LedColor([int]$h, [int]$s, [switch]$Now) {
     Stop-LedLoop
     $script:settings.ledHue = $h; $script:settings.ledSat = $s; $script:settings.ledKind = 'color'
     $script:saveTimer.Stop(); $script:saveTimer.Start()
-    [void](Send-LedHsv $h $s)
+    if ($Now) { $script:ledPending.Remove('hsv'); [void](Send-LedHsv $h $s) } else { Defer-Led 'hsv' @($h, $s) }
     (G 'LedHuePrev').Background = Get-GBrush (ConvertFrom-LedHsv $h $s)
     (G 'LedSatV').Text = '{0}%' -f $s
     Update-LedFxChecks
@@ -6325,7 +6343,7 @@ function Set-LedColor([int]$h, [int]$s) {
     (G 'LedBriV').Text = '{0}%' -f $v
     if ($script:ledSync) { return }
     $script:settings.ledBri = $v; $script:saveTimer.Stop(); $script:saveTimer.Start()
-    [void](Send-LedBri $v)
+    Defer-Led 'bri' $v
     Update-LedPreview
 })
 (G 'LedSpeed').Add_ValueChanged({ param($sd, $e)
@@ -6333,7 +6351,7 @@ function Set-LedColor([int]$h, [int]$s) {
     (G 'LedSpeedV').Text = '{0}' -f $v
     if ($script:ledSync) { return }
     $script:settings.ledSpeed = $v; $script:saveTimer.Stop(); $script:saveTimer.Start()
-    [void](Send-LedSpeed $v)
+    Defer-Led 'speed' $v
 })
 (G 'LedConnect').Add_Click({ if ($script:ledWantConnect) { Disconnect-Led } else { Connect-Led } })
 (G 'LedAutoConn').Add_Click({ Set-GSetting 'ledAutoConn' ([bool](G 'LedAutoConn').IsChecked) })
@@ -6341,7 +6359,7 @@ function Set-LedColor([int]$h, [int]$s) {
 # --- built-in effects: filter chips and one tile per effect ---
 $script:ledFilter = 'all'
 $script:ledFxBuilt = $false
-foreach ($f in @(@('all', 'All'), @('rainbow', 'Rainbow'), @('running', 'Running'), @('flow', 'Flow'), @('strobe', 'Strobe'), @('fade', 'Fades'), @('dots', 'Dots'))) {
+foreach ($f in @(@('all', 'All'), @('rainbow', 'Rainbow'), @('running', 'Running'), @('flow', 'Flow'), @('strobe', 'Strobe'), @('fade', 'Fades'))) {
     $rb = New-Object System.Windows.Controls.RadioButton
     $rb.Style = $script:app.FindResource('SegItem'); $rb.GroupName = 'LedFilter'; $rb.Content = $f[1]; $rb.Tag = $f[0]
     if ($f[0] -eq 'all') { $rb.IsChecked = $true }
@@ -6400,7 +6418,7 @@ function Set-LedEffect([int]$n) {
 # --- my color loops: Vento plays them, one color frame per tick ---
 function Get-LedLoop([string]$name) { @($script:settings.ledLoops) | Where-Object { $_.Name -eq $name } | Select-Object -First 1 }
 $script:ledLoopTimer = New-Object System.Windows.Threading.DispatcherTimer
-$script:ledLoopTimer.Interval = [TimeSpan]::FromMilliseconds(70)
+$script:ledLoopTimer.Interval = [TimeSpan]::FromMilliseconds(160)
 $script:ledLoopRun = $null
 $script:ledLoopLast = ''
 function Get-LedLoopFrame($lp, [double]$t) {
