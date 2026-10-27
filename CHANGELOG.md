@@ -6,6 +6,25 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.1 — 2026-10-27
+
+Devices, for real.
+
+### Added
+- **Every connected Bluetooth device** now shows on Home and the Devices page, with the battery
+  level Windows reports for it - headphones, mice, keyboards, controllers. Paired devices that
+  aren't connected stay out of the list. AirPods add left / right / case from their own
+  broadcast, and **Check now** reads them on the spot.
+- **Low-battery alert** for any connected device, with your own threshold and an on/off switch,
+  and a choice of how often Vento checks in the background.
+- **Pick the Home temperature.** Click the label above the big number: hottest (automatic), CPU,
+  GPU, SSD or motherboard.
+
+### Fixed
+- The Home Devices card showed AirPods even when they weren't connected.
+
+---
+
 ## 1.8.0 — 2026-10-27
 
 A new look, built like Windows 11.

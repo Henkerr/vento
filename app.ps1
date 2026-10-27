@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.8.0'
+$script:AppVersion = '1.8.1'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -428,6 +428,9 @@ function Get-DefaultSettings {
         osdLayout        = 'blade'     # blade | strip | hero | pills | ghost | micro | thermo
         osdTheme         = 'sirocco'   # sirocco | ember | venom | violet | crimson | mono
         windowMaterial   = 'mica'      # mica | acrylic | micaalt: the main window's Windows 11 backdrop
+        heroSensor       = 'auto'      # auto (hottest vs its target) | cpu | gpu | ssd | board: the Home hero
+        devCheckMin      = 30          # Bluetooth device battery check, minutes (0 = only on Refresh)
+        devLowOn         = $true       # low-battery notification for connected devices (threshold: podsWarn)
         osdCorner        = 'tr'        # overlay corner: tr | tl | bl | br
         osdScale         = 100         # overlay scale %
         osdOnSecondary   = $false      # place the overlay on the secondary monitor
@@ -659,6 +662,9 @@ function Import-Settings {
     if (@('blade','strip','hero','pills','ghost','micro','thermo') -notcontains [string]$s.osdLayout) { $s.osdLayout = 'blade' }
     if (@('sirocco','ember','venom','violet','crimson','mono') -notcontains [string]$s.osdTheme) { $s.osdTheme = 'sirocco' }
     if (@('mica','acrylic','micaalt') -notcontains [string]$s.windowMaterial) { $s.windowMaterial = 'mica' }
+    if (@('auto','cpu','gpu','ssd','board') -notcontains [string]$s.heroSensor) { $s.heroSensor = 'auto' }
+    if (@(0, 15, 30, 60) -notcontains [int]$s.devCheckMin) { $s.devCheckMin = 30 }
+    $s.devLowOn = [bool]$s.devLowOn
     foreach ($k in 'osdColFps','osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan','osdColPods') {
         $v = [string]$s[$k]
         if ($v) { try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($v) } catch { $v = '' } }
@@ -3633,15 +3639,22 @@ foreach ($k in $script:glassModeMap.Keys) {
 
 function Update-GlassHero($d) {
     $margin = -99.0; $hotName = $null; $hotVal = $null; $target = $null
+    # 'auto' follows whichever sensor sits closest to (or furthest over) its
+    # target; a pinned sensor is followed even when another runs hotter.
+    $pin = $(switch ([string]$script:settings.heroSensor) { 'cpu' { 'CPU' } 'gpu' { 'GPU' } 'ssd' { 'SSD' } 'board' { 'BOARD' } default { $null } })
     foreach ($probe in @(
         @($d.CpuTemp, $script:settings.warnCpu, 'CPU'), @($d.GpuTemp, $script:settings.warnGpu, 'GPU'),
         @($d.SsdTemp, $script:settings.warnSsd, 'SSD'), @($d.MbTemp, $script:settings.warnMb, 'BOARD'))) {
+        if ($pin -and $probe[2] -ne $pin) { continue }
         if ($null -ne $probe[0]) {
             $m = [double]$probe[0] - $probe[1]
             if ($m -gt $margin) { $margin = $m; $hotName = $probe[2]; $hotVal = [double]$probe[0]; $target = [double]$probe[1] }
         }
     }
-    if ($null -eq $hotName) { (G 'HomeStatus').Text = 'Reading the sensors...'; return }
+    if ($null -eq $hotName) {
+        (G 'HomeStatus').Text = $(if ($pin) { 'This sensor is not reporting a temperature.' } else { 'Reading the sensors...' })
+        return
+    }
     $state = $(if ($margin -le 0) { 'cool' } elseif ($margin -le 4) { 'warm' } else { 'hot' })
     $hex = & $script:glassThermal[$state].Hex; $txt = & $script:glassThermal[$state].Text
     $label = $(if ($hotName -eq 'BOARD') { 'Board' } else { $hotName })
@@ -3702,34 +3715,377 @@ function Update-GlassHero($d) {
     }
 }
 
-function Update-GlassDevices {
-    $host_ = G 'HomeDevices'; $host_.Children.Clear()
+# --- Glass: Bluetooth devices -----------------------------------------------
+# Every Bluetooth device that is connected right now, with the battery level
+# Windows publishes for it (headsets over Hands-Free, BLE mice, keyboards,
+# controllers). Paired-but-away devices never show. AirPods don't publish one
+# to Windows; theirs comes from their own BLE broadcast ($script:pods), which
+# also splits left / right / case.
+# The scan runs in its own runspace (Get-PnpDevice takes seconds): once at
+# launch, every minute while Home or Devices is on screen, on the user's
+# schedule in the background (for low-battery alerts), and on Refresh.
+$script:devKeyBattery   = '{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2'
+$script:devKeyConnected = '{83DA6326-97A6-4088-9453-A1923F573B29} 15'
+$script:devices = @()
+$script:devScanned = $false
+$script:devLastScan = $null
+$script:devNextScan = [DateTime]::MinValue
+$script:devAr = $null
+$script:devPs = $null
+$script:devHomePage = 0
+$script:devHadPods = $false
+$script:devLowNotified = @{}
+$script:devViewKey = $null
+$script:devLabelTick = 0
+$script:devScanWorker = {
+    param($bk, $ck)
+    $all = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue)
+    $bt = @($all | Where-Object { $_.Class -eq 'Bluetooth' -and ($_.InstanceId -like 'BTHENUM\DEV_*' -or $_.InstanceId -like 'BTHLE\DEV_*') })
+    $out = New-Object System.Collections.ArrayList
+    if (-not $bt.Count) { return , $out.ToArray() }
+    # One device per call: handed an array, Get-PnpDeviceProperty answers
+    # every entry with the first device's id and value.
+    $seen = @{}
+    foreach ($d in $bt) {
+        if (-not (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName $ck -ErrorAction SilentlyContinue).Data) { continue }
+        if ($d.InstanceId -notmatch 'DEV_([0-9A-F]{12})') { continue }
+        $addr = $Matches[1]
+        if ($seen[$addr]) { continue }   # classic + LE nodes of one device
+        $seen[$addr] = $true
+        # the level sits on the device node or a child (Hands-Free and co);
+        # disconnected devices keep a stale one, which is why only connected
+        # devices get this far
+        $bat = $null
+        foreach ($c in @($all | Where-Object { $_.InstanceId -like "*$addr*" })) {
+            $v = (Get-PnpDeviceProperty -InstanceId $c.InstanceId -KeyName $bk -ErrorAction SilentlyContinue).Data
+            if ($null -ne $v) { $bat = [int]$v; break }
+        }
+        [void]$out.Add(@{ Name = [string]$d.FriendlyName; Addr = $addr; Battery = $bat })
+    }
+    , $out.ToArray()
+}
+
+function Get-DevGlyph([string]$n) {
+    if ($n -match 'airpods|buds|head|arctis|nova|earbud|wh-|wf-|jabra|beats|bose|jbl|soundcore|earphone') { return [string][char]0xE7F6 }
+    if ($n -match 'keyboard|keys') { return [string][char]0xE765 }
+    if ($n -match 'mouse|mx master|viper|g pro') { return [string][char]0xE962 }
+    if ($n -match 'controller|xbox|dualsense|dualshock|gamepad') { return [string][char]0xE7FC }
+    if ($n -match 'phone|iphone|pixel') { return [string][char]0xE8EA }
+    [string][char]0xE702
+}
+function Get-DevSorted { @($script:devices | Sort-Object -Property @{ Expression = { -not $_.Apple } }, @{ Expression = { $_.Name } }) }
+
+function Start-DevScan {
+    if ($script:devAr) { return }
+    if (-not $script:devPs) {
+        $script:devPs = [powershell]::Create()
+        [void]$script:devPs.AddScript($script:devScanWorker.ToString()).AddArgument($script:devKeyBattery).AddArgument($script:devKeyConnected)
+    }
+    $script:devAr = $script:devPs.BeginInvoke()
+}
+function Set-DevNextScan {
+    $min = [int]$script:settings.devCheckMin
+    $base = $(if ($script:devLastScan) { $script:devLastScan } else { [DateTime]::Now })
+    $script:devNextScan = $(if ($min -le 0) { [DateTime]::MaxValue } else { $base.AddMinutes($min) })
+}
+function Update-DevLabels {
+    $t = $(if ($script:devAr) { 'Checking...' } elseif (-not $script:devLastScan) { 'Not checked yet' } else {
+        $m = [int][math]::Floor(([DateTime]::Now - $script:devLastScan).TotalMinutes)
+        $(if ($m -lt 1) { 'Checked just now' } elseif ($m -eq 1) { 'Checked 1 min ago' } else { "Checked $m min ago" })
+    })
+    (G 'DevChecked').Text = $t
     $p = $script:pods
-    if (-not $p -or -not $p.Seen) {
-        $t = New-Object System.Windows.Controls.TextBlock; $t.Text = 'No wireless devices connected'
-        $t.Style = $script:app.FindResource('Caption'); $t.Margin = '0,12,0,0'
-        [void]$host_.Children.Add($t); (G 'DevPager').Visibility = 'Collapsed'; return
+    $listening = ([DateTime]::Now -lt $script:podsSniffUntil)
+    (G 'PodsCheckText').Text = $(if ($listening) { 'Listening...' } else { 'Check now' })
+    (G 'PodsCheck').IsEnabled = -not $listening
+    (G 'PodsUpdated').Text = $(if ($p -and $p.Seen) { 'Updated ' + (Get-PodsAgeText $p.Seen) }
+                               elseif ($listening) { 'Waiting for a broadcast' } else { 'No reading yet' })
+}
+
+# A device that drops to the threshold gets one notification per charge.
+# AirPods are covered per bud by Update-PodsData from their own broadcast.
+function Test-DevLowBattery {
+    if (-not [bool]$script:settings.devLowOn) { return }
+    $lim = [int]$script:settings.podsWarn
+    foreach ($d in $script:devices) {
+        $v = $d.Battery
+        if ($d.Apple -or $null -eq $v) { continue }
+        if ($v -le $lim -and -not $script:devLowNotified[$d.Addr]) {
+            $script:devLowNotified[$d.Addr] = $true
+            [void](Show-Toast ('{0} battery is low' -f $d.Name) ('{0}% left. Time to put it on charge.' -f $v) 'vento-dev')
+        } elseif ($v -gt $lim + 5) { $script:devLowNotified.Remove($d.Addr) }
     }
-    (G 'DevPager').Visibility = 'Collapsed'
-    $name = $(if ($script:podsModels.ContainsKey($p.Model)) { $script:podsModels[$p.Model] } else { 'AirPods' })
-    $hd = New-Object System.Windows.Controls.TextBlock; $hd.Text = $name; $hd.Style = $script:app.FindResource('Caption'); $hd.Margin = '0,6,0,12'
-    [void]$host_.Children.Add($hd)
-    $ug = New-Object System.Windows.Controls.Primitives.UniformGrid; $ug.Columns = 3
-    foreach ($r in @(@('Left', $p.L, $p.ChgL), @('Right', $p.R, $p.ChgR), @('Case', $p.Case, $p.ChgCase))) {
-        $sp = New-Object System.Windows.Controls.StackPanel; $sp.HorizontalAlignment = 'Center'
-        $gr = New-Object System.Windows.Controls.Grid; $gr.Width = 56; $gr.Height = 56
-        $cv = New-Object System.Windows.Controls.Canvas; $cv.Width = 56; $cv.Height = 56
-        $low = ($null -ne $r[1] -and $r[1] -le [int]$script:settings.podsWarn -and -not $r[2])
-        $hex = $(if ($r[2]) { '#6CCB5F' } elseif ($low) { '#FF99A4' } else { $script:acc.Light2 })
-        Set-GRing $cv $r[1] 5 $hex $script:glassReveal ([bool]$r[2])
-        $tv = New-Object System.Windows.Controls.TextBlock; $tv.Text = $(if ($null -ne $r[1]) { "$($r[1])" } else { [string][char]0x2014 })
-        $tv.Style = $script:app.FindResource('BodyStrong'); $tv.FontSize = 13; $tv.HorizontalAlignment = 'Center'; $tv.VerticalAlignment = 'Center'
-        [void]$gr.Children.Add($cv); [void]$gr.Children.Add($tv)
-        $lb = New-Object System.Windows.Controls.TextBlock; $lb.Text = $r[0]; $lb.Style = $script:app.FindResource('Caption'); $lb.HorizontalAlignment = 'Center'; $lb.Margin = '0,6,0,0'
-        [void]$sp.Children.Add($gr); [void]$sp.Children.Add($lb)
-        [void]$ug.Children.Add($sp)
+}
+
+# Every UI tick, shown or not: collects a finished scan, starts the next one
+# when it is due.
+function Update-DevTick {
+    $now = [DateTime]::Now
+    if ($script:devAr) {
+        if (-not $script:devAr.IsCompleted) { return }
+        $res = @()
+        try { $res = @($script:devPs.EndInvoke($script:devAr) | ForEach-Object { $_ }) } catch { }
+        $script:devAr = $null
+        $script:devLastScan = $now
+        $script:devScanned = $true
+        $script:devices = @($res | Where-Object { $_ -is [hashtable] } | ForEach-Object {
+            @{ Name = $_.Name; Addr = $_.Addr; Battery = $_.Battery; Glyph = (Get-DevGlyph $_.Name); Apple = ($_.Name -match 'AirPods|Beats') }
+        })
+        Set-DevNextScan
+        Test-DevLowBattery
+        if ($script:shell.IsVisible) { Update-DevLabels }
+        return
     }
-    [void]$host_.Children.Add($ug)
+    $shown = $script:shell.IsVisible -and ((G 'PageHome').Visibility -eq 'Visible' -or (G 'PagePods').Visibility -eq 'Visible')
+    $due = ($now -ge $script:devNextScan) -or ($shown -and $script:devLastScan -and ($now - $script:devLastScan).TotalSeconds -ge 60)
+    if ($due) { Start-DevScan; if ($script:shell.IsVisible) { Update-DevLabels } }
+    elseif ($shown -and ++$script:devLabelTick % 10 -eq 0) { Update-DevLabels }
+}
+
+function Get-DevViewKey {
+    $k = (@($script:devices | ForEach-Object { '{0}:{1}' -f $_.Addr, $_.Battery }) -join ',') + "|$($script:devScanned)"
+    $p = $script:pods
+    if ($p) { $k += '|{0},{1},{2},{3},{4},{5}' -f $p.L, $p.R, $p.Case, $p.ChgL, $p.ChgR, $p.ChgCase }
+    $k
+}
+
+# --- drawing ---
+function New-DevText([string]$text, [string]$style) {
+    $t = New-Object System.Windows.Controls.TextBlock; $t.Text = $text; $t.Style = $script:app.FindResource($style); $t.VerticalAlignment = 'Center'; $t
+}
+function New-DevIcon([string]$glyph) {
+    $b = New-Object System.Windows.Controls.Border; $b.Style = $script:app.FindResource('IconTile')
+    $t = New-DevText $glyph 'Glyph'; $t.HorizontalAlignment = 'Center'; $b.Child = $t; $b
+}
+function New-DevRow([int]$minH, [string]$margin) {
+    $g = New-Object System.Windows.Controls.Grid; $g.MinHeight = $minH; $g.Margin = $margin
+    foreach ($w in 36, -1, -2) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = $(if ($w -gt 0) { New-Object System.Windows.GridLength $w } elseif ($w -eq -1) { New-Object System.Windows.GridLength 1, 'Star' } else { [System.Windows.GridLength]::Auto })
+        $g.ColumnDefinitions.Add($cd)
+    }
+    $g
+}
+function Test-DevLow($v, [bool]$chg) { ($null -ne $v -and $v -le [int]$script:settings.podsWarn -and -not $chg) }
+function New-DevRing([double]$size, [double]$thick, $pct, [bool]$chg, [string]$label, [bool]$animate) {
+    $sp = New-Object System.Windows.Controls.StackPanel; $sp.HorizontalAlignment = 'Center'
+    $g = New-Object System.Windows.Controls.Grid; $g.Width = $size; $g.Height = $size
+    $c = New-Object System.Windows.Controls.Canvas; $c.Width = $size; $c.Height = $size
+    $low = Test-DevLow $pct $chg
+    $hex = $(if ($chg) { '#6CCB5F' } elseif ($low) { '#FF99A4' } else { $script:acc.Light2 })
+    Set-GRing $c $pct $thick $hex $animate $chg
+    $txt = New-DevText $(if ($null -eq $pct) { [string][char]0x2014 } else { "$pct" }) 'BodyStrong'
+    $txt.FontSize = [math]::Round($size / 4.2); $txt.HorizontalAlignment = 'Center'
+    if ($low) { $txt.Foreground = Get-GBrush '#FF99A4' }
+    [void]$g.Children.Add($c); [void]$g.Children.Add($txt)
+    [void]$sp.Children.Add($g)
+    $lb = New-Object System.Windows.Controls.StackPanel; $lb.Orientation = 'Horizontal'; $lb.HorizontalAlignment = 'Center'; $lb.Margin = '0,6,0,0'
+    if ($chg) {
+        $bolt = New-DevText ([string][char]0xE945) 'Glyph'; $bolt.FontSize = 10; $bolt.Foreground = $script:app.FindResource('SuccessBrush'); $bolt.Margin = '0,0,4,0'
+        [void]$lb.Children.Add($bolt)
+    }
+    [void]$lb.Children.Add((New-DevText $label 'Caption'))
+    [void]$sp.Children.Add($lb)
+    $sp
+}
+
+# Home card: one battery page per connected device (AirPods first), then a
+# compact list when there is more than one. The header arrows page through.
+function Get-DevHomePages {
+    $pages = @()
+    foreach ($d in (Get-DevSorted)) { $pages += , @{ Kind = 'battery'; Dev = $d } }
+    if ($script:devices.Count -gt 1) { $pages += , @{ Kind = 'list' } }
+    , $pages
+}
+function Add-DevHomeRow($host_, $d) {
+    $g = New-DevRow 0 '0,10,0,0'
+    $sp = New-Object System.Windows.Controls.StackPanel; $sp.Margin = '12,0,8,0'; $sp.VerticalAlignment = 'Center'
+    $nm = New-DevText $d.Name 'BodyStrong'; $nm.FontSize = 13; $nm.TextTrimming = 'CharacterEllipsis'
+    [void]$sp.Children.Add($nm)
+    $v = $d.Battery; $detail = 'Bluetooth'
+    if ($d.Apple) {
+        $p = $script:pods
+        if ($p -and $p.Seen) {
+            $detail = 'Left {0} {1} Right {2}' -f $(if ($null -ne $p.L) { $p.L } else { '--' }), $script:dot, $(if ($null -ne $p.R) { $p.R } else { '--' })
+            $buds = @(@($p.L, $p.R) | Where-Object { $null -ne $_ })
+            $v = $(if ($buds.Count) { ($buds | Measure-Object -Minimum).Minimum } else { $null })
+        } else { $detail = 'Waiting for battery' }
+    }
+    [void]$sp.Children.Add((New-DevText $detail 'Caption'))
+    [System.Windows.Controls.Grid]::SetColumn($sp, 1)
+    if ($null -eq $v) {
+        $val = New-DevText ([string][char]0x2014) 'CaptionTertiary'; $val.ToolTip = "This device doesn't share its battery with Windows"
+    } else {
+        $val = New-DevText ('{0}%' -f $v) 'Metric'; $val.FontSize = 16
+        if (Test-DevLow $v $false) { $val.Foreground = Get-GBrush '#FF99A4' }
+    }
+    [System.Windows.Controls.Grid]::SetColumn($val, 2)
+    [void]$g.Children.Add((New-DevIcon $d.Glyph)); [void]$g.Children.Add($sp); [void]$g.Children.Add($val)
+    [void]$host_.Children.Add($g)
+}
+function Show-DevHome([int]$dir = 0) {
+    $host_ = G 'HomeDevices'; $host_.Children.Clear()
+    $pages = Get-DevHomePages
+    (G 'DevPager').Visibility = $(if ($pages.Count -gt 1) { 'Visible' } else { 'Collapsed' })
+    if (-not $pages.Count) {
+        $t = New-DevText $(if ($script:devScanned) { 'No Bluetooth devices connected' } else { 'Looking for devices...' }) 'Caption'
+        $t.Margin = '0,12,0,0'; [void]$host_.Children.Add($t); return
+    }
+    if ($script:devHomePage -ge $pages.Count) { $script:devHomePage = 0 }
+    (G 'DevPageText').Text = '{0} / {1}' -f ($script:devHomePage + 1), $pages.Count
+    $pg = $pages[$script:devHomePage]
+    $anim = [bool]($dir -ne 0 -or $script:glassReveal)
+    if ($pg.Kind -eq 'battery') {
+        $d = $pg.Dev
+        $hd = New-Object System.Windows.Controls.StackPanel; $hd.Orientation = 'Horizontal'; $hd.Margin = '0,6,0,12'
+        $gl = New-DevText $d.Glyph 'Glyph'; $gl.FontSize = 14; $gl.Foreground = $script:app.FindResource('TextSecondaryBrush')
+        $nm = New-DevText $d.Name 'Caption'; $nm.Margin = '8,0,0,0'; $nm.MaxWidth = 220; $nm.TextTrimming = 'CharacterEllipsis'
+        [void]$hd.Children.Add($gl); [void]$hd.Children.Add($nm)
+        [void]$host_.Children.Add($hd)
+        if ($d.Apple) {
+            $p = $script:pods
+            $ug = New-Object System.Windows.Controls.Primitives.UniformGrid; $ug.Columns = 3
+            foreach ($r in @(@('Left', 'L', 'ChgL'), @('Right', 'R', 'ChgR'), @('Case', 'Case', 'ChgCase'))) {
+                $v = $(if ($p -and $p.Seen) { $p[$r[1]] } else { $null })
+                [void]$ug.Children.Add((New-DevRing 56 5 $v ([bool]($p -and $p[$r[2]])) $r[0] $anim))
+            }
+            [void]$host_.Children.Add($ug)
+        } else {
+            $lbl = $(if ($null -eq $d.Battery) { 'Not shared with Windows' } else { 'Battery' })
+            [void]$host_.Children.Add((New-DevRing 72 6 $d.Battery $false $lbl $anim))
+        }
+    } else {
+        foreach ($d in @(Get-DevSorted | Select-Object -First 3)) { Add-DevHomeRow $host_ $d }
+    }
+    if ($dir -ne 0) {
+        $tt = New-Object System.Windows.Media.TranslateTransform; $host_.RenderTransform = $tt
+        $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty, (New-GAnim (40 * $dir) 0 320))
+        $host_.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-GAnim 0 1 260))
+    }
+}
+(G 'DevPrev').Add_Click({ $n = (Get-DevHomePages).Count; if ($n) { $script:devHomePage = ($script:devHomePage - 1 + $n) % $n; Show-DevHome -1 } })
+(G 'DevNext').Add_Click({ $n = (Get-DevHomePages).Count; if ($n) { $script:devHomePage = ($script:devHomePage + 1) % $n; Show-DevHome 1 } })
+
+# Devices page, "Other devices" tab: everything but the AirPods, with a bar
+function Show-DevRows {
+    $rows = G 'DeviceRows'; $rows.Children.Clear()
+    $others = @(Get-DevSorted | Where-Object { -not $_.Apple })
+    if (-not $others.Count) { $t = New-DevText 'Nothing else is connected right now.' 'Caption'; $t.Margin = '0,18'; [void]$rows.Children.Add($t) }
+    for ($i = 0; $i -lt $others.Count; $i++) {
+        $d = $others[$i]
+        $g = New-DevRow 62 '0'
+        $sp = New-Object System.Windows.Controls.StackPanel; $sp.Margin = '16,0'; $sp.VerticalAlignment = 'Center'
+        [void]$sp.Children.Add((New-DevText $d.Name 'Body'))
+        [void]$sp.Children.Add((New-DevText $(if ($null -eq $d.Battery) { "Bluetooth $($script:dot) doesn't share its battery with Windows" } else { "Bluetooth $($script:dot) connected" }) 'Caption'))
+        [System.Windows.Controls.Grid]::SetColumn($sp, 1)
+        $right = New-Object System.Windows.Controls.StackPanel; $right.Orientation = 'Horizontal'; $right.VerticalAlignment = 'Center'
+        if ($null -ne $d.Battery) {
+            $low = Test-DevLow $d.Battery $false
+            $track = New-Object System.Windows.Controls.Border; $track.Width = 90; $track.Height = 6; $track.CornerRadius = 3; $track.Background = Get-GBrush '#FFFFFF' 0x1F; $track.VerticalAlignment = 'Center'
+            $fill = New-Object System.Windows.Controls.Border; $fill.Width = [math]::Max(6, 90 * $d.Battery / 100); $fill.CornerRadius = 3; $fill.HorizontalAlignment = 'Left'
+            $fill.Background = $(if ($low) { Get-GBrush '#FF99A4' } else { $script:app.FindResource('AccentBrush') })
+            $track.Child = $fill
+            $pct = New-DevText ('{0}%' -f $d.Battery) 'Body'; $pct.Width = 46; $pct.TextAlignment = 'Right'
+            if ($low) { $pct.Foreground = Get-GBrush '#FF99A4' }
+            [void]$right.Children.Add($track); [void]$right.Children.Add($pct)
+        } else { [void]$right.Children.Add((New-DevText 'Not reported' 'CaptionTertiary')) }
+        [System.Windows.Controls.Grid]::SetColumn($right, 2)
+        [void]$g.Children.Add((New-DevIcon $d.Glyph)); [void]$g.Children.Add($sp); [void]$g.Children.Add($right)
+        [void]$rows.Children.Add($g)
+        if ($i -lt $others.Count - 1) { $dv = New-Object System.Windows.Controls.Border; $dv.Height = 1; $dv.Background = $script:app.FindResource('DividerBrush'); [void]$rows.Children.Add($dv) }
+    }
+}
+
+# Devices page, AirPods tab: the three big rings from the BLE broadcast
+function Show-DevPods([bool]$animate) {
+    if ((G 'PodsPanel').Visibility -ne 'Visible') { return }
+    $p = $script:pods
+    $model = $(if ($p -and $script:podsModels.ContainsKey($p.Model)) { $script:podsModels[$p.Model] } else { $null })
+    (G 'PodSub').Text = $(if ($model) { "$model $($script:dot) Connected" } else { 'Connected' })
+    foreach ($t in @(@('L', 'L', 'ChgL'), @('R', 'R', 'ChgR'), @('C', 'Case', 'ChgCase'))) {
+        $v = $(if ($p -and $p.Seen) { $p[$t[1]] } else { $null })
+        $chg = [bool]($p -and $p[$t[2]])
+        $low = Test-DevLow $v $chg
+        $hex = $(if ($chg) { '#6CCB5F' } elseif ($low) { '#FF99A4' } else { $script:acc.Light2 })
+        Set-GRing (G "PRing$($t[0])") $v 10 $hex $animate $chg
+        $pc = G "PPct$($t[0])"
+        $pc.Text = $(if ($null -ne $v) { '{0}%' -f $v } else { [string][char]0x2014 })
+        $pc.Foreground = $(if ($low) { Get-GBrush '#FF99A4' } else { $script:app.FindResource('TextPrimaryBrush') })
+        (G "PChg$($t[0])").Visibility = $(if ($chg) { 'Visible' } else { 'Collapsed' })
+    }
+    Update-DevLabels
+}
+
+function Update-DevViews {
+    $pods = Get-DevSorted | Where-Object { $_.Apple } | Select-Object -First 1
+    $any = $script:devices.Count -gt 0
+    (G 'TabPods').Visibility = $(if ($pods) { 'Visible' } else { 'Collapsed' })
+    if ($pods) { (G 'TabPods').Content = $(if ($pods.Name -match 'Beats') { 'Beats' } else { 'AirPods' }) }
+    if (-not $pods -and (G 'TabPods').IsChecked) { (G 'TabOther').IsChecked = $true }
+    if ($pods -and -not $script:devHadPods) { (G 'TabPods').IsChecked = $true }
+    $script:devHadPods = [bool]$pods
+    (G 'DevTabs').Visibility = $(if ($any) { 'Visible' } else { 'Collapsed' })
+    (G 'NoDevices').Visibility = $(if ($any) { 'Collapsed' } else { 'Visible' })
+    (G 'NoDevTitle').Text = $(if ($script:devScanned) { 'No Bluetooth devices connected' } else { 'Looking for devices...' })
+    (G 'PodsPanel').Visibility = $(if ($pods -and (G 'TabPods').IsChecked) { 'Visible' } else { 'Collapsed' })
+    (G 'OtherPanel').Visibility = $(if ($any -and (G 'TabOther').IsChecked) { 'Visible' } else { 'Collapsed' })
+    if ($pods) { (G 'PodName').Text = $pods.Name }
+    Show-DevPods ([bool]$script:glassReveal)
+    Show-DevRows
+    Show-DevHome
+}
+(G 'TabPods').Add_Checked({ $script:glassReveal = $true; Update-DevViews; $script:glassReveal = $false })
+(G 'TabOther').Add_Checked({ Update-DevViews })
+
+# Check now: the AirPods radio listens for one sniff window right away,
+# bound or not (an unbound pair needs the user nearby anyway).
+(G 'PodsCheck').Add_Click({
+    $script:podsSniffUntil = [DateTime]::Now.AddSeconds($script:podsSniffLen)
+    try { Update-PodsTick } catch { }
+    Update-DevLabels
+})
+(G 'DevRefresh').Add_Click({
+    Start-DevScan
+    if ((G 'TabPods').Visibility -eq 'Visible') { $script:podsSniffUntil = [DateTime]::Now.AddSeconds($script:podsSniffLen); try { Update-PodsTick } catch { } }
+    Update-DevLabels
+})
+
+# --- options ---
+(G 'DevOsd').IsChecked = [bool]$script:settings.osdPods
+(G 'DevOsd').Add_Click({
+    $on = [bool](G 'DevOsd').IsChecked
+    $script:settings.osdPods = $on; $sync.Settings.osdPods = $on
+    if ($el.S_OsdPods) { $el.S_OsdPods.IsChecked = $on }
+    try { Build-OsdContent } catch { }
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+})
+(G 'LowBat').Value = [int]$script:settings.podsWarn
+(G 'LowBatV').Text = '{0}%' -f [int]$script:settings.podsWarn
+(G 'LowBatOn').IsChecked = [bool]$script:settings.devLowOn
+(G 'LowBat').IsEnabled = [bool]$script:settings.devLowOn
+(G 'LowBat').Add_ValueChanged({
+    $v = [int](G 'LowBat').Value
+    (G 'LowBatV').Text = '{0}%' -f $v
+    if ($v -eq [int]$script:settings.podsWarn) { return }
+    $script:settings.podsWarn = $v; $sync.Settings.podsWarn = $v
+    $script:devViewKey = $null   # low colouring moves with the threshold
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+})
+(G 'LowBatOn').Add_Click({
+    $on = [bool](G 'LowBatOn').IsChecked
+    $script:settings.devLowOn = $on; $sync.Settings.devLowOn = $on
+    (G 'LowBat').IsEnabled = $on
+    $script:saveTimer.Stop(); $script:saveTimer.Start()
+})
+foreach ($pair in @(@('ChkManual', 0), @('Chk15', 15), @('Chk30', 30), @('Chk60', 60))) {
+    $rb = G $pair[0]
+    $rb.IsChecked = ([int]$script:settings.devCheckMin -eq $pair[1])
+    $rb.Add_Checked({
+        param($s, $e)
+        $script:settings.devCheckMin = [int]$s.Tag
+        Set-DevNextScan
+        $script:saveTimer.Stop(); $script:saveTimer.Start()
+    })
 }
 
 $script:glassDevKey = $null
@@ -3760,11 +4116,33 @@ function Update-Glass($d) {
         (G 'DutyCpu').Text = $(if ($mode -eq 'performance') { '{0}% set' -f $script:settings.perfCpu } else { 'Motherboard curve' })
         if ($null -ne $d.MbName -and -not (G 'PcBoard').Text) { (G 'PcBoard').Text = $d.MbName }
         if ($script:glassReveal -or $script:histTick % 4 -eq 0) { Update-GlassHero $d }
-        $key = $(if ($script:pods) { '{0}{1}{2}{3}{4}' -f $script:pods.L, $script:pods.R, $script:pods.Case, $script:pods.ChgL, $script:pods.ChgR } else { '' })
-        if ($script:glassReveal -or $key -ne $script:glassDevKey) { $script:glassDevKey = $key; Update-GlassDevices }
-        $script:glassReveal = $false
     }
+    # devices: redraw only when the list or a level changed (rings animate)
+    if ((G 'PageHome').Visibility -eq 'Visible' -or (G 'PagePods').Visibility -eq 'Visible') {
+        $key = Get-DevViewKey
+        if ($script:glassReveal -or $key -ne $script:devViewKey) { $script:devViewKey = $key; Update-DevViews }
+    }
+    $script:glassReveal = $false
     Set-GlassModeCards ([string]$d.ActiveMode)
+}
+
+# Hero sensor picker: the label opens a menu; the choice sticks.
+$script:heroMenuItems = @((G 'HeroPick').ContextMenu.Items)
+function Set-HeroPickChecks { foreach ($mi in $script:heroMenuItems) { $mi.IsChecked = ([string]$mi.Tag -eq [string]$script:settings.heroSensor) } }
+Set-HeroPickChecks
+(G 'HeroPick').Add_Click({
+    $cm = (G 'HeroPick').ContextMenu
+    $cm.PlacementTarget = G 'HeroPick'; $cm.Placement = 'Bottom'; $cm.IsOpen = $true
+})
+foreach ($mi in $script:heroMenuItems) {
+    $mi.Add_Click({
+        param($s, $e)
+        $script:settings.heroSensor = [string]$s.Tag
+        Set-HeroPickChecks
+        $script:glassReveal = $true
+        try { Update-Glass $sync.Data } catch { }
+        $script:saveTimer.Stop(); $script:saveTimer.Start()
+    })
 }
 
 # --- Glass: update notice --------------------------------------------------
@@ -6584,7 +6962,7 @@ function Update-PodsData {
         $k = $t[0]; $v = $t[1]; $chg = $t[2]
         if ($null -eq $v) { continue }
         if ($chg -or $v -ge ([int]$s.podsWarn + 20)) { $script:podsWarned[$k] = $false }
-        elseif ($v -le [int]$s.podsWarn -and -not $script:podsWarned[$k]) {
+        elseif ([bool]$s.devLowOn -and $v -le [int]$s.podsWarn -and -not $script:podsWarned[$k]) {
             $script:podsWarned[$k] = $true
             [void](Show-Toast 'AirPods battery low' ('{0}: {1}%' -f $t[3], $v) 'vento-pods')
         }
@@ -6673,7 +7051,8 @@ function Update-PodsTick {
         return
     }
     $now = [DateTime]::Now
-    $consumer = [bool]($vis -or ([bool]$s.osdPods -and $script:osd -and $script:osd.IsVisible))
+    # the Devices page AirPods tab counts as a consumer while it is on screen
+    $consumer = [bool]($vis -or ([bool]$s.osdPods -and $script:osd -and $script:osd.IsVisible) -or ($script:shell.IsVisible -and (G 'PodsPanel').IsVisible))
     $want = Get-PodsScanWant $consumer ([int]$s.podsModel -ne 0) $now
     if ($want) {
         $script:podsWantAt = $now
@@ -8458,6 +8837,7 @@ $script:timer.Add_Tick({
 
     # --- the Glass window draws from the same data ---
     try { Update-Glass $d } catch { }
+    try { Update-DevTick } catch { }
 
     # --- OSD overlay ---
     $osdWant = if ($script:osdEditing) { $true } else {

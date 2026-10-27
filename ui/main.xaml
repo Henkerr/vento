@@ -219,10 +219,24 @@
                     </Border.Background>
                   </Border>
                   <StackPanel Margin="24,20,8,0">
-                    <StackPanel Orientation="Horizontal">
-                      <TextBlock Text="&#xE9CA;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
-                      <TextBlock x:Name="HeroLabel" Text="Temperature" Style="{StaticResource Caption}" Margin="8,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
+                    <!-- which sensor the hero follows: hottest (auto) or a fixed one -->
+                    <Button x:Name="HeroPick" Style="{StaticResource IconButton}" Width="Auto" Height="28" HorizontalAlignment="Left"
+                            Margin="-8,-4,0,-4" Padding="0" FontFamily="{StaticResource TextFont}" ToolTip="Choose which temperature to show">
+                      <StackPanel Orientation="Horizontal" Margin="8,0">
+                        <TextBlock Text="&#xE9CA;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock x:Name="HeroLabel" Text="Temperature" Style="{StaticResource Caption}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="&#xE70D;" FontFamily="{StaticResource IconFont}" FontSize="9" Foreground="{StaticResource TextSecondaryBrush}" Margin="8,1,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+                      <Button.ContextMenu>
+                        <ContextMenu x:Name="HeroMenu" Style="{StaticResource FluentMenu}">
+                          <MenuItem x:Name="HeroAuto" Header="Hottest (automatic)" Tag="auto" Style="{StaticResource FluentMenuItem}"/>
+                          <MenuItem x:Name="HeroCpu" Header="CPU" Tag="cpu" Style="{StaticResource FluentMenuItem}"/>
+                          <MenuItem x:Name="HeroGpu" Header="GPU" Tag="gpu" Style="{StaticResource FluentMenuItem}"/>
+                          <MenuItem x:Name="HeroSsd" Header="SSD" Tag="ssd" Style="{StaticResource FluentMenuItem}"/>
+                          <MenuItem x:Name="HeroBoard" Header="Motherboard" Tag="board" Style="{StaticResource FluentMenuItem}"/>
+                        </ContextMenu>
+                      </Button.ContextMenu>
+                    </Button>
                     <StackPanel x:Name="HeroTempHost" Orientation="Horizontal" Background="Transparent" HorizontalAlignment="Left">
                       <TextBlock x:Name="HeroTemp" Text="59" FontFamily="Segoe UI" FontSize="60" FontWeight="SemiBold"
                                  Typography.NumeralAlignment="Tabular" TextOptions.TextFormattingMode="Ideal" Margin="0,0,0,2"/>
@@ -995,7 +1009,7 @@
                       </Border>
                       <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
                         <TextBlock x:Name="PodName" Text="AirPods" Style="{StaticResource Subtitle}" FontSize="18"/>
-                        <TextBlock Text="AirPods 4 &#xB7; Connected" Style="{StaticResource Caption}"/>
+                        <TextBlock x:Name="PodSub" Text="Connected" Style="{StaticResource Caption}"/>
                       </StackPanel>
                     </StackPanel>
                     <!-- on-demand read: listen for the AirPods' battery broadcast right now -->
@@ -1017,7 +1031,7 @@
                         <Canvas x:Name="PRingL" Width="136" Height="136"/>
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                           <TextBlock x:Name="PPctL" Text="100%" FontFamily="{StaticResource DisplayFont}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                          <StackPanel x:Name="PChgL" Orientation="Horizontal" HorizontalAlignment="Center">
                             <TextBlock x:Name="PodBolt" Text="&#xE945;" Style="{StaticResource Glyph}" FontSize="11" Foreground="{StaticResource SuccessBrush}"/>
                             <TextBlock Text="Charging" Style="{StaticResource Caption}" Foreground="{StaticResource SuccessBrush}" Margin="4,0,0,0"/>
                           </StackPanel>
@@ -1028,14 +1042,26 @@
                     <StackPanel>
                       <Grid Width="136" Height="136">
                         <Canvas x:Name="PRingR" Width="136" Height="136"/>
-                        <TextBlock x:Name="PPctR" Text="90%" FontFamily="{StaticResource DisplayFont}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                          <TextBlock x:Name="PPctR" Text="--" FontFamily="{StaticResource DisplayFont}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                          <StackPanel x:Name="PChgR" Orientation="Horizontal" HorizontalAlignment="Center" Visibility="Collapsed">
+                            <TextBlock Text="&#xE945;" Style="{StaticResource Glyph}" FontSize="11" Foreground="{StaticResource SuccessBrush}"/>
+                            <TextBlock Text="Charging" Style="{StaticResource Caption}" Foreground="{StaticResource SuccessBrush}" Margin="4,0,0,0"/>
+                          </StackPanel>
+                        </StackPanel>
                       </Grid>
                       <TextBlock Text="Right" Style="{StaticResource BodyStrong}" HorizontalAlignment="Center" Margin="0,12,0,0"/>
                     </StackPanel>
                     <StackPanel>
                       <Grid Width="136" Height="136">
                         <Canvas x:Name="PRingC" Width="136" Height="136"/>
-                        <TextBlock x:Name="PPctC" Text="30%" FontFamily="{StaticResource DisplayFont}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                          <TextBlock x:Name="PPctC" Text="--" FontFamily="{StaticResource DisplayFont}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                          <StackPanel x:Name="PChgC" Orientation="Horizontal" HorizontalAlignment="Center" Visibility="Collapsed">
+                            <TextBlock Text="&#xE945;" Style="{StaticResource Glyph}" FontSize="11" Foreground="{StaticResource SuccessBrush}"/>
+                            <TextBlock Text="Charging" Style="{StaticResource Caption}" Foreground="{StaticResource SuccessBrush}" Margin="4,0,0,0"/>
+                          </StackPanel>
+                        </StackPanel>
                       </Grid>
                       <TextBlock Text="Case" Style="{StaticResource BodyStrong}" HorizontalAlignment="Center" Margin="0,12,0,0"/>
                     </StackPanel>
@@ -1053,7 +1079,7 @@
                     <TextBlock Text="&#xE702;" Style="{StaticResource Glyph}" FontSize="20" HorizontalAlignment="Center"/>
                   </Border>
                   <TextBlock x:Name="NoDevTitle" Text="Looking for devices..." Style="{StaticResource BodyStrong}" HorizontalAlignment="Center" Margin="0,12,0,0"/>
-                  <TextBlock Text="Connect your AirPods, a headset, mouse or keyboard and its battery shows up here." Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                  <TextBlock Text="Connect headphones, a mouse, keyboard or controller over Bluetooth and its battery shows up here." Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
                 </StackPanel>
               </Border>
               <TextBlock Text="Options" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
@@ -1063,9 +1089,9 @@
                   <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE81E;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
                     <TextBlock Text="Show in the overlay" Style="{StaticResource Body}"/>
-                    <TextBlock Text="Headphone battery next to your game stats" Style="{StaticResource Caption}"/>
+                    <TextBlock Text="AirPods battery next to your game stats" Style="{StaticResource Caption}"/>
                   </StackPanel>
-                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                  <CheckBox x:Name="DevOsd" Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
                 </Grid>
               </Border>
               <Border Style="{StaticResource SettingsCard}">
@@ -1078,8 +1104,8 @@
                   </StackPanel>
                   <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock x:Name="LowBatV" Text="25%" Style="{StaticResource Body}" VerticalAlignment="Center" Width="40" TextAlignment="Right" Margin="0,0,12,0"/>
-                    <Slider x:Name="LowBat" Style="{StaticResource FluentSlider}" Width="150" Minimum="5" Maximum="50" Value="25" Margin="0,0,20,0"/>
-                    <CheckBox Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                    <Slider x:Name="LowBat" Style="{StaticResource FluentSlider}" Width="150" Minimum="5" Maximum="50" Value="25" Margin="0,0,20,0" IsSnapToTickEnabled="True" TickFrequency="5"/>
+                    <CheckBox x:Name="LowBatOn" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
                   </StackPanel>
                 </Grid>
               </Border>
@@ -1089,7 +1115,7 @@
                   <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE72C;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
                     <TextBlock Text="Check battery" Style="{StaticResource Body}"/>
-                    <TextBlock Text="Less often saves charge. Manual: only when you press Refresh." Style="{StaticResource Caption}"/>
+                    <TextBlock Text="Background checks for low-battery alerts." Style="{StaticResource Caption}"/>
                   </StackPanel>
                   <Border Grid.Column="2" Style="{StaticResource SegHost}">
                     <StackPanel Orientation="Horizontal">

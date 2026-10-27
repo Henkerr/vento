@@ -649,4 +649,44 @@
     <Setter Property="FontSize" Value="12"/>
     <Setter Property="Padding" Value="8,5"/>
   </Style>
+
+  <!-- Windows 11 style flyout menu: rounded acrylic-gray card, check mark
+       column, hover pill inset from the edges -->
+  <Style x:Key="FluentMenu" TargetType="ContextMenu">
+    <Setter Property="OverridesDefaultStyle" Value="True"/>
+    <Setter Property="HasDropShadow" Value="False"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ContextMenu">
+          <Border Background="#2C2C2C" BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="8" Padding="4" Margin="0,0,8,8">
+            <Border.Effect><DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.45" Direction="270"/></Border.Effect>
+            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" MinWidth="180"/>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="FluentMenuItem" TargetType="MenuItem">
+    <Setter Property="OverridesDefaultStyle" Value="True"/>
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="14"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="MenuItem">
+          <Border x:Name="Bd" CornerRadius="4" Background="Transparent" Padding="10,7,14,7" Margin="0,1">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock x:Name="Chk" Text="&#xE73E;" FontFamily="{StaticResource IconFont}" FontSize="12" Width="26"
+                         Foreground="{StaticResource AccentTextBrush}" VerticalAlignment="Center" Visibility="Hidden"/>
+              <ContentPresenter ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="False"/>
+            </StackPanel>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsChecked" Value="True"><Setter TargetName="Chk" Property="Visibility" Value="Visible"/></Trigger>
+            <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SubtleHoverBrush}"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
 </ResourceDictionary>
