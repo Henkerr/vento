@@ -431,6 +431,7 @@ function Get-DefaultSettings {
         heroSensor       = 'auto'      # auto (hottest vs its target) | cpu | gpu | ssd | board: the Home hero
         devCheckMin      = 30          # Bluetooth device battery check, minutes (0 = only on Refresh)
         devLowOn         = $true       # low-battery notification for connected devices (threshold: podsWarn)
+        toastsOn         = $true       # Windows notifications at all (off: nothing is shown, not even a balloon)
         osdCorner        = 'tr'        # overlay corner: tr | tl | bl | br
         osdScale         = 100         # overlay scale %
         osdOnSecondary   = $false      # place the overlay on the secondary monitor
@@ -665,6 +666,7 @@ function Import-Settings {
     if (@('auto','cpu','gpu','ssd','board') -notcontains [string]$s.heroSensor) { $s.heroSensor = 'auto' }
     if (@(0, 15, 30, 60) -notcontains [int]$s.devCheckMin) { $s.devCheckMin = 30 }
     $s.devLowOn = [bool]$s.devLowOn
+    $s.toastsOn = [bool]$s.toastsOn
     foreach ($k in 'osdColFps','osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan','osdColPods') {
         $v = [string]$s[$k]
         if ($v) { try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($v) } catch { $v = '' } }
@@ -4129,6 +4131,10 @@ function Update-Glass($d) {
             if ((G 'CurvePanel').IsVisible -and $null -eq $script:gCurveDrag) { Show-GlassCurve }
         }
     }
+    if ($script:glassReveal) {
+        if ((G 'PageAlerts').Visibility -eq 'Visible') { Update-GlassAlerts }
+        if ((G 'PageProfiles').Visibility -eq 'Visible') { Update-GlassProfiles }
+    }
     $script:glassReveal = $false
     Set-GlassModeCards ([string]$d.ActiveMode)
 }
@@ -4362,6 +4368,73 @@ function Show-GlassFansChart {
     Add-GSeries $c $cpu '#FFFFFF' 0 $hi 0x18 1.6
     Add-GSeries $c $case $script:acc.Light2 0 $hi 0x40 2
 }
+
+# --- Glass: Alerts -------------------------------------------------------------
+# Comfort targets (warn*), safety limits (cpu/gpuMaxTemp), game detection
+# (gameAction / gameOnLoad / gameCooldownSec) and the notification switch.
+# Ranges in the XAML match Import-Settings' validation.
+$script:gAlertSliders = @(
+    @('WCpu', 'WCpuV', 'warnCpu', 'deg'), @('WGpu', 'WGpuV', 'warnGpu', 'deg'),
+    @('WSsd', 'WSsdV', 'warnSsd', 'deg'), @('WMb', 'WMbV', 'warnMb', 'deg'),
+    @('LimCpu', 'LimCpuV', 'cpuMaxTemp', 'deg'), @('LimGpu', 'LimGpuV', 'gpuMaxTemp', 'deg'),
+    @('GameLoad', 'GameLoadV', 'gameOnLoad', 'pct'), @('GameCool', 'GameCoolV', 'gameCooldownSec', 'sec'))
+$script:gAlertsLoading = $false
+function Format-GAlertVal([string]$kind, [int]$v) {
+    switch ($kind) { 'deg' { '{0}{1}' -f $v, [char]0xB0 } 'pct' { '{0}%' -f $v } default { $(if ($v -le 0) { 'Off' } else { '{0} s' -f $v }) } }
+}
+function Update-GlassAlerts {
+    $script:gAlertsLoading = $true
+    try {
+        foreach ($r in $script:gAlertSliders) {
+            $sl = G $r[0]; $sl.Tag = $r
+            $sl.Value = [double]$script:settings[$r[2]]
+            (G $r[1]).Text = Format-GAlertVal $r[3] ([int]$sl.Value)
+        }
+        $act = [string]$script:settings.gameAction
+        (G 'GameOn').IsChecked = ($act -ne 'off')
+        (G 'GaPerf').IsChecked = ($act -ne 'curve')
+        (G 'GaCurve').IsChecked = ($act -eq 'curve')
+        Set-GlassGameRows
+        (G 'ToastOn').IsChecked = [bool]$script:settings.toastsOn
+        (G 'TestToast').IsEnabled = [bool]$script:settings.toastsOn
+        # the limits name the actual parts in this PC
+        $d0 = $sync.Data
+        (G 'LimCpuCap').Text = $(if ($d0 -and $d0.CpuName) { [string]$d0.CpuName } else { 'Processor' })
+        (G 'LimGpuCap').Text = $(if ($d0 -and $d0.GpuName) { [string]$d0.GpuName } else { 'Graphics card' })
+    } finally { $script:gAlertsLoading = $false }
+}
+function Set-GlassGameRows {
+    $on = [bool](G 'GameOn').IsChecked
+    (G 'GameRows').IsEnabled = $on; (G 'GameRows').Opacity = $(if ($on) { 1 } else { 0.45 })
+}
+foreach ($r in $script:gAlertSliders) {
+    (G $r[0]).Add_ValueChanged({ param($s, $e)
+        $r = $s.Tag; if ($null -eq $r) { return }
+        $v = [int][math]::Round($s.Value)
+        (G $r[1]).Text = Format-GAlertVal $r[3] $v
+        if ($script:gAlertsLoading -or [int]$script:settings[$r[2]] -eq $v) { return }
+        Set-GSetting ([string]$r[2]) $v
+    })
+}
+function Save-GlassGameAction {
+    if ($script:gAlertsLoading) { return }
+    $act = $(if (-not [bool](G 'GameOn').IsChecked) { 'off' } elseif ([bool](G 'GaCurve').IsChecked) { 'curve' } else { 'performance' })
+    Set-GSetting 'gameAction' $act
+    # the legacy settings sheet stages this value too; keep it from writing an old one back
+    $script:gameActionUI = $act
+}
+(G 'GameOn').Add_Click({ Set-GlassGameRows; Save-GlassGameAction })
+(G 'GaPerf').Add_Checked({ Save-GlassGameAction })
+(G 'GaCurve').Add_Checked({ Save-GlassGameAction })
+(G 'ToastOn').Add_Click({
+    $on = [bool](G 'ToastOn').IsChecked
+    Set-GSetting 'toastsOn' $on
+    (G 'TestToast').IsEnabled = $on
+})
+(G 'TestToast').Add_Click({
+    $ok = Show-Toast 'Vento' 'Notifications are working. Safety, low battery and update notices will show up like this.' 'vento-test'
+    if (-not $ok) { (G 'TestToast').Content = 'Not available' }
+})
 # --- Glass: Profiles ---------------------------------------------------------
 # Cards for every Vento profile (settings.ventoProfiles - the same list the
 # tray submenu and the cycle hotkey use), chips on Home, and an editor
@@ -8071,6 +8144,9 @@ function Initialize-Toast {
 # $Buttons: ordered @(@{ Text = 'Install now'; Arg = 'install' }, ...)
 # $OnActivate: script block called on the UI thread with the chosen argument.
 function Show-Toast([string]$Title, [string]$Body, [string]$Tag, $Buttons, $OnActivate) {
+    # Notifications switched off in Alerts: report it as handled so callers
+    # don't fall back to a tray balloon. The test button always goes through.
+    if (-not [bool]$script:settings.toastsOn -and $Tag -ne 'vento-test') { return $true }
     if (-not (Initialize-Toast)) { return $false }
     try {
         $esc = { param($s) [System.Security.SecurityElement]::Escape([string]$s) }

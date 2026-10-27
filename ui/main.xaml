@@ -582,7 +582,7 @@
                          Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,20"/>
 
               <TextBlock Text="Comfort targets" Style="{StaticResource BodyStrong}" Margin="0,0,0,2"/>
-              <TextBlock Text="Above its target a part turns warm on Home and Vento sends a notification." Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+              <TextBlock Text="Above its target a part turns warm on Home. The fans keep working as set." Style="{StaticResource Caption}" Margin="0,0,0,8"/>
               <Border Style="{StaticResource Card}" Padding="16,2,16,2">
                 <StackPanel>
                   <Grid MinHeight="56">
@@ -590,7 +590,7 @@
                     <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE950;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                     <TextBlock Grid.Column="1" Text="CPU" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="16,0"/>
                     <TextBlock Grid.Column="2" x:Name="WCpuV" Text="65&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="3" x:Name="WCpu" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="95" Value="65"/>
+                    <Slider Grid.Column="3" x:Name="WCpu" Style="{StaticResource FluentSlider}" Minimum="50" Maximum="80" Value="65" IsSnapToTickEnabled="True" TickFrequency="1"/>
                   </Grid>
                   <Border Height="1" Background="{StaticResource DividerBrush}"/>
                   <Grid MinHeight="56">
@@ -598,7 +598,7 @@
                     <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xF211;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                     <TextBlock Grid.Column="1" Text="GPU" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="16,0"/>
                     <TextBlock Grid.Column="2" x:Name="WGpuV" Text="65&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="3" x:Name="WGpu" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="95" Value="65"/>
+                    <Slider Grid.Column="3" x:Name="WGpu" Style="{StaticResource FluentSlider}" Minimum="50" Maximum="80" Value="65" IsSnapToTickEnabled="True" TickFrequency="1"/>
                   </Grid>
                   <Border Height="1" Background="{StaticResource DividerBrush}"/>
                   <Grid MinHeight="56">
@@ -606,7 +606,7 @@
                     <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xEDA2;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                     <TextBlock Grid.Column="1" Text="SSD" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="16,0"/>
                     <TextBlock Grid.Column="2" x:Name="WSsdV" Text="60&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="3" x:Name="WSsd" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="85" Value="60"/>
+                    <Slider Grid.Column="3" x:Name="WSsd" Style="{StaticResource FluentSlider}" Minimum="45" Maximum="75" Value="60" IsSnapToTickEnabled="True" TickFrequency="1"/>
                   </Grid>
                   <Border Height="1" Background="{StaticResource DividerBrush}"/>
                   <Grid MinHeight="56">
@@ -614,23 +614,23 @@
                     <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE964;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                     <TextBlock Grid.Column="1" Text="Board" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="16,0"/>
                     <TextBlock Grid.Column="2" x:Name="WMbV" Text="62&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="3" x:Name="WMb" Style="{StaticResource FluentSlider}" Minimum="40" Maximum="90" Value="62"/>
+                    <Slider Grid.Column="3" x:Name="WMb" Style="{StaticResource FluentSlider}" Minimum="45" Maximum="75" Value="62" IsSnapToTickEnabled="True" TickFrequency="1"/>
                   </Grid>
                 </StackPanel>
               </Border>
 
               <TextBlock Text="Safety limits" Style="{StaticResource BodyStrong}" Margin="0,20,0,2"/>
-              <TextBlock Text="Past these, Vento takes over: fans switch to Auto at full strength whatever mode you are in." Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+              <TextBlock Text="Past these, Vento takes over: fans go back to Auto whatever mode you are in, and you get a notification." Style="{StaticResource Caption}" Margin="0,0,0,8"/>
               <Border Style="{StaticResource SettingsCard}">
                 <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
                   <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7BA;" Style="{StaticResource Glyph}" Foreground="#FFB547" HorizontalAlignment="Center"/></Border>
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
                     <TextBlock Text="CPU limit" Style="{StaticResource Body}"/>
-                    <TextBlock Text="Ryzen 5 3600 is rated to 95&#xB0;" Style="{StaticResource Caption}"/>
+                    <TextBlock x:Name="LimCpuCap" Text="Processor" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis"/>
                   </StackPanel>
                   <TextBlock Grid.Column="2" x:Name="LimCpuV" Text="85&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                  <Slider Grid.Column="3" x:Name="LimCpu" Style="{StaticResource FluentSlider}" Minimum="60" Maximum="95" Value="85"/>
+                  <Slider Grid.Column="3" x:Name="LimCpu" Style="{StaticResource FluentSlider}" Minimum="70" Maximum="95" Value="85" IsSnapToTickEnabled="True" TickFrequency="1"/>
                 </Grid>
               </Border>
               <Border Style="{StaticResource SettingsCard}">
@@ -639,10 +639,10 @@
                   <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7BA;" Style="{StaticResource Glyph}" Foreground="#FFB547" HorizontalAlignment="Center"/></Border>
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
                     <TextBlock Text="GPU limit" Style="{StaticResource Body}"/>
-                    <TextBlock Text="RTX 2060 SUPER slows itself down near 88&#xB0;" Style="{StaticResource Caption}"/>
+                    <TextBlock x:Name="LimGpuCap" Text="Graphics card" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis"/>
                   </StackPanel>
                   <TextBlock Grid.Column="2" x:Name="LimGpuV" Text="83&#xB0;" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                  <Slider Grid.Column="3" x:Name="LimGpu" Style="{StaticResource FluentSlider}" Minimum="60" Maximum="90" Value="83"/>
+                  <Slider Grid.Column="3" x:Name="LimGpu" Style="{StaticResource FluentSlider}" Minimum="70" Maximum="95" Value="83" IsSnapToTickEnabled="True" TickFrequency="1"/>
                 </Grid>
               </Border>
 
@@ -653,7 +653,7 @@
                   <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE7FC;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
                     <TextBlock Text="Switch fans when a game starts" Style="{StaticResource Body}"/>
-                    <TextBlock Text="Watches GPU load and changes the fan mode for you" Style="{StaticResource Caption}"/>
+                    <TextBlock Text="Watches GPU load and switches the fan mode while you play" Style="{StaticResource Caption}"/>
                   </StackPanel>
                   <CheckBox x:Name="GameOn" Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
                 </Grid>
@@ -667,7 +667,7 @@
                       <TextBlock Text="Counts as playing once the GPU stays this busy" Style="{StaticResource Caption}"/>
                     </StackPanel>
                     <TextBlock Grid.Column="1" x:Name="GameLoadV" Text="80%" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="2" x:Name="GameLoad" Style="{StaticResource FluentSlider}" Minimum="30" Maximum="100" Value="80"/>
+                    <Slider Grid.Column="2" x:Name="GameLoad" Style="{StaticResource FluentSlider}" Minimum="50" Maximum="100" Value="80" IsSnapToTickEnabled="True" TickFrequency="1"/>
                   </Grid>
                 </Border>
                 <Border Style="{StaticResource SettingsCard}">
@@ -679,8 +679,8 @@
                     </StackPanel>
                     <Border Grid.Column="1" Style="{StaticResource SegHost}">
                       <StackPanel Orientation="Horizontal">
-                        <RadioButton GroupName="GameAct" Style="{StaticResource SegItem}" Content="Normal"/>
-                        <RadioButton GroupName="GameAct" Style="{StaticResource SegItem}" Content="Performance" IsChecked="True"/>
+                        <RadioButton x:Name="GaPerf" GroupName="GameAct" Style="{StaticResource SegItem}" Content="Performance" Tag="performance"/>
+                        <RadioButton x:Name="GaCurve" GroupName="GameAct" Style="{StaticResource SegItem}" Content="Curve" Tag="curve"/>
                       </StackPanel>
                     </Border>
                   </Grid>
@@ -689,11 +689,11 @@
                   <Grid Margin="52,0,0,0">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                      <TextBlock Text="Switch back after" Style="{StaticResource Body}"/>
-                      <TextBlock Text="How long the GPU must be quiet before your own mode returns" Style="{StaticResource Caption}"/>
+                      <TextBlock Text="Keep going after" Style="{StaticResource Body}"/>
+                      <TextBlock Text="Extra seconds at game speed once the game ends, to clear the heat" Style="{StaticResource Caption}"/>
                     </StackPanel>
                     <TextBlock Grid.Column="1" x:Name="GameCoolV" Text="15 s" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    <Slider Grid.Column="2" x:Name="GameCool" Style="{StaticResource FluentSlider}" Minimum="5" Maximum="120" Value="15"/>
+                    <Slider Grid.Column="2" x:Name="GameCool" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="60" Value="15" IsSnapToTickEnabled="True" TickFrequency="1"/>
                   </Grid>
                 </Border>
               </StackPanel>
@@ -705,10 +705,10 @@
                   <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xEA8F;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
                     <TextBlock Text="Windows notifications" Style="{StaticResource Body}"/>
-                    <TextBlock Text="Temperature, low battery and update notices in the Windows notification center" Style="{StaticResource Caption}"/>
+                    <TextBlock Text="Safety, low battery and update notices in the Windows notification center" Style="{StaticResource Caption}"/>
                   </StackPanel>
                   <Button x:Name="TestToast" Grid.Column="2" Style="{StaticResource FluentButton}" Content="Send a test" FontSize="13" MinHeight="30" Padding="12,4" Margin="0,0,16,0" VerticalAlignment="Center"/>
-                  <CheckBox Grid.Column="3" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                  <CheckBox x:Name="ToastOn" Grid.Column="3" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
                 </Grid>
               </Border>
             </StackPanel>
