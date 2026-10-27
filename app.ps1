@@ -4131,6 +4131,14 @@ function Update-Glass($d) {
             if ((G 'CurvePanel').IsVisible -and $null -eq $script:gCurveDrag) { Show-GlassCurve }
         }
     }
+    if ((G 'PageDisplays').Visibility -eq 'Visible') {
+        if ($script:glassReveal) { $script:gDispGen = $sync.Ddc.Gen; Open-GlassDisplays }
+        elseif ($sync.Ddc.Gen -ne $script:gDispGen -and [System.Windows.Input.Mouse]::LeftButton -ne 'Pressed') {
+            # a new snapshot; never rebuilt under a dragging hand
+            $script:gDispGen = $sync.Ddc.Gen; Show-GlassDisplays
+        }
+        if ($sync.Ddc.WGen -ne $script:gDispWGen) { $script:gDispWGen = $sync.Ddc.WGen; Show-GDispWrite $sync.Ddc.LastWrite }
+    }
     if ($script:glassReveal) {
         if ((G 'PageAlerts').Visibility -eq 'Visible') { Update-GlassAlerts }
         if ((G 'PageProfiles').Visibility -eq 'Visible') { Update-GlassProfiles }
@@ -4434,6 +4442,256 @@ function Save-GlassGameAction {
 (G 'TestToast').Add_Click({
     $ok = Show-Toast 'Vento' 'Notifications are working. Safety, low battery and update notices will show up like this.' 'vento-test'
     if (-not $ok) { (G 'TestToast').Content = 'Not available' }
+})
+
+# --- Glass: Displays -------------------------------------------------------------
+# One card per display from the DDC worker's snapshot ($sync.Ddc.Monitors),
+# rebuilt when the worker publishes a new one (Gen). Every write goes through
+# Queue-DdcSet like the legacy panel, and an input switch keeps its 12 s
+# self-revert: on many displays DDC/CI rides the active input, so a wrong
+# switch could otherwise leave no way back from software.
+$script:gDispGen = -1
+$script:gDispWGen = -1
+$script:gDispLoading = $false
+$script:gMonCards = @()
+function Format-GMonTime([int]$mins) { '{0:00}:{1:00}' -f ([math]::Floor($mins / 60)), ($mins % 60) }
+
+function New-GMonCard([int]$idx, $m) {
+    $x = @"
+<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource Card}" Padding="20,18,20,18" Margin="0,0,12,12">
+  <StackPanel>
+    <Grid Margin="0,0,0,18">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="48"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Border Style="{StaticResource IconTile}" Width="48" Height="48" CornerRadius="8">
+        <TextBlock Text="&#xE7F4;" Style="{StaticResource Glyph}" FontSize="22" HorizontalAlignment="Center"/>
+      </Border>
+      <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+        <TextBlock x:Name="MName" Style="{StaticResource BodyStrong}" TextTrimming="CharacterEllipsis"/>
+        <TextBlock x:Name="MInfo" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+    </Grid>
+    <TextBlock x:Name="MErr" Text="DDC/CI is not answering. Turn it on in the display's own menu, then Rescan." Style="{StaticResource Caption}" TextWrapping="Wrap" Visibility="Collapsed"/>
+    <StackPanel x:Name="MBody">
+      <Grid Margin="0,0,0,12">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+        <TextBlock Text="&#xE706;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
+        <TextBlock Grid.Column="1" Text="Brightness" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+        <Slider Grid.Column="2" x:Name="MB" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="1"/>
+        <TextBlock Grid.Column="3" x:Name="MBV" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+      </Grid>
+      <Grid x:Name="MCRow" Margin="0,0,0,12">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+        <TextBlock Text="&#xE793;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
+        <TextBlock Grid.Column="1" Text="Contrast" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+        <Slider Grid.Column="2" x:Name="MC" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="1"/>
+        <TextBlock Grid.Column="3" x:Name="MCV" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+      </Grid>
+      <StackPanel x:Name="MPreRow" Margin="28,4,0,0">
+        <TextBlock Text="Color" Style="{StaticResource Body}" Margin="0,0,0,6"/>
+        <Border Style="{StaticResource SegHost}" HorizontalAlignment="Left"><WrapPanel x:Name="MPre"/></Border>
+      </StackPanel>
+      <StackPanel x:Name="MInRow" Margin="28,12,0,0">
+        <TextBlock Text="Input" Style="{StaticResource Body}" Margin="0,0,0,6"/>
+        <Border Style="{StaticResource SegHost}" HorizontalAlignment="Left"><WrapPanel x:Name="MIn"/></Border>
+      </StackPanel>
+    </StackPanel>
+  </StackPanel>
+</Border>
+"@
+    $c = [System.Windows.Markup.XamlReader]::Parse($x)
+    $desc = ([string]$m.Desc).Trim()
+    $c.FindName('MName').Text = $(if ($desc) { $desc } else { 'Display {0}' -f ($idx + 1) })
+    $info = @()
+    if ($m.Primary) { $info += 'Primary' }
+    if ([int]$m.MapW -gt 0) { $info += '{0} x {1}' -f [int]$m.MapW, [int]$m.MapH }
+    if ($null -ne $m.Hz) { $info += '{0} Hz' -f ([double]$m.Hz).ToString('0.#', [cultureinfo]::InvariantCulture) }
+    if ($null -ne $m.InCur -and $script:inputNames.ContainsKey([int]$m.InCur)) { $info += $script:inputNames[[int]$m.InCur] }
+    $c.FindName('MInfo').Text = $info -join " $($script:dot) "
+    if (-not $m.Ok) { $c.FindName('MBody').Visibility = 'Collapsed'; $c.FindName('MErr').Visibility = 'Visible'; return $c }
+    $b = $c.FindName('MB'); $b.Maximum = [double][math]::Max(1, [int]$m.BriMax); $b.Value = [double][int]$m.BriCur; $b.Tag = $idx
+    $c.FindName('MBV').Text = '{0}' -f [int]$m.BriCur
+    $b.Add_ValueChanged({ param($s, $e) Set-GMonLevel ([int]$s.Tag) 'Bri' ([int]$s.Value) })
+    if ($null -ne $m.ConCur) {
+        $k = $c.FindName('MC'); $k.Maximum = [double][math]::Max(1, [int]$m.ConMax); $k.Value = [double][int]$m.ConCur; $k.Tag = $idx
+        $c.FindName('MCV').Text = '{0}' -f [int]$m.ConCur
+        $k.Add_ValueChanged({ param($s, $e) Set-GMonLevel ([int]$s.Tag) 'Con' ([int]$s.Value) })
+    } else { $c.FindName('MCRow').Visibility = 'Collapsed' }
+    foreach ($row in @(@('MPre', 'MPreRow', @($m.Presets), $m.PreCur, $script:presetNames, 0x14), @('MIn', 'MInRow', @($m.Inputs), $m.InCur, $script:inputNames, 0x60))) {
+        $codes = @($row[2] | Where-Object { $null -ne $_ })
+        if (-not $codes.Count) { $c.FindName($row[1]).Visibility = 'Collapsed'; continue }
+        $wp = $c.FindName($row[0])
+        foreach ($code in $codes) {
+            $rb = New-Object System.Windows.Controls.RadioButton
+            $rb.GroupName = 'Mon{0}_{1:X2}' -f $idx, $row[5]; $rb.Style = $script:app.FindResource('SegItem')
+            $rb.Content = $(if ($row[4].ContainsKey([int]$code)) { $row[4][[int]$code] } else { '0x{0:X2}' -f [int]$code })
+            $rb.IsChecked = ($null -ne $row[3] -and [int]$row[3] -eq [int]$code)
+            $rb.Tag = @($idx, [int]$code, [int]$row[5])
+            $rb.Add_Checked({ param($s, $e) if (-not $script:gDispLoading) { Set-GMonVcp $s.Tag } })
+            [void]$wp.Children.Add($rb)
+        }
+    }
+    $c
+}
+
+# Brightness / contrast: with Match on, the worker's -1 target writes every
+# display and the other cards' sliders follow on screen.
+function Set-GMonLevel([int]$idx, [string]$what, [int]$v) {
+    if ($idx -lt $script:gMonCards.Count) { $script:gMonCards[$idx].FindName("M$($what.Substring(0,1))V").Text = "$v" }
+    if ($script:gDispLoading) { return }
+    $mons = @($sync.Ddc.Monitors)
+    $sync0 = [bool]$script:settings.monSync
+    Queue-DdcSet "Set$what" $(if ($sync0) { -1 } else { $idx }) $v 0
+    for ($i = 0; $i -lt $mons.Count; $i++) {
+        if ($i -ne $idx -and -not $sync0) { continue }
+        if ($what -eq 'Bri') { $mons[$i].BriCur = $v } elseif ($null -ne $mons[$i].ConCur) { $mons[$i].ConCur = $v }
+        if ($i -ne $idx -and $i -lt $script:gMonCards.Count) {
+            $script:gDispLoading = $true
+            try { $sl = $script:gMonCards[$i].FindName("M$($what.Substring(0,1))"); if ($sl) { $sl.Value = $v } } finally { $script:gDispLoading = $false }
+            $script:gMonCards[$i].FindName("M$($what.Substring(0,1))V").Text = "$v"
+        }
+    }
+    # a hand-set level is no longer the preset
+    if ([string]$script:settings.monProfile) { $script:settings.monProfile = ''; Update-GDispPresets }
+}
+function Set-GMonVcp($t) {
+    $i = [int]$t[0]; $val = [int]$t[1]; $code = [int]$t[2]
+    $mons = @($sync.Ddc.Monitors); $prev = $null
+    if ($i -lt $mons.Count) {
+        if ($code -eq 0x14) { $prev = $mons[$i].PreCur; $mons[$i].PreCur = $val }
+        else { $prev = $mons[$i].InCur; $mons[$i].InCur = $val }
+    }
+    Queue-DdcSet 'SetVcp' $i $val $code
+    if ($code -eq 0x60 -and $null -ne $prev -and [int]$prev -ne $val) { Start-GMonRevert $i ([int]$prev) $val }
+}
+
+# --- input safety net ---
+$script:gRevert = $null
+$script:gRevertTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:gRevertTimer.Interval = [TimeSpan]::FromSeconds(1)
+$script:gRevertTimer.Add_Tick({
+    $script:gRevert.Left--
+    if ($script:gRevert.Left -le 0) { Stop-GMonRevert $true } else { Show-GMonRevert }
+})
+function Show-GMonRevert {
+    $r = $script:gRevert
+    $nm = $(if ($script:inputNames.ContainsKey($r.Now)) { $script:inputNames[$r.Now] } else { '0x{0:X2}' -f $r.Now })
+    (G 'DispRevertText').Text = 'Switched to {0}. Going back in {1} s unless you keep it.' -f $nm, $r.Left
+    (G 'DispRevertBar').Visibility = 'Visible'
+}
+function Start-GMonRevert([int]$mon, [int]$back, [int]$now) {
+    $script:gRevert = @{ Mon = $mon; Back = $back; Now = $now; Left = 12 }
+    Show-GMonRevert
+    $script:gRevertTimer.Stop(); $script:gRevertTimer.Start()
+}
+function Stop-GMonRevert([bool]$goBack) {
+    $script:gRevertTimer.Stop()
+    $r = $script:gRevert; $script:gRevert = $null
+    (G 'DispRevertBar').Visibility = 'Collapsed'
+    if ($goBack -and $r) {
+        Queue-DdcSet 'SetVcp' $r.Mon $r.Back 0x60
+        $mons = @($sync.Ddc.Monitors)
+        if ($r.Mon -lt $mons.Count) { $mons[$r.Mon].InCur = $r.Back }
+        Show-GlassDisplays
+    }
+}
+(G 'DispRevertKeep').Add_Click({ Stop-GMonRevert $false })
+(G 'DispRevertNow').Add_Click({ Stop-GMonRevert $true })
+
+# --- presets (the display profiles: Day, Night, Cinema, Game...) ---
+function Update-GDispPresets {
+    $wp = G 'DispPresets'
+    $script:gDispLoading = $true
+    try {
+        $wp.Children.Clear()
+        foreach ($p in (Get-MonProfiles)) {
+            $rb = New-Object System.Windows.Controls.RadioButton
+            $rb.GroupName = 'DispPreset'; $rb.Style = $script:app.FindResource('SegItem')
+            $rb.Content = Format-ProfName $p.Name; $rb.Tag = [string]$p.Name
+            $rb.IsChecked = ([string]$p.Name -eq [string]$script:settings.monProfile)
+            $rb.Add_Checked({ param($s, $e)
+                if ($script:gDispLoading) { return }
+                $mp = Get-MonProfile ([string]$s.Tag)
+                if (-not $mp) { return }
+                # every display, whatever the legacy panel's scope was
+                $prev = [string]$script:settings.monProfileScope
+                $script:settings.monProfileScope = 'all'
+                try { Apply-MonProfile $mp } catch { } finally { $script:settings.monProfileScope = $prev }
+                Show-GlassDisplays
+            })
+            [void]$wp.Children.Add($rb)
+        }
+    } finally { $script:gDispLoading = $false }
+}
+
+function Show-GlassDisplays {
+    $mons = @($sync.Ddc.Monitors)
+    (G 'DispStatus').Text = $(if (-not $script:psDdc) { 'DDC/CI is unavailable on this PC' }
+                              elseif ($sync.Ddc.Busy) { 'Reading monitors...' }
+                              elseif ($mons.Count -eq 0) { 'No DDC/CI display found' }
+                              else { '{0} {1} {2} DDC/CI live' -f $mons.Count, $(if ($mons.Count -eq 1) { 'display' } else { 'displays' }), $script:dot })
+    $script:gDispLoading = $true
+    try {
+        $h = G 'MonHost'; $h.Children.Clear()
+        $h.Columns = [math]::Max(1, [math]::Min(2, $mons.Count))
+        $cards = @()
+        for ($i = 0; $i -lt $mons.Count; $i++) { $c = New-GMonCard $i $mons[$i]; $cards += , $c; [void]$h.Children.Add($c) }
+        $script:gMonCards = $cards
+        (G 'DispPresetCard').Visibility = $(if (@($mons | Where-Object { $_.Ok }).Count) { 'Visible' } else { 'Collapsed' })
+        (G 'DispSync').IsChecked = [bool]$script:settings.monSync
+        Update-GNight
+    } finally { $script:gDispLoading = $false }
+    Update-GDispPresets
+}
+function Open-GlassDisplays {
+    Start-DdcWorker
+    if ($script:psDdc -and -not $sync.Ddc.Busy) { $sync.DdcQueue.Enqueue(@{ Cmd = 'Enum' }) }
+    Show-GlassDisplays
+}
+(G 'DispRescan').Add_Click({ if ($script:psDdc) { $sync.DdcQueue.Enqueue(@{ Cmd = 'Enum' }); (G 'DispStatus').Text = 'Reading monitors...' } else { Open-GlassDisplays } })
+(G 'DispSync').Add_Click({ Set-GSetting 'monSync' ([bool](G 'DispSync').IsChecked) })
+
+# A write the display quietly ignored is said out loud, and the slider snaps
+# back to what the display really holds.
+function Show-GDispWrite($w) {
+    if (-not $w) { return }
+    if ($w.Took) { (G 'DispNote').Visibility = 'Collapsed'; return }
+    $name = $(if ($script:monWriteNames.ContainsKey([int]$w.Code)) { $script:monWriteNames[[int]$w.Code] } else { '0x{0:X2}' -f [int]$w.Code })
+    (G 'DispNote').Text = '{0} stayed at {1} on display {2}: it ignored the change. Some displays only allow it from their own menu or in another color preset.' -f $name, $w.Actual, ([int]$w.Mon + 1)
+    (G 'DispNote').Visibility = 'Visible'
+    $i = [int]$w.Mon
+    if ($null -ne $w.Actual -and $i -lt $script:gMonCards.Count) {
+        $nm = $(switch ([int]$w.Code) { 0x10 { 'MB' } 0x12 { 'MC' } default { $null } })
+        if ($nm) {
+            $script:gDispLoading = $true
+            try { $script:gMonCards[$i].FindName($nm).Value = [double][int]$w.Actual; $script:gMonCards[$i].FindName("${nm}V").Text = '{0}' -f [int]$w.Actual } finally { $script:gDispLoading = $false }
+        }
+    }
+}
+
+# --- night schedule (Test-NightShift in the main tick does the applying) ---
+function Update-GNight {
+    $np = [string]$script:settings.monNightProfile
+    (G 'NightOn').IsChecked = [bool]$script:settings.monNight
+    (G 'NightFrom').Text = Format-GMonTime ([int]$script:settings.monNightFrom)
+    (G 'NightTo').Text = Format-GMonTime ([int]$script:settings.monNightTo)
+    (G 'NightText').Text = $(if (Get-MonProfile $np) { 'Switches every display to the {0} preset in this window' -f (Format-ProfName $np) } else { 'Needs a display preset named Night' })
+}
+function Step-GNight([string]$key, [int]$delta) {
+    Set-GSetting $key ((([int]$script:settings[$key] + $delta) % 1440 + 1440) % 1440)
+    $script:nightApplied = $false
+    Update-GNight
+}
+(G 'NightFromDn').Add_Click({ Step-GNight 'monNightFrom' (-30) })
+(G 'NightFromUp').Add_Click({ Step-GNight 'monNightFrom' 30 })
+(G 'NightToDn').Add_Click({ Step-GNight 'monNightTo' (-30) })
+(G 'NightToUp').Add_Click({ Step-GNight 'monNightTo' 30 })
+(G 'NightOn').Add_Click({
+    Set-GSetting 'monNight' ([bool](G 'NightOn').IsChecked)
+    $script:nightApplied = $false
+    # the schedule needs the displays enumerated to act on them
+    if ([bool]$script:settings.monNight) { Start-DdcWorker; Test-NightShift }
+    else { Test-NightShift }
 })
 # --- Glass: Profiles ---------------------------------------------------------
 # Cards for every Vento profile (settings.ventoProfiles - the same list the

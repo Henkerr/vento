@@ -740,103 +740,50 @@
           <ScrollViewer x:Name="PageDisplays" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
             <StackPanel Margin="36,26,36,28">
               <TextBlock Text="Displays" Style="{StaticResource PageTitle}"/>
-              <TextBlock Text="Brightness and contrast are set inside the monitors themselves, over DDC/CI." Style="{StaticResource Body}"
-                         Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,20"/>
-              <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
+              <Grid Margin="0,4,0,20">
+                <TextBlock Text="Brightness and contrast are set inside the monitors themselves, over DDC/CI." Style="{StaticResource Body}"
+                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,300,0" TextTrimming="CharacterEllipsis"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                  <TextBlock x:Name="DispStatus" Text="Reading monitors..." Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                  <Button x:Name="DispRescan" Style="{StaticResource FluentButton}" FontSize="13" MinHeight="30" Padding="10,4" ToolTip="Read the displays again">
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                      <TextBlock Text="Rescan" VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </Button>
+                </StackPanel>
+              </Grid>
+
+              <!-- input switch safety net: reverts unless kept -->
+              <Border x:Name="DispRevertBar" CornerRadius="4" Background="#33FFB547" BorderBrush="#55FFB547" BorderThickness="1" Padding="14,8,8,8" Margin="0,0,0,12" Visibility="Collapsed">
+                <Grid>
+                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE7BA;" Style="{StaticResource Glyph}" Foreground="#FFD08A" Margin="0,0,12,0"/>
+                    <TextBlock x:Name="DispRevertText" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="DispRevertKeep" Style="{StaticResource AccentButton}" Content="Keep" FontSize="13" MinHeight="30" Padding="16,4"/>
+                    <Button x:Name="DispRevertNow" Style="{StaticResource FluentButton}" Content="Go back now" FontSize="13" MinHeight="30" Padding="12,4" Margin="8,0,0,0"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <Border x:Name="DispPresetCard" Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
                 <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE790;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
                     <TextBlock Text="Preset" Style="{StaticResource Body}"/>
-                    <TextBlock Text="Brightness and contrast for both displays in one tap" Style="{StaticResource Caption}"/>
+                    <TextBlock Text="Brightness, contrast and color for every display in one tap" Style="{StaticResource Caption}"/>
                   </StackPanel>
                   <Border Grid.Column="2" Style="{StaticResource SegHost}">
-                    <StackPanel Orientation="Horizontal">
-                      <RadioButton x:Name="PresetDay" GroupName="Preset" Style="{StaticResource SegItem}" Content="Day" IsChecked="True" Tag="70,50,55,70"/>
-                      <RadioButton x:Name="PresetGame" GroupName="Preset" Style="{StaticResource SegItem}" Content="Game" Tag="90,60,80,75"/>
-                      <RadioButton x:Name="PresetCinema" GroupName="Preset" Style="{StaticResource SegItem}" Content="Cinema" Tag="35,45,30,60"/>
-                    </StackPanel>
+                    <StackPanel x:Name="DispPresets" Orientation="Horizontal"/>
                   </Border>
                 </Grid>
               </Border>
-              <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                <Border Style="{StaticResource Card}" Padding="20,18,20,18">
-                  <StackPanel>
-                    <Grid Margin="0,0,0,18">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="48"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                      <Border Style="{StaticResource IconTile}" Width="48" Height="48" CornerRadius="8">
-                        <TextBlock Text="&#xE7F4;" Style="{StaticResource Glyph}" FontSize="22" HorizontalAlignment="Center"/>
-                      </Border>
-                      <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="Mon1Name" Text="XG2705" Style="{StaticResource BodyStrong}"/>
-                        <TextBlock x:Name="Mon1Info" Text="Primary display" Style="{StaticResource Caption}"/>
-                      </StackPanel>
-                    </Grid>
-                    <Grid Margin="0,0,0,12">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
-                      <TextBlock Text="&#xE9A9;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
-                      <TextBlock Grid.Column="1" Text="Brightness" Style="{StaticResource Body}" VerticalAlignment="Center"/>
-                      <Slider Grid.Column="2" x:Name="B1" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="70"/>
-                      <TextBlock Grid.Column="3" x:Name="B1V" Text="70" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-                    </Grid>
-                    <Grid Margin="0,0,0,16">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
-                      <TextBlock Text="&#xE7B3;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
-                      <TextBlock Grid.Column="1" Text="Contrast" Style="{StaticResource Body}" VerticalAlignment="Center"/>
-                      <Slider Grid.Column="2" x:Name="C1" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="50"/>
-                      <TextBlock Grid.Column="3" x:Name="C1V" Text="50" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-                    </Grid>
-                    <Grid>
-                      <TextBlock Text="Input" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="28,0,0,0"/>
-                      <Border Style="{StaticResource SegHost}">
-                        <StackPanel Orientation="Horizontal">
-                          <RadioButton GroupName="In1" Style="{StaticResource SegItem}" Content="HDMI 1" IsChecked="True"/>
-                          <RadioButton GroupName="In1" Style="{StaticResource SegItem}" Content="HDMI 2"/>
-                          <RadioButton GroupName="In1" Style="{StaticResource SegItem}" Content="DP"/>
-                        </StackPanel>
-                      </Border>
-                    </Grid>
-                  </StackPanel>
-                </Border>
-                <Border Grid.Column="2" Style="{StaticResource Card}" Padding="20,18,20,18">
-                  <StackPanel>
-                    <Grid Margin="0,0,0,18">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="48"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                      <Border Style="{StaticResource IconTile}" Width="48" Height="48" CornerRadius="8">
-                        <TextBlock Text="&#xE7F4;" Style="{StaticResource Glyph}" FontSize="22" HorizontalAlignment="Center"/>
-                      </Border>
-                      <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="Mon2Name" Text="LG ULTRAWIDE" Style="{StaticResource BodyStrong}"/>
-                        <TextBlock x:Name="Mon2Info" Text="Second display" Style="{StaticResource Caption}"/>
-                      </StackPanel>
-                    </Grid>
-                    <Grid Margin="0,0,0,12">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
-                      <TextBlock Text="&#xE9A9;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
-                      <TextBlock Grid.Column="1" Text="Brightness" Style="{StaticResource Body}" VerticalAlignment="Center"/>
-                      <Slider Grid.Column="2" x:Name="B2" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="55"/>
-                      <TextBlock Grid.Column="3" x:Name="B2V" Text="55" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-                    </Grid>
-                    <Grid Margin="0,0,0,16">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
-                      <TextBlock Text="&#xE7B3;" Style="{StaticResource Glyph}" Foreground="{StaticResource TextSecondaryBrush}"/>
-                      <TextBlock Grid.Column="1" Text="Contrast" Style="{StaticResource Body}" VerticalAlignment="Center"/>
-                      <Slider Grid.Column="2" x:Name="C2" Style="{StaticResource FluentSlider}" Minimum="0" Maximum="100" Value="70"/>
-                      <TextBlock Grid.Column="3" x:Name="C2V" Text="70" Style="{StaticResource Body}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-                    </Grid>
-                    <Grid>
-                      <TextBlock Text="Input" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="28,0,0,0"/>
-                      <Border Style="{StaticResource SegHost}">
-                        <StackPanel Orientation="Horizontal">
-                          <RadioButton GroupName="In2" Style="{StaticResource SegItem}" Content="HDMI"/>
-                          <RadioButton GroupName="In2" Style="{StaticResource SegItem}" Content="DP" IsChecked="True"/>
-                        </StackPanel>
-                      </Border>
-                    </Grid>
-                  </StackPanel>
-                </Border>
-              </Grid>
+              <!-- one card per display, built from the DDC snapshot -->
+              <UniformGrid x:Name="MonHost" Columns="2"/>
+              <TextBlock x:Name="DispNote" Style="{StaticResource Caption}" Foreground="#FFD08A" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"/>
 
               <TextBlock Text="All displays" Style="{StaticResource BodyStrong}" Margin="0,20,0,8"/>
               <Border Style="{StaticResource SettingsCard}">
@@ -844,21 +791,30 @@
                   <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE9A9;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
-                    <TextBlock Text="Match brightness" Style="{StaticResource Body}"/>
-                    <TextBlock Text="Move one slider and the other display follows" Style="{StaticResource Caption}"/>
+                    <TextBlock Text="Match brightness and contrast" Style="{StaticResource Body}"/>
+                    <TextBlock Text="Move one slider and every display follows" Style="{StaticResource Caption}"/>
                   </StackPanel>
-                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" IsChecked="True"/>
+                  <CheckBox x:Name="DispSync" Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
                 </Grid>
               </Border>
               <Border Style="{StaticResource SettingsCard}">
                 <Grid>
-                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <Border Style="{StaticResource IconTile}"><TextBlock Text="&#xE708;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/></Border>
                   <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
-                    <TextBlock Text="Night profile" Style="{StaticResource Body}"/>
-                    <TextBlock Text="Dims both displays from 23:00 to 07:00" Style="{StaticResource Caption}"/>
+                    <TextBlock Text="Night schedule" Style="{StaticResource Body}"/>
+                    <TextBlock x:Name="NightText" Text="Dims every display at night" Style="{StaticResource Caption}"/>
                   </StackPanel>
-                  <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}"/>
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,20,0">
+                    <Button x:Name="NightFromDn" Style="{StaticResource IconButton}" Content="&#xE76B;" Width="28" Height="28" FontSize="10" ToolTip="Start 30 minutes earlier"/>
+                    <TextBlock x:Name="NightFrom" Text="23:00" Style="{StaticResource Body}" Width="44" TextAlignment="Center" VerticalAlignment="Center"/>
+                    <Button x:Name="NightFromUp" Style="{StaticResource IconButton}" Content="&#xE76C;" Width="28" Height="28" FontSize="10" ToolTip="Start 30 minutes later"/>
+                    <TextBlock Text="&#x2013;" Style="{StaticResource Body}" Margin="8,0" VerticalAlignment="Center"/>
+                    <Button x:Name="NightToDn" Style="{StaticResource IconButton}" Content="&#xE76B;" Width="28" Height="28" FontSize="10" ToolTip="End 30 minutes earlier"/>
+                    <TextBlock x:Name="NightTo" Text="07:00" Style="{StaticResource Body}" Width="44" TextAlignment="Center" VerticalAlignment="Center"/>
+                    <Button x:Name="NightToUp" Style="{StaticResource IconButton}" Content="&#xE76C;" Width="28" Height="28" FontSize="10" ToolTip="End 30 minutes later"/>
+                  </StackPanel>
+                  <CheckBox x:Name="NightOn" Grid.Column="3" Style="{StaticResource ToggleSwitch}"/>
                 </Grid>
               </Border>
             </StackPanel>
