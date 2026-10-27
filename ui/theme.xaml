@@ -650,6 +650,37 @@
     <Setter Property="Padding" Value="8,5"/>
   </Style>
 
+  <!-- Plain Windows 11 text field: the search box without its hint and glyph -->
+  <Style x:Key="FluentTextBox" TargetType="TextBox">
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+    <Setter Property="CaretBrush" Value="{StaticResource TextPrimaryBrush}"/>
+    <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}"/>
+    <Setter Property="FontFamily" Value="Segoe UI"/>
+    <Setter Property="FontSize" Value="14"/>
+    <Setter Property="Height" Value="34"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="TextBox">
+          <Border x:Name="Bd" CornerRadius="4" Background="#0FFFFFFF" BorderBrush="#12FFFFFF" BorderThickness="1">
+            <Grid>
+              <Border x:Name="Line" Height="1" VerticalAlignment="Bottom" Background="#8BFFFFFF" Margin="1,0"/>
+              <ScrollViewer x:Name="PART_ContentHost" Margin="9,0" VerticalAlignment="Center"/>
+            </Grid>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="#15FFFFFF"/></Trigger>
+            <Trigger Property="IsReadOnly" Value="True"><Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/></Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="#B31E1E1E"/>
+              <Setter TargetName="Line" Property="Background" Value="{DynamicResource AccentBrush}"/>
+              <Setter TargetName="Line" Property="Height" Value="2"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- Windows 11 style flyout menu: rounded acrylic-gray card, check mark
        column, hover pill inset from the edges -->
   <Style x:Key="FluentMenu" TargetType="ContextMenu">

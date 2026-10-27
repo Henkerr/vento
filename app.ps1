@@ -4145,6 +4145,212 @@ foreach ($mi in $script:heroMenuItems) {
     })
 }
 
+
+# --- Glass: Profiles ---------------------------------------------------------
+# Cards for every Vento profile (settings.ventoProfiles - the same list the
+# tray submenu and the cycle hotkey use), chips on Home, and an editor
+# dialog. Apply goes through Apply-VentoProfile, so fans, overlay and
+# displays switch exactly as they do from the tray.
+$script:gFanName = @{ quiet = 'Quiet'; normal = 'Normal'; performance = 'Performance'; curve = 'Curve'; auto = 'Auto' }
+$script:gOsdName = @{ on = 'On'; off = 'Off'; auto = 'While gaming' }
+$script:gProfColors = @('#7FE0A0', '#FF7A8A', '#FFC46F', '#8F86FF', '#6FB1FF', '#FF9E6F', '#6FE0FF', '#FF6FD8', '#B6FF6F')
+# Built-ins are stored upper-case (GAMING); the new design reads them in
+# title case. A name the user typed in mixed case is shown as typed.
+function Format-ProfName([string]$n) {
+    if ($n -cmatch '^[A-Z0-9 ]+$') { return [Globalization.CultureInfo]::InvariantCulture.TextInfo.ToTitleCase($n.ToLowerInvariant()) }
+    $n
+}
+function ConvertTo-XmlText([string]$s) { [System.Security.SecurityElement]::Escape($s) }
+
+function New-ProfileCard($p, [bool]$active) {
+    $col = [string]$p.Color
+    $c6 = $col.TrimStart('#')
+    $disp = $(if ([string]$p.Display) { Format-ProfName ([string]$p.Display) } else { 'Unchanged' })
+    $fan = $(if ($script:gFanName.ContainsKey([string]$p.Fan)) { $script:gFanName[[string]$p.Fan] } else { [string]$p.Fan })
+    $osd = $(if ($script:gOsdName.ContainsKey([string]$p.Overlay)) { $script:gOsdName[[string]$p.Overlay] } else { [string]$p.Overlay })
+    $x = @"
+<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Style="{StaticResource Card}" Margin="0,0,12,12" Padding="0">
+  <Grid>
+    <Border CornerRadius="8" IsHitTestVisible="False">
+      <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+          <GradientStop Color="#26$c6" Offset="0"/>
+          <GradientStop Color="#00$c6" Offset="0.6"/>
+        </LinearGradientBrush>
+      </Border.Background>
+    </Border>
+    <StackPanel Margin="20,18,20,18">
+      <Grid>
+        <StackPanel Orientation="Horizontal" Margin="0,0,70,0">
+          <Ellipse Width="10" Height="10" Fill="$col" VerticalAlignment="Center"/>
+          <TextBlock Text="$(ConvertTo-XmlText (Format-ProfName $p.Name))" Style="{StaticResource Subtitle}" FontSize="18" Margin="10,0,0,0" TextTrimming="CharacterEllipsis"/>
+        </StackPanel>
+        <Border CornerRadius="10" Background="{DynamicResource AccentBrush}" Padding="9,2,9,3" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="$(if ($active) { 'Visible' } else { 'Collapsed' })">
+          <TextBlock Text="Active" Style="{StaticResource Caption}" Foreground="#000000" FontWeight="SemiBold"/>
+        </Border>
+      </Grid>
+      <Grid Margin="0,16,0,0">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/></Grid.RowDefinitions>
+        <Viewbox Width="14" Height="14" HorizontalAlignment="Left"><Path Data="{StaticResource FanGeometrySmall}" Style="{StaticResource FluentIcon}" Fill="{StaticResource TextSecondaryBrush}"/></Viewbox>
+        <TextBlock Grid.Column="1" Text="Fans" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="2" Text="$(ConvertTo-XmlText $fan)" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+        <TextBlock Grid.Row="1" Text="&#xE81E;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+        <TextBlock Grid.Row="1" Grid.Column="1" Text="Overlay" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+        <TextBlock Grid.Row="1" Grid.Column="2" Text="$(ConvertTo-XmlText $osd)" Style="{StaticResource Body}" VerticalAlignment="Center"/>
+        <TextBlock Grid.Row="2" Text="&#xE7F4;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+        <TextBlock Grid.Row="2" Grid.Column="1" Text="Displays" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+        <TextBlock Grid.Row="2" Grid.Column="2" Text="$(ConvertTo-XmlText $disp)" Style="{StaticResource Body}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+      </Grid>
+      <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+        <Button Style="{StaticResource AccentButton}" Content="$(if ($active) { 'Apply again' } else { 'Apply' })" FontSize="13" MinHeight="30" Padding="16,4"/>
+        <Button Style="{StaticResource FluentButton}" Content="Edit" FontSize="13" MinHeight="30" Padding="16,4" Margin="8,0,0,0"/>
+      </StackPanel>
+    </StackPanel>
+  </Grid>
+</Border>
+"@
+    $card = [System.Windows.Markup.XamlReader]::Parse($x)
+    $btns = $card.Child.Children[1].Children[2].Children
+    $btns[0].Tag = [string]$p.Name; $btns[1].Tag = [string]$p.Name
+    $btns[0].Add_Click({ param($s, $e) Apply-VentoProfile ([string]$s.Tag) })
+    $btns[1].Add_Click({ param($s, $e) Open-ProfileDialog ([string]$s.Tag) })
+    $card
+}
+function New-ProfileAddTile {
+    $x = @"
+<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Margin="0,0,12,12" MinHeight="196" Cursor="Hand" Background="Transparent">
+  <Rectangle RadiusX="8" RadiusY="8" Stroke="#3DFFFFFF" StrokeThickness="1" StrokeDashArray="4 3"/>
+  <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+    <Border Width="40" Height="40" CornerRadius="20" Background="#0FFFFFFF" HorizontalAlignment="Center">
+      <TextBlock Text="&#xE710;" Style="{StaticResource Glyph}" HorizontalAlignment="Center"/>
+    </Border>
+    <TextBlock Text="New profile" Style="{StaticResource BodyStrong}" HorizontalAlignment="Center" Margin="0,10,0,0"/>
+    <TextBlock Text="Fans, overlay and displays under one name" Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+  </StackPanel>
+</Grid>
+"@
+    $t = [System.Windows.Markup.XamlReader]::Parse($x)
+    $t.Add_MouseLeftButtonUp({ Open-ProfileDialog '' })
+    $t
+}
+
+$script:gProfChipSync = $false
+function Update-GlassProfiles {
+    $active = [string]$script:settings.ventoProfile
+    $ps = @(Get-VentoProfiles)
+    $hostP = G 'ProfileHost'; $hostP.Children.Clear()
+    foreach ($p in $ps) { [void]$hostP.Children.Add((New-ProfileCard $p ($p.Name -eq $active))) }
+    [void]$hostP.Children.Add((New-ProfileAddTile))
+    # Home: chips for the first four, checked on the active one
+    $script:gProfChipSync = $true
+    try {
+        $hc = G 'HomeProfiles'; $hc.Children.Clear()
+        foreach ($p in @($ps | Select-Object -First 4)) {
+            $rb = New-Object System.Windows.Controls.RadioButton
+            $rb.GroupName = 'HomeProfile'; $rb.Style = $script:app.FindResource('ProfileChip')
+            $rb.Background = Get-GBrush ([string]$p.Color); $rb.Content = Format-ProfName $p.Name; $rb.Tag = [string]$p.Name
+            $rb.IsChecked = ($p.Name -eq $active)
+            $rb.Add_Checked({ param($s, $e) if (-not $script:gProfChipSync) { Apply-VentoProfile ([string]$s.Tag) } })
+            [void]$hc.Children.Add($rb)
+        }
+    } finally { $script:gProfChipSync = $false }
+}
+
+# --- editor dialog ---
+$script:gProfEdit = ''
+$script:gProfColor = '#6FB1FF'
+$script:gProfDisplay = ''
+function Show-ProfColors {
+    $w = G 'ProfColors'; $w.Children.Clear()
+    $picks = @($script:gProfColors)
+    if ($picks -notcontains $script:gProfColor) { $picks += $script:gProfColor }
+    foreach ($hex in $picks) {
+        $b = New-Object System.Windows.Controls.Border
+        $b.Width = 28; $b.Height = 28; $b.CornerRadius = 14; $b.Margin = '0,0,8,8'; $b.Cursor = 'Hand'
+        $b.Background = Get-GBrush $hex; $b.Tag = $hex
+        if ($hex -eq $script:gProfColor) { $b.BorderThickness = 2; $b.BorderBrush = Get-GBrush '#FFFFFF' }
+        $b.Add_MouseLeftButtonUp({ param($s, $e) $script:gProfColor = [string]$s.Tag; Show-ProfColors })
+        [void]$w.Children.Add($b)
+    }
+}
+function Show-ProfDisplays {
+    $w = G 'ProfDisplays'; $w.Children.Clear()
+    $opts = @(, @('', 'Unchanged')) + @(Get-MonProfiles | ForEach-Object { , @([string]$_.Name, (Format-ProfName $_.Name)) })
+    foreach ($o in $opts) {
+        $rb = New-Object System.Windows.Controls.RadioButton
+        $rb.GroupName = 'PfDisp'; $rb.Style = $script:app.FindResource('SegItem')
+        $rb.Content = $o[1]; $rb.Tag = $o[0]; $rb.IsChecked = ($o[0] -eq $script:gProfDisplay)
+        $rb.Add_Checked({ param($s, $e) $script:gProfDisplay = [string]$s.Tag })
+        [void]$w.Children.Add($rb)
+    }
+}
+function Open-ProfileDialog([string]$name) {
+    $p = $(if ($name) { Get-VentoProfile $name } else { $null })
+    $script:gProfEdit = $(if ($p) { [string]$p.Name } else { '' })
+    $script:gProfColor = $(if ($p) { [string]$p.Color } else { '#6FB1FF' })
+    $script:gProfDisplay = $(if ($p) { [string]$p.Display } else { '' })
+    $fan = $(if ($p) { [string]$p.Fan } else { [string]$script:settings.lastMode })
+    $osd = $(if ($p) { [string]$p.Overlay } else { 'auto' })
+    (G 'ProfDlgTitle').Text = $(if ($p) { 'Edit profile' } else { 'New profile' })
+    $nm = G 'ProfName'
+    $nm.Text = $(if ($p) { Format-ProfName $p.Name } else { 'My profile' })
+    # a built-in's name is its identity (re-seeded by name), so it stays put
+    $nm.IsReadOnly = [bool]($p -and $p.Builtin)
+    (G 'ProfDelete').Visibility = $(if ($p -and -not $p.Builtin) { 'Visible' } else { 'Collapsed' })
+    (G 'ProfErr').Visibility = 'Collapsed'
+    foreach ($rb in 'PfQuiet', 'PfNormal', 'PfPerf', 'PfCurve', 'PfAuto') { (G $rb).IsChecked = ([string](G $rb).Tag -eq $fan) }
+    if (-not @('PfQuiet', 'PfNormal', 'PfPerf', 'PfCurve', 'PfAuto' | Where-Object { (G $_).IsChecked }).Count) { (G 'PfNormal').IsChecked = $true }
+    foreach ($rb in 'PoOn', 'PoOff', 'PoAuto') { (G $rb).IsChecked = ([string](G $rb).Tag -eq $osd) }
+    Show-ProfColors
+    Show-ProfDisplays
+    (G 'ProfileDialog').Visibility = 'Visible'
+    [void]$nm.Focus(); $nm.SelectAll()
+}
+function Close-ProfileDialog { (G 'ProfileDialog').Visibility = 'Collapsed'; $script:gProfEdit = '' }
+(G 'ProfCancel').Add_Click({ Close-ProfileDialog })
+(G 'ProfDlgBackdrop').Add_MouseLeftButtonUp({ Close-ProfileDialog })
+(G 'ProfSave').Add_Click({
+    $old = [string]$script:gProfEdit
+    $prev = $(if ($old) { Get-VentoProfile $old } else { $null })
+    $typed = ([string](G 'ProfName').Text).Trim()
+    # built-ins keep their stored name; others save as typed
+    $name = $(if ($prev -and $prev.Builtin) { [string]$prev.Name } else { $typed })
+    $err = G 'ProfErr'
+    if (-not $name) { $err.Text = 'Give the profile a name.'; $err.Visibility = 'Visible'; return }
+    # case-insensitive: 'gaming' must not sit next to the built-in GAMING
+    $clash = @(Get-VentoProfiles | Where-Object { $_.Name -ieq $name -and $_.Name -ne $old })
+    if ($clash.Count) { $err.Text = 'A profile with this name already exists.'; $err.Visibility = 'Visible'; return }
+    $fan = [string](@('PfQuiet', 'PfNormal', 'PfPerf', 'PfCurve', 'PfAuto' | Where-Object { (G $_).IsChecked } | ForEach-Object { (G $_).Tag }) | Select-Object -First 1)
+    $osd = [string](@('PoOn', 'PoOff', 'PoAuto' | Where-Object { (G $_).IsChecked } | ForEach-Object { (G $_).Tag }) | Select-Object -First 1)
+    if (-not $fan) { $fan = 'normal' }; if (-not $osd) { $osd = 'auto' }
+    $p = @{ Name = $name; Color = [string]$script:gProfColor; Fan = $fan; Overlay = $osd; Display = [string]$script:gProfDisplay
+            Builtin = $(if ($prev) { [bool]$prev.Builtin } else { $false }) }
+    # keep the list order: replace in place, append when new
+    $arr = @(); $placed = $false
+    foreach ($q in (Get-VentoProfiles)) {
+        if ($old -and $q.Name -eq $old) { $arr += , $p; $placed = $true } else { $arr += , $q }
+    }
+    if (-not $placed) { $arr += , $p }
+    Save-VentoProfiles $arr
+    if ($old -and $old -ne $name -and [string]$script:settings.ventoProfile -eq $old) {
+        $script:settings.ventoProfile = $name; $sync.Settings.ventoProfile = $name
+    }
+    Close-ProfileDialog
+    Update-GlassProfiles
+    Update-TrayProfiles
+})
+(G 'ProfDelete').Add_Click({
+    $name = [string]$script:gProfEdit
+    $p = $(if ($name) { Get-VentoProfile $name } else { $null })
+    if (-not $p -or $p.Builtin) { return }
+    Save-VentoProfiles @(Get-VentoProfiles | Where-Object { $_.Name -ne $name })
+    if ([string]$script:settings.ventoProfile -eq $name) { $script:settings.ventoProfile = ''; $sync.Settings.ventoProfile = '' }
+    Close-ProfileDialog
+    Update-GlassProfiles
+    Update-TrayProfiles
+})
+(G 'GoHotkeys').Add_Click({ (G 'NavSettings').IsChecked = $true })
 # --- Glass: update notice --------------------------------------------------
 (G 'InfoClose').Add_Click({ (G 'InfoBar').Visibility = 'Collapsed' })
 (G 'InfoRestart').Add_Click({ Install-Update })
@@ -5398,6 +5604,7 @@ function Apply-VentoProfile([string]$name) {
     $script:saveTimer.Stop(); $script:saveTimer.Start()
     Update-TrayProfiles
     if ($el.SettingsOverlay -and $el.SettingsOverlay.Visibility -eq 'Visible') { Build-VentoScenes }
+    try { Update-GlassProfiles } catch { }
 }
 # The cycle hotkey: step to the next profile in the list.
 function Cycle-VentoProfile {
@@ -8440,6 +8647,7 @@ foreach ($m in 'quiet','normal','performance','curve','auto') {
 $script:trayProfileMenu = New-Object System.Windows.Forms.ToolStripMenuItem 'Profiles'
 [void]$menu.Items.Add($script:trayProfileMenu)
 Update-TrayProfiles
+try { Update-GlassProfiles } catch { }
 [void]$menu.Items.Add('-')
 $script:miOsd = $menu.Items.Add('Overlay (OSD)')
 $script:osdModePrev = $null
