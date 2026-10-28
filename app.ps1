@@ -5796,7 +5796,7 @@ namespace VentoNative {
       }
     }
     public static int Gap = 120;
-    public static void Disconnect() {    public static void Disconnect() { lock (Gate) { s_want = false; s_q.Clear(); Monitor.PulseAll(Gate); } }
+    public static void Disconnect() { lock (Gate) { s_want = false; s_q.Clear(); Monitor.PulseAll(Gate); } }
 
     public static bool Send(byte[] f) {
       if (f == null || f.Length < 4 || f[0] != 0xBC || f[f.Length - 1] != 0x55 || f[2] != f.Length - 4) return false;
