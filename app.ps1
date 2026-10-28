@@ -6468,10 +6468,9 @@ function Get-LedLoopFrame($lp, [double]$t) {
         'jump' { return @($cols[$i], 1.0) }
         'breathe' { return @($cols[$i], (0.08 + 0.92 * [math]::Sin([math]::PI * $u))) }
         default {
-            # hold the color for 40% of its time, then blend into the next
-            if ($u -lt 0.4 -or $n -eq 1) { return @($cols[$i], 1.0) }
-            $k = ($u - 0.4) / 0.6; $k = $k * $k * (3 - 2 * $k)
-            return @((Mix-LedHex $cols[$i] $cols[($i + 1) % $n] $k), 1.0)
+            # flow straight on into the next color - no hold, no easing (both read as a pause)
+            if ($n -eq 1) { return @($cols[$i], 1.0) }
+            return @((Mix-LedHex $cols[$i] $cols[($i + 1) % $n] $u), 1.0)
         }
     }
 }
