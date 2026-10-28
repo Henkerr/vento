@@ -5860,7 +5860,7 @@ namespace VentoNative {
           else if (s_mode == 2) b = Raw((int)Math.Max(1, Math.Round(PlayBri * (0.08 + 0.92 * Math.Sin(Math.PI * u)))));
           else if (s_mode == 3) {
             // dim out over the end of a color and back up over the start of the next
-            double tr = Math.Min(0.45, s_sec * 0.25) / s_sec, k2 = 1;
+            double tr = Math.Min(1.2, s_sec * 0.35) / s_sec, k2 = 1;
             if (u < tr) k2 = u / tr; else if (u > 1 - tr) k2 = (1 - u) / tr;
             k2 = k2 * k2 * (3 - 2 * k2);
             b = (int)Math.Round(100 + (Raw(PlayBri) - 100) * k2);
