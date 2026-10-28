@@ -5821,11 +5821,11 @@ namespace VentoNative {
     public static string Status() { lock (Gate) { return s_state + ";" + s_connectMs + ";" + s_q.Count + ";" + s_err; } }
 
     // --- color loops play here, on their own thread and a 1 ms clock, at a
-    // steady 30 frames a second (measured smooth on the strip; the UI timer
-    // was too uneven). Colors are 0xRRGGBB; mode 0 flows from color to color,
-    // 1 jumps, 2 holds each color and breathes the brightness, 3 holds each
-    // color and dims through dark into the next (no color in between).
-    public const int Fps = 30;
+    // steady 50 frames a second (the strip kept up at 50 in the bench; the UI
+    // timer was too uneven). Colors are 0xRRGGBB; mode 0 flows from color to
+    // color, 1 jumps, 2 holds each color and breathes the brightness, 3 holds
+    // each color and dims through dark into the next (no color in between).
+    public const int Fps = 50;
     public static volatile int PlayBri = 100;
     public static volatile int Current = -1;
     public static volatile int Frames;
@@ -5851,7 +5851,7 @@ namespace VentoNative {
     static void PlayRun() {
       timeBeginPeriod(1);
       try {
-        var sw = Stopwatch.StartNew(); long k = 0; int lastC = -1, lastB = -1;
+        var sw = Stopwatch.StartNew(); long k = 0; int lastC = -1, lastB = -1, lastP = -1;
         while (s_play) {
           int n = s_cols.Length;
           double pos = sw.Elapsed.TotalSeconds / s_sec; int i = (int)(Math.Floor(pos) % n); double u = pos - Math.Floor(pos);
@@ -5859,11 +5859,17 @@ namespace VentoNative {
           if (s_mode == 0 && n > 1) c = Mix(c, s_cols[(i + 1) % n], u);
           else if (s_mode == 2) b = Raw((int)Math.Max(1, Math.Round(PlayBri * (0.08 + 0.92 * Math.Sin(Math.PI * u)))));
           else if (s_mode == 3) {
-            // dim out over the end of a color and back up over the start of the next
-            double tr = Math.Min(1.2, s_sec * 0.35) / s_sec, k2 = 1;
+            // dim out over the end of a color and back up over the start of the
+            // next, in whole 1% steps at an even pace: 100 steps take 2 s at
+            // 50 fps, so a color of 5 s or more moves exactly 1% a frame
+            double tr = Math.Min(2.0, s_sec * 0.4) / s_sec, k2 = 1;
             if (u < tr) k2 = u / tr; else if (u > 1 - tr) k2 = (1 - u) / tr;
-            k2 = k2 * k2 * (3 - 2 * k2);
-            b = (int)Math.Round(100 + (Raw(PlayBri) - 100) * k2);
+            int pct = (int)Math.Round(1 + (PlayBri - 1) * k2);
+            // a late frame would skip a step: never move more than the pace needs
+            // (1% at 5 s a color and up; shorter colors need bigger steps)
+            int most = Math.Max(1, (int)Math.Ceiling((PlayBri - 1) / (tr * s_sec * Fps)));
+            if (lastP > 0 && Math.Abs(pct - lastP) > most) pct = lastP + Math.Sign(pct - lastP) * most;
+            lastP = pct; b = Raw(pct);
           }
           byte[] f = HsvFrame(c);
           int key = (f[3] << 24) | (f[4] << 16) | (f[5] << 8) | f[6];
