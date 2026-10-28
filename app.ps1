@@ -5758,6 +5758,8 @@ try { $script:ledEnabled = [int](Get-ItemProperty 'HKCU:\Software\Vento' -Name L
 $script:ledCs = @'
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
@@ -5796,8 +5798,9 @@ namespace VentoNative {
         Monitor.PulseAll(Gate);
       }
     }
-    public static int Gap = 35;
-    public static void Disconnect() { lock (Gate) { s_want = false; s_q.Clear(); Monitor.PulseAll(Gate); } }
+    // pause after each write; the loop player paces itself, so none is needed
+    public static int Gap = 0;
+    public static void Disconnect() { StopPlay(); lock (Gate) { s_want = false; s_q.Clear(); Monitor.PulseAll(Gate); } }
 
     public static bool Send(byte[] f) {
       if (f == null || f.Length < 4 || f[0] != 0xBC || f[f.Length - 1] != 0x55 || f[2] != f.Length - 4) return false;
@@ -5817,12 +5820,87 @@ namespace VentoNative {
     // "state;connectMs;queued;err"  state: disconnected|connecting|connected|retrying
     public static string Status() { lock (Gate) { return s_state + ";" + s_connectMs + ";" + s_q.Count + ";" + s_err; } }
 
-    // WinRT async without AsTask (its overloads need the full Windows.winmd union)
+    // --- color loops play here, on their own thread and a 1 ms clock, at a
+    // steady 30 frames a second (measured smooth on the strip; the UI timer
+    // was too uneven). Colors are 0xRRGGBB; mode 0 flows from color to color,
+    // 1 jumps, 2 holds each color and breathes the brightness.
+    public const int Fps = 30;
+    public static volatile int PlayBri = 100;
+    public static volatile int Current = -1;
+    public static volatile int Frames;
+    static volatile bool s_play;
+    static Thread s_pl;
+    static int[] s_cols;
+    static double s_sec;
+    static int s_mode;
+    [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint p);
+    [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint p);
+
+    public static void Play(int[] rgb, double secPerColor, int mode, int bri) {
+      StopPlay();
+      if (rgb == null || rgb.Length == 0) return;
+      s_cols = (int[])rgb.Clone(); s_sec = Math.Max(0.2, secPerColor); s_mode = mode; PlayBri = bri; Frames = 0;
+      s_play = true;
+      s_pl = new Thread(PlayRun); s_pl.IsBackground = true; s_pl.Name = "VentoLedPlay"; s_pl.Priority = ThreadPriority.AboveNormal; s_pl.Start();
+    }
+    public static void StopPlay() {
+      var t = s_pl; s_play = false; s_pl = null; Current = -1;
+      if (t != null && t != Thread.CurrentThread) t.Join(500);
+    }
+    static void PlayRun() {
+      timeBeginPeriod(1);
+      try {
+        var sw = Stopwatch.StartNew(); long k = 0; int lastC = -1, lastB = -1;
+        while (s_play) {
+          int n = s_cols.Length;
+          double pos = sw.Elapsed.TotalSeconds / s_sec; int i = (int)(Math.Floor(pos) % n); double u = pos - Math.Floor(pos);
+          int c = s_cols[i], b = -1;
+          if (s_mode == 0 && n > 1) c = Mix(c, s_cols[(i + 1) % n], u);
+          else if (s_mode == 2) b = (int)Math.Max(1, Math.Round(PlayBri * (0.08 + 0.92 * Math.Sin(Math.PI * u))));
+          byte[] f = HsvFrame(c);
+          int key = (f[3] << 24) | (f[4] << 16) | (f[5] << 8) | f[6];
+          if (key != lastC) { Send(f); lastC = key; }
+          if (b >= 0 && b != lastB) { Send(BriFrame(b)); lastB = b; }
+          Current = c; Frames++;
+          k++;
+          long wait = k * 1000 / Fps - sw.ElapsedMilliseconds;
+          if (wait > 0) Thread.Sleep((int)wait);
+          else if (wait < -250) k = sw.ElapsedMilliseconds * Fps / 1000;   // the PC stalled: don't race to catch up
+        }
+      } finally { timeEndPeriod(1); }
+    }
+    static int Mix(int a, int b, double t) {
+      int r = (int)Math.Round(((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * t);
+      int g = (int)Math.Round(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * t);
+      int bl = (int)Math.Round((a & 255) + ((b & 255) - (a & 255)) * t);
+      return (r << 16) | (g << 8) | bl;
+    }
+    // the strip takes hue in degrees and saturation 0-1000, no value channel
+    static byte[] HsvFrame(int c) {
+      double r = ((c >> 16) & 255) / 255.0, g = ((c >> 8) & 255) / 255.0, b = (c & 255) / 255.0;
+      double max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b)), d = max - min, h = 0;
+      if (d > 0) {
+        if (max == r) h = 60 * (((g - b) / d) % 6);
+        else if (max == g) h = 60 * ((b - r) / d + 2);
+        else h = 60 * ((r - g) / d + 4);
+      }
+      if (h < 0) h += 360;
+      int hi = (int)Math.Round(h) % 360, si = max > 0 ? (int)Math.Round(d / max * 1000) : 0;
+      return new byte[] { 0xBC, 0x04, 6, (byte)(hi >> 8), (byte)hi, (byte)(si >> 8), (byte)si, 0, 0, 0x55 };
+    }
+    // brightness percent 1-100 to the strip's 100-1000
+    static byte[] BriFrame(int pct) {
+      int v = 100 + (int)Math.Round((Math.Min(100, Math.Max(1, pct)) - 1) * 900 / 99.0);
+      return new byte[] { 0xBC, 0x05, 6, (byte)(v >> 8), (byte)v, 0, 0, 0, 0, 0x55 };
+    }
+
+    // WinRT async without AsTask (its overloads need the full Windows.winmd union);
+    // woken by the completion callback, so a write isn't rounded up to a 15 ms poll
     static T Wait<T>(IAsyncOperation<T> op) {
-      int t0 = Environment.TickCount;
-      while (op.Status == AsyncStatus.Started) {
-        if (Environment.TickCount - t0 > 10000) { try { op.Cancel(); } catch { } throw new TimeoutException("timed out"); }
-        Thread.Sleep(15);
+      if (op.Status == AsyncStatus.Started) {
+        var done = new ManualResetEvent(false);
+        op.Completed = (o, s) => done.Set();
+        if (!done.WaitOne(10000)) { try { op.Cancel(); } catch { } throw new TimeoutException("timed out"); }
       }
       if (op.Status != AsyncStatus.Completed) throw (op.ErrorCode ?? new Exception(op.Status.ToString()));
       return op.GetResults();
@@ -5949,9 +6027,7 @@ namespace VentoNative {
         try {
           var st = Wait(s_ch.WriteValueAsync(Buf(f), GattWriteOption.WriteWithoutResponse));
           if (st != GattCommunicationStatus.Success) throw new Exception("write " + st);
-          // a short gap between writes; with same-command frames coalesced in
-          // the queue this caps a loop at ~20 frames a second without a backlog
-          Thread.Sleep(Gap);
+          if (Gap > 0) Thread.Sleep(Gap);
         } catch (Exception e) {
           Exception x = e is AggregateException && e.InnerException != null ? e.InnerException : e;
           Drop(); lock (Gate) { s_err = x.Message.Replace(";", ","); }
@@ -6166,10 +6242,6 @@ function ConvertFrom-LedHsv([double]$h, [double]$s) {
     $rgb = switch ([int][math]::Floor($h / 60) % 6) { 0 { $c, $x, 0 } 1 { $x, $c, 0 } 2 { 0, $c, $x } 3 { 0, $x, $c } 4 { $x, 0, $c } default { $c, 0, $x } }
     '#{0:X2}{1:X2}{2:X2}' -f [int](($rgb[0] + $m) * 255), [int](($rgb[1] + $m) * 255), [int](($rgb[2] + $m) * 255)
 }
-function Mix-LedHex([string]$a, [string]$b, [double]$t) {
-    $ca = Get-GColor $a; $cb = Get-GColor $b
-    '#{0:X2}{1:X2}{2:X2}' -f [int]($ca.R + ($cb.R - $ca.R) * $t), [int]($ca.G + ($cb.G - $ca.G) * $t), [int]($ca.B + ($cb.B - $ca.B) * $t)
-}
 
 # --- frames ---
 function New-LedFrame([int]$cmd, [int[]]$payload) {
@@ -6381,7 +6453,9 @@ function Set-LedColor([int]$h, [int]$s, [switch]$Now) {
     (G 'LedBriV').Text = '{0}%' -f $v
     if ($script:ledSync) { return }
     $script:settings.ledBri = $v; $script:saveTimer.Stop(); $script:saveTimer.Start()
-    Defer-Led 'bri' $v
+    # a breathing loop owns the brightness; it breathes up to the new value instead
+    if ($script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Trans -eq 'breathe' -and ('VentoNative.Led' -as [type])) { [VentoNative.Led]::PlayBri = $v }
+    else { Defer-Led 'bri' $v }
     Update-LedPreview
 })
 (G 'LedSpeed').Add_ValueChanged({ param($sd, $e)
@@ -6453,43 +6527,25 @@ function Set-LedEffect([int]$n) {
     Update-LedPreview
 }
 
-# --- my color loops: Vento plays them, one color frame per tick ---
+# --- my color loops: the native player streams them (VentoNative.Led.Play);
+# this timer only mirrors the color it is on into the preview bar ---
 function Get-LedLoop([string]$name) { @($script:settings.ledLoops) | Where-Object { $_.Name -eq $name } | Select-Object -First 1 }
 $script:ledLoopTimer = New-Object System.Windows.Threading.DispatcherTimer
-$script:ledLoopTimer.Interval = [TimeSpan]::FromMilliseconds(50)
+$script:ledLoopTimer.Interval = [TimeSpan]::FromMilliseconds(100)
 $script:ledLoopRun = $null
-$script:ledLoopLast = ''
-function Get-LedLoopFrame($lp, [double]$t) {
-    # returns @(hex, brightnessFactor 0..1)
-    $cols = @($lp.Colors); $n = $cols.Count
-    $seg = [double]$lp.Half * 0.5
-    $pos = $t / $seg; $i = [int][math]::Floor($pos) % $n; $u = $pos - [math]::Floor($pos)
-    switch ([string]$lp.Trans) {
-        'jump' { return @($cols[$i], 1.0) }
-        'breathe' { return @($cols[$i], (0.08 + 0.92 * [math]::Sin([math]::PI * $u))) }
-        default {
-            # flow straight on into the next color - no hold, no easing (both read as a pause)
-            if ($n -eq 1) { return @($cols[$i], 1.0) }
-            return @((Mix-LedHex $cols[$i] $cols[($i + 1) % $n] $u), 1.0)
-        }
-    }
-}
 $script:ledLoopTimer.Add_Tick({
-    $r = $script:ledLoopRun
-    if (-not $r) { $script:ledLoopTimer.Stop(); return }
-    $t = ([DateTime]::Now - $r.Start).TotalSeconds
-    $fr = Get-LedLoopFrame $r.Loop $t
-    $hex = [string]$fr[0]
-    $key = '{0}/{1:0.00}' -f $hex, $fr[1]
-    if ($key -eq $script:ledLoopLast) { return }
-    $script:ledLoopLast = $key
-    [void](Send-LedHex $hex)
-    if ([string]$r.Loop.Trans -eq 'breathe') { [void](Send-LedBri ([int][math]::Max(1, [int]$script:settings.ledBri * $fr[1]))) }
-    if ((G 'PageLights').Visibility -eq 'Visible') { Update-LedPreview $hex }
+    if (-not $script:ledLoopRun) { $script:ledLoopTimer.Stop(); return }
+    if ((G 'PageLights').Visibility -ne 'Visible' -or -not ('VentoNative.Led' -as [type])) { return }
+    $c = [VentoNative.Led]::Current
+    if ($c -ge 0) { Update-LedPreview ('#{0:X6}' -f $c) }
 })
 function Start-LedLoop($lp) {
     $script:ledLoopRun = @{ Loop = $lp; Start = [DateTime]::Now }
-    $script:ledLoopLast = ''
+    if ('VentoNative.Led' -as [type]) {
+        $rgb = [int[]]@(@($lp.Colors) | ForEach-Object { [Convert]::ToInt32(([string]$_).TrimStart('#'), 16) })
+        $mode = switch ([string]$lp.Trans) { 'jump' { 1 } 'breathe' { 2 } default { 0 } }
+        [VentoNative.Led]::Play($rgb, [double]$lp.Half * 0.5, $mode, [int]$script:settings.ledBri)
+    }
     $script:settings.ledKind = 'loop'; $script:settings.ledLoop = [string]$lp.Name
     $script:saveTimer.Stop(); $script:saveTimer.Start()
     $script:ledLoopTimer.Start()
@@ -6500,6 +6556,7 @@ function Stop-LedLoop {
     if (-not $script:ledLoopRun) { return }
     $was = $script:ledLoopRun
     $script:ledLoopRun = $null; $script:ledLoopTimer.Stop()
+    if ('VentoNative.Led' -as [type]) { [VentoNative.Led]::StopPlay() }
     # breathing leaves the brightness wherever it was; put the slider's value back
     if ([string]$was.Loop.Trans -eq 'breathe') { [void](Send-LedBri ([int]$script:settings.ledBri)) }
     Show-LedLoops
