@@ -6,6 +6,14 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.8 — 2026-10-28
+
+Lights page: a Mi Smart LED Bulb on the same Wi-Fi joins the strip, with power, brightness,
+color and white light, and your color loops play on the bulb by itself (they keep going after
+Vento closes). Mi Home on the phone keeps working alongside. Nothing changes for anyone else.
+
+---
+
 ## 1.8.7 — 2026-10-28
 
 Lights page: color loops now play on their own steady clock (50 frames a second), so flowing loops
