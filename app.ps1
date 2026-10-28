@@ -6152,7 +6152,12 @@ function Send-Led([int]$cmd, [int[]]$payload) {
     [VentoNative.Led]::Send((New-LedFrame $cmd $payload))
 }
 function Send-LedPower([bool]$on) { Send-Led 0x01 @([int]$on) }
-function Send-LedBri([int]$pct) { $v = [int](Limit $pct 1 100) * 10; Send-Led 0x13 @(($v -shr 8), ($v -band 0xFF)) }
+# brightness is 0x05, 100-1000 (the strip app's slider range); 0x13 is that app's
+# color-ring value and shifts the color, so it is never sent
+function Send-LedBri([int]$pct) {
+    $v = 100 + [int][math]::Round(([int](Limit $pct 1 100) - 1) * 900 / 99)
+    Send-Led 0x05 @(($v -shr 8), ($v -band 0xFF), 0, 0, 0, 0)
+}
 function Send-LedHsv([int]$h, [int]$s) { $sv = [int](Limit $s 0 100) * 10; Send-Led 0x04 @(($h -shr 8), ($h -band 0xFF), ($sv -shr 8), ($sv -band 0xFF), 0, 0) }
 function Send-LedHex([string]$hex) { $hs = ConvertTo-LedHsv $hex; Send-LedHsv $hs[0] $hs[1] }
 function Send-LedFx([int]$n) { Send-Led 0x06 @([int][math]::Floor($n / 255), ($n % 255)) }
