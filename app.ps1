@@ -5779,6 +5779,7 @@ namespace VentoNative {
     static Thread s_th;
     static BluetoothLEDevice s_dev;
     static GattDeviceService s_svc;
+    static GattSession s_ses;
     static GattCharacteristic s_ch;
     static ulong s_addr;
     static bool s_want;          // user asked to be connected
@@ -5829,9 +5830,10 @@ namespace VentoNative {
 
     static void Drop() {
       if (s_dev != null) { try { s_dev.ConnectionStatusChanged -= OnStatus; } catch { } }
+      try { if (s_ses != null) { s_ses.MaintainConnection = false; s_ses.Dispose(); } } catch { }
       try { if (s_svc != null) s_svc.Dispose(); } catch { }
       try { if (s_dev != null) s_dev.Dispose(); } catch { }
-      s_svc = null; s_dev = null; s_ch = null;
+      s_svc = null; s_dev = null; s_ch = null; s_ses = null;
     }
 
     static void OnStatus(BluetoothLEDevice d, object o) {
@@ -5863,6 +5865,19 @@ namespace VentoNative {
         }
         if (dev == null) throw new Exception(heard == BluetoothAddressType.Unspecified ? Busy : "Strip not found. Is it powered?");
         s_dev = dev;
+        // Ask Windows to hold the link and keep retrying it, as the strip's
+        // weak radio often misses a single connect attempt; then wait for it.
+        try {
+          s_ses = Wait(GattSession.FromDeviceIdAsync(dev.BluetoothDeviceId));
+          if (s_ses != null) {
+            s_ses.MaintainConnection = true;
+            int w0 = Environment.TickCount;
+            while (s_ses.SessionStatus != GattSessionStatus.Active && Environment.TickCount - w0 < 20000) {
+              lock (Gate) { if (!s_want) throw new Exception("cancelled"); }
+              Thread.Sleep(100);
+            }
+          }
+        } catch (Exception se) { if (se.Message == "cancelled") throw; }
         s_heard = heard != BluetoothAddressType.Unspecified;
         GattDeviceServicesResult sr = null;
         for (int i = 0; i < 3; i++) {
