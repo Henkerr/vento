@@ -5795,7 +5795,7 @@ namespace VentoNative {
         Monitor.PulseAll(Gate);
       }
     }
-    public static int Gap = 120;
+    public static int Gap = 35;
     public static void Disconnect() { lock (Gate) { s_want = false; s_q.Clear(); Monitor.PulseAll(Gate); } }
 
     public static bool Send(byte[] f) {
@@ -5839,23 +5839,31 @@ namespace VentoNative {
     }
     static bool s_lost;
     static BluetoothAddressType s_type = BluetoothAddressType.Unspecified;
+    static bool s_heard;
+    const string Busy = "The strip is silent, so another device is probably connected to it. Turn off the phone's Bluetooth or unplug the strip for a few seconds, then connect again.";
 
     static bool Open(ulong addr) {
       int t0 = Environment.TickCount;
       try {
-        // hear the strip first: its advertisement carries the address type
-        // (it uses a random address), which a bare connect by address guesses wrong
-        // A strip that is still linked (a half-open connection, or one Windows
-        // kept) stops advertising, so the type learned once is reused and a
-        // random address is assumed before the first one: either way the
-        // connect below can pick up a link that already exists.
-        BluetoothAddressType at = Listen(addr, s_type == BluetoothAddressType.Unspecified ? 12000 : 4000);
-        if (at == BluetoothAddressType.Unspecified) at = s_type != BluetoothAddressType.Unspecified ? s_type : BluetoothAddressType.Random;
-        else s_type = at;
-        var dev = Wait(BluetoothLEDevice.FromBluetoothAddressAsync(addr, at));
-        if (dev == null) throw new Exception("Strip not found. Is it powered, and is the phone app closed?");
-        if (dev.ConnectionStatus == BluetoothConnectionStatus.Connected) s_type = at;
+        // Hear the strip first: its advertisement carries the address type,
+        // which a bare connect by address can guess wrong. A strip that is
+        // linked to something stops advertising; then every type is tried, the
+        // one learned before first, so a link Windows still holds is reused.
+        BluetoothAddressType heard = Listen(addr, s_type == BluetoothAddressType.Unspecified ? 12000 : 5000);
+        var types = new List<BluetoothAddressType>();
+        if (heard != BluetoothAddressType.Unspecified) types.Add(heard);
+        else {
+          if (s_type != BluetoothAddressType.Unspecified) types.Add(s_type);
+          foreach (var t in new[] { BluetoothAddressType.Public, BluetoothAddressType.Random }) if (!types.Contains(t)) types.Add(t);
+        }
+        BluetoothLEDevice dev = null; BluetoothAddressType at = BluetoothAddressType.Unspecified;
+        foreach (var t in types) {
+          try { dev = Wait(BluetoothLEDevice.FromBluetoothAddressAsync(addr, t)); } catch { dev = null; }
+          if (dev != null) { at = t; break; }
+        }
+        if (dev == null) throw new Exception(heard == BluetoothAddressType.Unspecified ? Busy : "Strip not found. Is it powered?");
         s_dev = dev;
+        s_heard = heard != BluetoothAddressType.Unspecified;
         GattDeviceServicesResult sr = null;
         for (int i = 0; i < 3; i++) {
           sr = Wait(dev.GetGattServicesForUuidAsync(Svc, BluetoothCacheMode.Uncached));
@@ -5868,6 +5876,7 @@ namespace VentoNative {
         var cr = Wait(s_svc.GetCharacteristicsForUuidAsync(Chr, BluetoothCacheMode.Uncached));
         if (cr.Status != GattCommunicationStatus.Success || cr.Characteristics.Count == 0) throw new Exception("characteristic " + cr.Status);
         s_ch = cr.Characteristics[0];
+        s_type = at;
         lock (Gate) { s_lost = false; }
         dev.ConnectionStatusChanged += OnStatus;
         lock (Gate) { s_state = "connected"; s_connectMs = Environment.TickCount - t0; s_err = ""; }
@@ -5875,7 +5884,9 @@ namespace VentoNative {
       } catch (Exception e) {
         Exception x = e is AggregateException && e.InnerException != null ? e.InnerException : e;
         Drop();
-        lock (Gate) { s_err = x.Message.Replace(";", ","); }
+        // silence plus no answer almost always means another device holds the strip
+        string msg = !s_heard && (x is TimeoutException || x.Message.Contains("Unreachable")) ? Busy : x.Message;
+        lock (Gate) { s_err = msg.Replace(";", ","); }
         return false;
       }
     }
@@ -5923,8 +5934,8 @@ namespace VentoNative {
         try {
           var st = Wait(s_ch.WriteValueAsync(Buf(f), GattWriteOption.WriteWithoutResponse));
           if (st != GattCommunicationStatus.Success) throw new Exception("write " + st);
-          // the strip garbles frames that arrive close together (its own app
-          // sends one per finished gesture), so writes are spaced out
+          // a short gap between writes; with same-command frames coalesced in
+          // the queue this caps a loop at ~20 frames a second without a backlog
           Thread.Sleep(Gap);
         } catch (Exception e) {
           Exception x = e is AggregateException && e.InnerException != null ? e.InnerException : e;
@@ -6430,7 +6441,7 @@ function Set-LedEffect([int]$n) {
 # --- my color loops: Vento plays them, one color frame per tick ---
 function Get-LedLoop([string]$name) { @($script:settings.ledLoops) | Where-Object { $_.Name -eq $name } | Select-Object -First 1 }
 $script:ledLoopTimer = New-Object System.Windows.Threading.DispatcherTimer
-$script:ledLoopTimer.Interval = [TimeSpan]::FromMilliseconds(160)
+$script:ledLoopTimer.Interval = [TimeSpan]::FromMilliseconds(50)
 $script:ledLoopRun = $null
 $script:ledLoopLast = ''
 function Get-LedLoopFrame($lp, [double]$t) {
