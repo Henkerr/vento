@@ -6,6 +6,12 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.4 — 2026-10-28
+
+The Lights page could not reach Bluetooth in 1.8.3; fixed. Nothing changes for anyone else.
+
+---
+
 ## 1.8.3 — 2026-10-28
 
 Fixes for the opt-in Lights page: the right brightness command, only the effects the strip runs,
