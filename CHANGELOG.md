@@ -6,6 +6,13 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.5 — 2026-10-28
+
+Lights page: the color loop editor gets its own color picker, and a strip that stopped advertising
+is reconnected directly. Nothing changes for anyone else.
+
+---
+
 ## 1.8.4 — 2026-10-28
 
 The Lights page could not reach Bluetooth in 1.8.3; fixed. Nothing changes for anyone else.
