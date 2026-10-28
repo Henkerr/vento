@@ -6,6 +6,15 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.9 — 2026-10-28
+
+Lights page: each light is now a compact card (name, state, power) that opens on a click, and
+you can rename them. Play on a color loop plays on every light in reach, with a button per light
+to play it on just one. Setup and Settings > About show the new Vento logo, and the update
+setting has a clearer icon.
+
+---
+
 ## 1.8.8 — 2026-10-28
 
 Lights page: a Mi Smart LED Bulb on the same Wi-Fi joins the strip, with power, brightness,
