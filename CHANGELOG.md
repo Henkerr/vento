@@ -6,6 +6,13 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.3 — 2026-10-28
+
+Fixes for the opt-in Lights page: the right brightness command, only the effects the strip runs,
+and sliders that send once you let go instead of flooding the strip. Nothing changes for anyone else.
+
+---
+
 ## 1.8.2 — 2026-10-28
 
 Groundwork for an opt-in page for a Bluetooth LED strip. It stays hidden unless switched on for this PC,
