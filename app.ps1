@@ -435,6 +435,7 @@ function Get-DefaultSettings {
         # Lights: a BLE LED strip (MR Star protocol). The page shows only where
         # HKCU\Software\Vento\Lights = 1, so these are inert everywhere else.
         ledAddr          = '4142C00A9E32' # the strip's Bluetooth address, hex
+        ledName          = 'LED strip' # what the Lights page calls it (renamable)
         ledAutoConn      = $false      # connect when Vento starts (and keep the link)
         ledOn            = $true       # last power state Vento sent
         ledBri           = 100         # brightness %
@@ -454,6 +455,7 @@ function Get-DefaultSettings {
         bulbDid          = 245847118   # its miIO device id, how a broadcast reply is recognised
         bulbBri          = 100         # brightness % (also what loops play at)
         bulbFlow         = ''          # the color loop the bulb is playing
+        bulbName         = 'Mi bulb'   # what the Lights page calls it (renamable)
         osdCorner        = 'tr'        # overlay corner: tr | tl | bl | br
         osdScale         = 100         # overlay scale %
         osdOnSecondary   = $false      # place the overlay on the secondary monitor
@@ -726,6 +728,11 @@ function Import-Settings {
     try { $s.bulbDid = [long](Limit $s.bulbDid 0 4294967295) } catch { $s.bulbDid = 245847118 }
     try { $s.bulbBri = [int](Limit $s.bulbBri 1 100) } catch { $s.bulbBri = 100 }
     $s.bulbFlow = [string]$s.bulbFlow
+    foreach ($k in @(@('ledName', 'LED strip'), @('bulbName', 'Mi bulb'))) {
+        $v = ([string]$s[$k[0]]).Trim()
+        if ($v.Length -gt 24) { $v = $v.Substring(0, 24).Trim() }
+        $s[$k[0]] = $(if ($v) { $v } else { $k[1] })
+    }
     foreach ($k in 'osdColFps','osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan','osdColPods') {
         $v = [string]$s[$k]
         if ($v) { try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($v) } catch { $v = '' } }
@@ -6554,6 +6561,7 @@ function Update-LedStatus {
     $on = $state -eq 'connected'
     $ctl = G 'LedControls'
     $ctl.IsEnabled = $on; $ctl.Opacity = $(if ($on) { 1 } else { 0.45 })
+    (G 'LedPower').IsEnabled = $on
     if ($on -and $script:ledLastState -ne 'connected') {
         # a loop the user left playing picks up where the link comes back
         if ([string]$script:settings.ledKind -eq 'loop' -and $script:settings.ledLoop -and -not $script:ledLoopTimer.IsEnabled) {
@@ -6574,6 +6582,8 @@ function Update-LedPreview([string]$liveHex = '') {
     if (-not $s.ledOn) {
         $bar.Background = Get-GBrush '#2A2A2A'; $halo.Background = $null
         (G 'LedNow').Text = 'Off'
+        (G 'LedGlyph').Foreground = $script:app.FindResource('TextTertiaryBrush')
+        (G 'LedSum').Text = $script:ledSep + 'Off'
         return
     }
     $kind = [string]$s.ledKind
@@ -6595,6 +6605,9 @@ function Update-LedPreview([string]$liveHex = '') {
     }
     $bar.Background = $br; $halo.Background = $br
     $halo.Opacity = 0.25 + 0.45 * ([int]$s.ledBri / 100.0)
+    # the device header shows the same, so a closed card still tells what the strip is doing
+    (G 'LedGlyph').Foreground = $br
+    (G 'LedSum').Text = $script:ledSep + (G 'LedNow').Text
 }
 
 # --- color: swatches and the hue / saturation sliders ---
@@ -6780,26 +6793,45 @@ function Show-LedLoops {
         $t1 = New-Object System.Windows.Controls.TextBlock; $t1.Text = $lp.Name; $t1.Style = $script:app.FindResource('Body')
         $trName = @{ fade = 'Fade'; dim = 'Dim'; jump = 'Jump'; breathe = 'Breathe' }[[string]$lp.Trans]
         $t2 = New-Object System.Windows.Controls.TextBlock; $t2.Style = $script:app.FindResource('Caption')
-        $where = @($(if ($playing) { 'Playing' }), $(if ($onBulb) { 'On the bulb' })) | Where-Object { $_ }
+        $where = $(if ($script:bulbEnabled) { @($(if ($playing) { 'On ' + $script:settings.ledName }), $(if ($onBulb) { 'On ' + $script:settings.bulbName })) | Where-Object { $_ } } elseif ($playing) { 'Playing' })
         $t2.Text = '{0} colors{1}{2}{1}{3} s each{4}' -f @($lp.Colors).Count, $script:ledSep, $trName, (Format-LedSec $lp.Half), $(if ($where) { $script:ledSep + ($where -join $script:ledSep) } else { '' })
         [void]$txt.Children.Add($t1); [void]$txt.Children.Add($t2)
         $btns = New-Object System.Windows.Controls.StackPanel; $btns.Orientation = 'Horizontal'; $btns.VerticalAlignment = 'Center'
         [System.Windows.Controls.Grid]::SetColumn($btns, 2)
-        $specs = @(, @($(if ($playing) { [char]0xE71A } else { [char]0xE768 }), 'play', $(if ($playing) { 'Stop' } elseif ($script:bulbEnabled) { 'Play on the strip' } else { 'Play' })))
-        if ($script:bulbEnabled) { $specs += , @([char]0xEA80, 'bulb', $(if ($onBulb) { 'Stop on the bulb' } else { 'Play on the bulb' })) }
+        # play / stop covers every device in reach; with two devices each also gets its own toggle
+        $any = $playing -or $onBulb
+        $specs = @(, @($(if ($any) { [char]0xE71A } else { [char]0xE768 }), 'play', $(if ($any) { 'Stop' } elseif ($script:bulbEnabled) { 'Play on every light in reach' } else { 'Play' })))
+        if ($script:bulbEnabled) {
+            $specs += , @([char]0xE790, 'strip', ($(if ($playing) { 'Stop on ' } else { 'Play only on ' }) + $script:settings.ledName))
+            $specs += , @([char]0xEA80, 'bulb', ($(if ($onBulb) { 'Stop on ' } else { 'Play only on ' }) + $script:settings.bulbName))
+        }
         $specs += , @([char]0xE70F, 'edit', 'Edit'); $specs += , @([char]0xE74D, 'del', 'Delete')
         foreach ($spec in $specs) {
             $bt = New-Object System.Windows.Controls.Button
             $bt.Style = $script:app.FindResource('IconButton'); $bt.Content = [string]$spec[0]; $bt.FontSize = 14; $bt.ToolTip = $spec[2]
             $bt.Tag = @{ Act = $spec[1]; Name = [string]$lp.Name }
             # the strip plays only over the link; stopping stays possible
-            if ($spec[1] -eq 'play' -and -not $stripOn -and -not $playing) { $bt.IsEnabled = $false }
-            if ($spec[1] -eq 'bulb' -and $onBulb) { $bt.Foreground = $script:app.FindResource('AccentBrush') }
+            $bulbOn = $script:bulbEnabled -and $script:bulbWasOn
+            if ($spec[1] -eq 'play' -and -not $any -and -not $stripOn -and -not $bulbOn) { $bt.IsEnabled = $false }
+            if ($spec[1] -eq 'strip' -and -not $stripOn -and -not $playing) { $bt.IsEnabled = $false }
+            if ($spec[1] -eq 'bulb' -and -not $bulbOn -and -not $onBulb) { $bt.IsEnabled = $false }
+            if (($spec[1] -eq 'strip' -and $playing) -or ($spec[1] -eq 'bulb' -and $onBulb)) { $bt.Foreground = $script:app.FindResource('AccentBrush') }
             $bt.Add_Click({ param($sd, $e)
                 $a = $sd.Tag; $l = Get-LedLoop $a.Name
                 if (-not $l) { return }
                 switch ($a.Act) {
-                    'play' { if ($script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Name -eq $a.Name) { Stop-LedLoop; $script:settings.ledKind = 'color'; Update-LedPreview } else { Start-LedLoop $l } }
+                    'play' {
+                        $onStrip = $script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Name -eq $a.Name
+                        $onB = $script:bulbEnabled -and [string]$script:settings.bulbFlow -eq $a.Name
+                        if ($onStrip -or $onB) {
+                            if ($onStrip) { Stop-LedLoop; $script:settings.ledKind = 'color'; Update-LedPreview }
+                            if ($onB) { Stop-BulbFlow -Send }
+                        } else {
+                            if ($script:ledLastState -eq 'connected') { Start-LedLoop $l }
+                            if ($script:bulbEnabled -and $script:bulbWasOn) { Start-BulbFlow $l }
+                        }
+                    }
+                    'strip' { if ($script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Name -eq $a.Name) { Stop-LedLoop; $script:settings.ledKind = 'color'; Update-LedPreview } else { Start-LedLoop $l } }
                     'bulb' { if ([string]$script:settings.bulbFlow -eq $a.Name) { Stop-BulbFlow -Send } else { Start-BulbFlow $l } }
                     'edit' { Open-LedLoopEditor $l }
                     'del' {
@@ -6909,6 +6941,7 @@ $script:bulbEnabled = $script:bulbToken -match '^[0-9a-fA-F]{32}$'
 $script:bulbStarted = $false
 $script:bulbCompileStarted = $false
 $script:bulbTick = 0
+$script:bulbWasOn = $false
 $script:bulbLastProps = ''
 $script:bulbSync = $false
 # what the bulb last said (or was last told): on, brightness, rgb, white kelvin, mode 1 rgb / 2 white
@@ -7015,7 +7048,7 @@ function Update-BulbLook {
     elseif ($st.Mode -eq 2) { $br = Get-GBrush (ConvertFrom-BulbCt $st.Ct); $txt = 'White {0} K{1}{2}%' -f $st.Ct, $script:ledSep, $st.Bri }
     else { $hex = '#{0:X6}' -f $st.Rgb; $br = Get-GBrush $hex; $txt = '{0}{1}{2}%' -f $hex, $script:ledSep, $st.Bri }
     (G 'BulbGlyph').Foreground = $br
-    (G 'BulbNow').Text = $txt
+    (G 'BulbNow').Text = $script:ledSep + $txt
 }
 # a fresh status read from the bulb (it may have been changed from the phone)
 function Read-BulbProps([string]$p) {
@@ -7058,10 +7091,11 @@ function Update-BulbStatus {
     if ($ip -and $ip -ne [string]$script:settings.bulbIp) { $script:settings.bulbIp = $ip; Save-Bulb }
     $state = [string][VentoNative.Bulb]::State
     (G 'BulbState').Text = $(switch -Wildcard ($state) {
-        'ok' { 'Connected{0}{1}' -f $script:ledSep, $ip }
+        'ok' { 'Connected' }
         'idle' { 'Looking for the bulb...' }
         'noreply' { 'Not answering: is it switched on at the wall?' }
         default { $state.Substring(0, 1).ToUpper() + $state.Substring(1) } })
+    (G 'BulbState').ToolTip = $(if ($ip) { 'Over Wi-Fi at ' + $ip } else { $null })
     (G 'BulbDot').Fill = $(switch -Wildcard ($state) {
         'ok' { Get-GBrush '#6CCB5F' }
         'idle' { Get-GBrush '#FCE100' }
@@ -7070,6 +7104,9 @@ function Update-BulbStatus {
     # a refused command (error) still means the bulb is there
     $on = $state -ne 'noreply' -and $state -ne 'idle'
     $ctl = G 'BulbControls'; $ctl.IsEnabled = $on; $ctl.Opacity = $(if ($on) { 1 } else { 0.45 })
+    (G 'BulbPower').IsEnabled = $on
+    # the loop rows' bulb buttons follow it too
+    if ($on -ne $script:bulbWasOn) { $script:bulbWasOn = $on; Show-LedLoops }
     $p = [string][VentoNative.Bulb]::Props
     if ($p -and $p -ne $script:bulbLastProps) { $script:bulbLastProps = $p; Read-BulbProps $p }
 }
@@ -7118,10 +7155,60 @@ foreach ($hex in $script:ledSwatchHex) {
     Update-BulbLook
 })
 
+# --- device cards: a click on the header opens or closes the rest; the pencil renames ---
+$script:lightDevs = @(@{ K = 'Led'; Key = 'ledName'; Def = 'LED strip'; What = 'strip' }, @{ K = 'Bulb'; Key = 'bulbName'; Def = 'Mi bulb'; What = 'bulb' })
+function Set-LightOpen($d, [bool]$open) {
+    (G ($d.K + 'Body')).Visibility = $(if ($open) { 'Visible' } else { 'Collapsed' })
+    (G ($d.K + 'Chev')).Text = [string]$(if ($open) { [char]0xE70E } else { [char]0xE70D })
+    $h = G ($d.K + 'Head')
+    $h.CornerRadius = $(if ($open) { '8,8,0,0' } else { '8' })
+    $h.ToolTip = $(if ($open) { 'Hide the {0}''s settings' } else { 'Show the {0}''s settings' }) -f $d.What
+}
+function Show-LightNames {
+    foreach ($d in $script:lightDevs) { (G ($d.K + 'Name')).Text = [string]$script:settings[$d.Key] }
+}
+function Stop-LightRename($d, [bool]$keep) {
+    $ed = G ($d.K + 'NameEdit')
+    if ($ed.Visibility -ne 'Visible') { return }
+    $ed.Visibility = 'Collapsed'; (G ($d.K + 'Name')).Visibility = 'Visible'
+    if ($keep) {
+        $v = $ed.Text.Trim()
+        if ($v.Length -gt 24) { $v = $v.Substring(0, 24).Trim() }
+        Set-GSetting $d.Key $(if ($v) { $v } else { $d.Def })
+        Show-LightNames; Show-LedLoops
+    }
+}
+foreach ($d in $script:lightDevs) {
+    $head = G ($d.K + 'Head'); $head.Tag = $d
+    # the switches and buttons inside the header take their own clicks
+    $head.Add_MouseLeftButtonUp({ param($sd, $e)
+        $dv = $sd.Tag
+        if ((G ($dv.K + 'NameEdit')).Visibility -eq 'Visible') { return }
+        Set-LightOpen $dv ((G ($dv.K + 'Body')).Visibility -ne 'Visible')
+    })
+    $rn = G ($d.K + 'Rename'); $rn.Tag = $d
+    $rn.Add_Click({ param($sd, $e)
+        $dv = $sd.Tag
+        $ed = G ($dv.K + 'NameEdit')
+        $ed.Text = [string]$script:settings[$dv.Key]
+        (G ($dv.K + 'Name')).Visibility = 'Hidden'; $ed.Visibility = 'Visible'
+        [void]$ed.Focus(); $ed.SelectAll()
+    })
+    $ed = G ($d.K + 'NameEdit'); $ed.Tag = $d
+    $ed.Add_KeyDown({ param($sd, $e)
+        if ($e.Key -eq 'Return') { Stop-LightRename $sd.Tag $true; $e.Handled = $true }
+        elseif ($e.Key -eq 'Escape') { Stop-LightRename $sd.Tag $false; $e.Handled = $true }
+    })
+    $ed.Add_LostKeyboardFocus({ param($sd, $e) Stop-LightRename $sd.Tag $true })
+    # a click in the box must not fold the card
+    $ed.Add_MouseLeftButtonUp({ param($sd, $e) $e.Handled = $true })
+}
+
 # --- page load / periodic refresh ---
 function Update-GlassLights {
     if (-not $script:ledEnabled) { return }
     Build-LedEffects
+    Show-LightNames
     $s = $script:settings
     $script:ledSync = $true
     try {

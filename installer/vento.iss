@@ -25,6 +25,7 @@ OutputDir=..\dist
 OutputBaseFilename=VentoSetup
 SetupIconFile=..\assets\vento.ico
 WizardSmallImageFile=..\assets\wizard-small.bmp
+WizardImageFile=..\assets\wizard-large.bmp
 UninstallDisplayIcon={app}\Vento.exe
 Compression=lzma2
 SolidCompression=yes
