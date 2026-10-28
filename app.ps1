@@ -449,6 +449,11 @@ function Get-DefaultSettings {
             @{ Name = 'Sunset'; Colors = @('#FF2D55', '#FF7A00', '#FFC400'); Trans = 'fade'; Half = 6 },
             @{ Name = 'Police'; Colors = @('#FF0000', '#0030FF');            Trans = 'jump'; Half = 1 }
         )
+        # the Mi bulb (Wi-Fi, miIO); shown only when HKCU\Software\Vento\BulbToken holds its token
+        bulbIp           = '192.168.0.19' # last address it answered at (found again by broadcast)
+        bulbDid          = 245847118   # its miIO device id, how a broadcast reply is recognised
+        bulbBri          = 100         # brightness % (also what loops play at)
+        bulbFlow         = ''          # the color loop the bulb is playing
         osdCorner        = 'tr'        # overlay corner: tr | tl | bl | br
         osdScale         = 100         # overlay scale %
         osdOnSecondary   = $false      # place the overlay on the secondary monitor
@@ -716,6 +721,11 @@ function Import-Settings {
         }
         $s.ledLoops = @($lnorm)
     } catch { $s.ledLoops = (Get-DefaultSettings).ledLoops }
+    $ipv4 = $null
+    if (-not [Net.IPAddress]::TryParse([string]$s.bulbIp, [ref]$ipv4) -or $ipv4.AddressFamily -ne 'InterNetwork') { $s.bulbIp = '192.168.0.19' }
+    try { $s.bulbDid = [long](Limit $s.bulbDid 0 4294967295) } catch { $s.bulbDid = 245847118 }
+    try { $s.bulbBri = [int](Limit $s.bulbBri 1 100) } catch { $s.bulbBri = 100 }
+    $s.bulbFlow = [string]$s.bulbFlow
     foreach ($k in 'osdColFps','osdColCpu','osdColGpu','osdColLoad','osdColRam','osdColSsd','osdColMb','osdColFan','osdColPods') {
         $v = [string]$s[$k]
         if ($v) { try { [void][System.Windows.Media.ColorConverter]::ConvertFromString($v) } catch { $v = '' } }
@@ -6053,6 +6063,178 @@ namespace VentoNative {
 }
 '@
 
+# the Mi bulb over Wi-Fi: miIO (UDP 54321, AES-128-CBC keyed by the device token).
+# Calls run in order on one background thread, so the UI never waits on the network;
+# when the bulb stops answering at its address it is looked for by broadcast.
+$script:bulbCs = @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+namespace VentoNative {
+  public static class Bulb {
+    static readonly object s_lock = new object();
+    static readonly Queue<KeyValuePair<string, string>> s_q = new Queue<KeyValuePair<string, string>>();
+    static readonly AutoResetEvent s_wake = new AutoResetEvent(false);
+    static readonly Stopwatch s_since = new Stopwatch();
+    static Thread s_thread;
+    static byte[] s_tok, s_key, s_iv;
+    static uint s_did, s_stamp;
+    static bool s_shook;
+    static int s_id;
+    public static volatile string Ip = "";
+    public static volatile string Props = "";
+    // idle | ok | noreply | error: ...
+    public static volatile string State = "idle";
+
+    public static void Start(string ip, string tokenHex, long did) {
+      lock (s_lock) {
+        Ip = ip; s_did = (uint)did; s_shook = false;
+        s_tok = new byte[16];
+        for (int i = 0; i < 16; i++) s_tok[i] = Convert.ToByte(tokenHex.Substring(i * 2, 2), 16);
+        using (var md5 = MD5.Create()) {
+          s_key = md5.ComputeHash(s_tok);
+          var kt = new byte[32];
+          Buffer.BlockCopy(s_key, 0, kt, 0, 16); Buffer.BlockCopy(s_tok, 0, kt, 16, 16);
+          s_iv = md5.ComputeHash(kt);
+        }
+        if (s_thread == null) { s_thread = new Thread(Run); s_thread.IsBackground = true; s_thread.Name = "Vento bulb"; s_thread.Start(); }
+      }
+    }
+    public static void Call(string method, string paramsJson) {
+      lock (s_lock) {
+        while (s_q.Count >= 16) s_q.Dequeue();
+        s_q.Enqueue(new KeyValuePair<string, string>(method, paramsJson));
+      }
+      s_wake.Set();
+    }
+    public static void Refresh() { Call("get_prop", "[\"power\",\"bright\",\"rgb\",\"ct\",\"color_mode\",\"flowing\"]"); }
+
+    static void Run() {
+      var sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+      sock.EnableBroadcast = true;
+      sock.Bind(new IPEndPoint(IPAddress.Any, 0));
+      while (true) {
+        s_wake.WaitOne();
+        while (true) {
+          KeyValuePair<string, string> c;
+          lock (s_lock) { if (s_q.Count == 0) break; c = s_q.Dequeue(); }
+          try { Exec(sock, c.Key, c.Value); } catch (Exception e) { State = "error: " + e.Message; s_shook = false; }
+        }
+      }
+    }
+    static void Exec(Socket sock, string method, string p) {
+      for (int attempt = 0; attempt < 2; attempt++) {
+        if (!s_shook || s_since.Elapsed.TotalSeconds > 120) {
+          if (!Hello(sock, new[] { Ip }) && !Hello(sock, Broadcasts())) { State = "noreply"; return; }
+        }
+        int id = ++s_id; if (s_id > 99999) s_id = 0;
+        string json = "{\"id\":" + id + ",\"method\":\"" + method + "\",\"params\":" + p + "}";
+        string txt = Roundtrip(sock, json, "\"id\":" + id + ",");
+        if (txt == null) { s_shook = false; continue; }
+        if (method == "get_prop" && txt.Contains("\"result\"")) Props = txt;
+        int e = txt.IndexOf("\"message\":\"");
+        State = e < 0 ? "ok" : "error: " + txt.Substring(e + 11).Split('"')[0];
+        return;
+      }
+      State = "noreply";
+    }
+    static void Drain(Socket sock) {
+      var buf = new byte[2048]; EndPoint any = new IPEndPoint(IPAddress.Any, 0);
+      while (sock.Available > 0) sock.ReceiveFrom(buf, ref any);
+    }
+    // a reply within the time left, from anywhere; null when none came
+    static byte[] Receive(Socket sock, Stopwatch sw, int ms, out IPAddress from) {
+      from = null;
+      int left = ms - (int)sw.ElapsedMilliseconds;
+      if (left <= 0 || !sock.Poll(left * 1000, SelectMode.SelectRead)) return null;
+      var buf = new byte[2048]; EndPoint ep = new IPEndPoint(IPAddress.Any, 0);
+      int n = sock.ReceiveFrom(buf, ref ep);
+      from = ((IPEndPoint)ep).Address;
+      var r = new byte[n]; Buffer.BlockCopy(buf, 0, r, 0, n);
+      return r;
+    }
+    static uint Be32(byte[] b, int o) { return (uint)(b[o] << 24 | b[o + 1] << 16 | b[o + 2] << 8 | b[o + 3]); }
+    // every local network's own broadcast address: 255.255.255.255 alone leaves by one
+    // adapter only, often a virtual one
+    static string[] Broadcasts() {
+      var l = new List<string> { "255.255.255.255" };
+      foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()) {
+        if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+        foreach (var ua in ni.GetIPProperties().UnicastAddresses) {
+          if (ua.Address.AddressFamily != AddressFamily.InterNetwork || ua.IPv4Mask == null) continue;
+          var a = ua.Address.GetAddressBytes(); var m = ua.IPv4Mask.GetAddressBytes();
+          if (a[0] == 127 || (a[0] == 169 && a[1] == 254)) continue;
+          for (int i = 0; i < 4; i++) a[i] = (byte)(a[i] | ~m[i]);
+          var s = new IPAddress(a).ToString();
+          if (!l.Contains(s)) l.Add(s);
+        }
+      }
+      return l.ToArray();
+    }
+    // the handshake gives the bulb's clock; by broadcast it also finds a bulb that moved
+    static bool Hello(Socket sock, string[] ips) {
+      Drain(sock);
+      var hello = new byte[32];
+      hello[0] = 0x21; hello[1] = 0x31; hello[3] = 0x20;
+      for (int i = 4; i < 32; i++) hello[i] = 0xFF;
+      int sent = 0;
+      foreach (var ip in ips) {
+        IPAddress ad;
+        if (string.IsNullOrEmpty(ip) || !IPAddress.TryParse(ip, out ad)) continue;
+        try { sock.SendTo(hello, new IPEndPoint(ad, 54321)); sent++; } catch (SocketException) { }
+      }
+      if (sent == 0) return false;
+      var sw = Stopwatch.StartNew();
+      while (true) {
+        IPAddress from;
+        var r = Receive(sock, sw, 1200, out from);
+        if (r == null) return false;
+        if (r.Length != 32 || r[0] != 0x21 || r[1] != 0x31) continue;
+        if (s_did != 0 && Be32(r, 8) != s_did) continue;
+        s_did = Be32(r, 8); s_stamp = Be32(r, 12); s_since.Restart(); s_shook = true;
+        Ip = from.ToString();
+        return true;
+      }
+    }
+    static string Roundtrip(Socket sock, string json, string idTag) {
+      byte[] enc;
+      using (var aes = new RijndaelManaged { Key = s_key, IV = s_iv, Mode = CipherMode.CBC, Padding = PaddingMode.PKCS7 })
+      using (var tr = aes.CreateEncryptor()) { var pl = Encoding.UTF8.GetBytes(json); enc = tr.TransformFinalBlock(pl, 0, pl.Length); }
+      int len = 32 + enc.Length;
+      uint stamp = s_stamp + (uint)s_since.Elapsed.TotalSeconds;
+      var pkt = new byte[len];
+      pkt[0] = 0x21; pkt[1] = 0x31; pkt[2] = (byte)(len >> 8); pkt[3] = (byte)len;
+      pkt[8] = (byte)(s_did >> 24); pkt[9] = (byte)(s_did >> 16); pkt[10] = (byte)(s_did >> 8); pkt[11] = (byte)s_did;
+      pkt[12] = (byte)(stamp >> 24); pkt[13] = (byte)(stamp >> 16); pkt[14] = (byte)(stamp >> 8); pkt[15] = (byte)stamp;
+      Buffer.BlockCopy(s_tok, 0, pkt, 16, 16);
+      Buffer.BlockCopy(enc, 0, pkt, 32, enc.Length);
+      using (var md5 = MD5.Create()) Buffer.BlockCopy(md5.ComputeHash(pkt), 0, pkt, 16, 16);
+      Drain(sock);
+      sock.SendTo(pkt, new IPEndPoint(IPAddress.Parse(Ip), 54321));
+      var sw = Stopwatch.StartNew();
+      while (true) {
+        IPAddress from;
+        var r = Receive(sock, sw, 1500, out from);
+        if (r == null) return null;
+        if (r.Length <= 32 || r[0] != 0x21 || r[1] != 0x31) continue;
+        string txt;
+        using (var aes = new RijndaelManaged { Key = s_key, IV = s_iv, Mode = CipherMode.CBC, Padding = PaddingMode.PKCS7 })
+        using (var tr = aes.CreateDecryptor()) {
+          try { txt = Encoding.UTF8.GetString(tr.TransformFinalBlock(r, 32, r.Length - 32)).TrimEnd('\0'); }
+          catch (CryptographicException) { continue; }
+        }
+        if (txt.Contains(idTag)) return txt;
+      }
+    }
+  }
+}
+'@
+
 # the strip's built-in effects, numbered as the strip numbers them
 $script:ledFxList = @(
 @'
@@ -6379,7 +6561,10 @@ function Update-LedStatus {
             if ($lp) { Start-LedLoop $lp }
         }
     }
+    $was = $script:ledLastState
     $script:ledLastState = $state
+    # the loop rows' strip buttons follow the link
+    if (($was -eq 'connected') -ne $on) { Show-LedLoops }
 }
 
 # --- the preview bar mirrors what Vento last told the strip ---
@@ -6578,8 +6763,10 @@ function Stop-LedLoop {
 }
 function Show-LedLoops {
     $host0 = G 'LedLoops'; $host0.Children.Clear()
+    $stripOn = $script:ledLastState -eq 'connected'
     foreach ($lp in @($script:settings.ledLoops)) {
         $playing = $script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Name -eq [string]$lp.Name
+        $onBulb = $script:bulbEnabled -and [string]$script:settings.bulbFlow -eq [string]$lp.Name
         $b = New-Object System.Windows.Controls.Border
         $b.Style = $script:app.FindResource('SettingsCard')
         if ($playing) { $b.BorderBrush = $script:app.FindResource('AccentBrush') }
@@ -6593,22 +6780,31 @@ function Show-LedLoops {
         $t1 = New-Object System.Windows.Controls.TextBlock; $t1.Text = $lp.Name; $t1.Style = $script:app.FindResource('Body')
         $trName = @{ fade = 'Fade'; dim = 'Dim'; jump = 'Jump'; breathe = 'Breathe' }[[string]$lp.Trans]
         $t2 = New-Object System.Windows.Controls.TextBlock; $t2.Style = $script:app.FindResource('Caption')
-        $t2.Text = '{0} colors{1}{2}{1}{3} s each{4}' -f @($lp.Colors).Count, $script:ledSep, $trName, (Format-LedSec $lp.Half), $(if ($playing) { $script:ledSep + 'Playing' } else { '' })
+        $where = @($(if ($playing) { 'Playing' }), $(if ($onBulb) { 'On the bulb' })) | Where-Object { $_ }
+        $t2.Text = '{0} colors{1}{2}{1}{3} s each{4}' -f @($lp.Colors).Count, $script:ledSep, $trName, (Format-LedSec $lp.Half), $(if ($where) { $script:ledSep + ($where -join $script:ledSep) } else { '' })
         [void]$txt.Children.Add($t1); [void]$txt.Children.Add($t2)
         $btns = New-Object System.Windows.Controls.StackPanel; $btns.Orientation = 'Horizontal'; $btns.VerticalAlignment = 'Center'
         [System.Windows.Controls.Grid]::SetColumn($btns, 2)
-        foreach ($spec in @(@($(if ($playing) { [char]0xE71A } else { [char]0xE768 }), 'play', $(if ($playing) { 'Stop' } else { 'Play' })), @([char]0xE70F, 'edit', 'Edit'), @([char]0xE74D, 'del', 'Delete'))) {
+        $specs = @(, @($(if ($playing) { [char]0xE71A } else { [char]0xE768 }), 'play', $(if ($playing) { 'Stop' } elseif ($script:bulbEnabled) { 'Play on the strip' } else { 'Play' })))
+        if ($script:bulbEnabled) { $specs += , @([char]0xEA80, 'bulb', $(if ($onBulb) { 'Stop on the bulb' } else { 'Play on the bulb' })) }
+        $specs += , @([char]0xE70F, 'edit', 'Edit'); $specs += , @([char]0xE74D, 'del', 'Delete')
+        foreach ($spec in $specs) {
             $bt = New-Object System.Windows.Controls.Button
             $bt.Style = $script:app.FindResource('IconButton'); $bt.Content = [string]$spec[0]; $bt.FontSize = 14; $bt.ToolTip = $spec[2]
             $bt.Tag = @{ Act = $spec[1]; Name = [string]$lp.Name }
+            # the strip plays only over the link; stopping stays possible
+            if ($spec[1] -eq 'play' -and -not $stripOn -and -not $playing) { $bt.IsEnabled = $false }
+            if ($spec[1] -eq 'bulb' -and $onBulb) { $bt.Foreground = $script:app.FindResource('AccentBrush') }
             $bt.Add_Click({ param($sd, $e)
                 $a = $sd.Tag; $l = Get-LedLoop $a.Name
                 if (-not $l) { return }
                 switch ($a.Act) {
                     'play' { if ($script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Name -eq $a.Name) { Stop-LedLoop; $script:settings.ledKind = 'color'; Update-LedPreview } else { Start-LedLoop $l } }
+                    'bulb' { if ([string]$script:settings.bulbFlow -eq $a.Name) { Stop-BulbFlow -Send } else { Start-BulbFlow $l } }
                     'edit' { Open-LedLoopEditor $l }
                     'del' {
                         if ($script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Name -eq $a.Name) { Stop-LedLoop }
+                        if ([string]$script:settings.bulbFlow -eq $a.Name) { Stop-BulbFlow -Send }
                         Set-GSetting 'ledLoops' @(@($script:settings.ledLoops) | Where-Object { $_.Name -ne $a.Name })
                         if ([string]$script:settings.ledLoop -eq $a.Name) { $script:settings.ledLoop = '' }
                         Show-LedLoops
@@ -6693,8 +6889,233 @@ function Open-LedLoopEditor($lp) {
     if (-not $placed) { $list += , $new }
     Set-GSetting 'ledLoops' @($list)
     (G 'LedLoopEdit').Visibility = 'Collapsed'; $script:ledEdit = $null
-    if ($script:ledLoopRun) { Stop-LedLoop }
-    Start-LedLoop $new
+    # it plays wherever it can: the strip over the link, the bulb when it was
+    # already playing this loop or when the strip is away
+    $stripOn = $script:ledLastState -eq 'connected'
+    $bulbHad = $e.Orig -and [string]$script:settings.bulbFlow -eq $e.Orig
+    if ($stripOn) {
+        if ($script:ledLoopRun) { Stop-LedLoop }
+        Start-LedLoop $new
+    }
+    if ($script:bulbEnabled -and ($bulbHad -or (-not $stripOn -and (Test-BulbOk)))) { Start-BulbFlow $new }
+    Show-LedLoops
+})
+
+# --- the Mi bulb: Wi-Fi, no held link, so Mi Home on the phone keeps working.
+# The token sits DPAPI-protected (current user) in HKCU\Software\Vento\BulbToken ---
+$script:bulbToken = ''
+if ($script:ledEnabled) { try { Add-Type -AssemblyName System.Security; $script:bulbToken = [Text.Encoding]::ASCII.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String([string](Get-ItemProperty 'HKCU:\Software\Vento' -Name BulbToken -ErrorAction Stop).BulbToken), $null, 'CurrentUser')) } catch { } }
+$script:bulbEnabled = $script:bulbToken -match '^[0-9a-fA-F]{32}$'
+$script:bulbStarted = $false
+$script:bulbCompileStarted = $false
+$script:bulbTick = 0
+$script:bulbLastProps = ''
+$script:bulbSync = $false
+# what the bulb last said (or was last told): on, brightness, rgb, white kelvin, mode 1 rgb / 2 white
+$script:bulbSt = @{ On = $true; Bri = 100; Rgb = 0x0040FF; Ct = 4000; Mode = 1 }
+# the user's own last touch; a status read in flight must not undo it
+$script:bulbTouched = [DateTime]::MinValue
+function Start-BulbCompile {
+    if ($script:bulbCompileStarted -or ('VentoNative.Bulb' -as [type])) { return }
+    $script:bulbCompileStarted = $true
+    $script:psBulb = [powershell]::Create()
+    [void]$script:psBulb.AddScript({ param($sync, $cs) try { Add-Type -TypeDefinition $cs; $sync.BulbReady = $true } catch { $sync.BulbErr = "$_" } }.ToString()).AddArgument($sync).AddArgument($script:bulbCs)
+    [void]$script:psBulb.BeginInvoke()
+}
+function Test-BulbOk { ('VentoNative.Bulb' -as [type]) -and [VentoNative.Bulb]::State -eq 'ok' }
+function Send-Bulb([string]$method, [string]$params) {
+    if ('VentoNative.Bulb' -as [type]) { [VentoNative.Bulb]::Call($method, $params) }
+}
+function Save-Bulb { $script:saveTimer.Stop(); $script:saveTimer.Start() }
+# white light as a color for the preview: warm amber at 1700 K to white at 6500 K
+function ConvertFrom-BulbCt([int]$k) {
+    $t = ((Limit $k 1700 6500) - 1700) / 4800.0
+    '#FF{0:X2}{1:X2}' -f [int](180 + 75 * $t), [int](107 + 148 * $t)
+}
+# a loop as the bulb's own color flow (start_cf), played by the bulb itself.
+# Steps: duration ms, mode (1 color, 7 hold), value, brightness. The bulb took 24
+# steps / 427 characters and stalled for half a minute at 36 / 523, so Dim drops its
+# hold above 8 colors and anything still longer than 430 plays as a plain fade.
+function New-BulbFlow($lp, [int]$bri) {
+    $f = New-BulbSteps $lp $bri
+    if ($f.Length -gt 430) { $f = New-BulbSteps @{ Colors = $lp.Colors; Trans = 'fade'; Half = $lp.Half } $bri }
+    $f
+}
+function New-BulbSteps($lp, [int]$bri) {
+    $T = [int]$lp.Half * 500
+    $cols = @($lp.Colors | ForEach-Object { [Convert]::ToInt32(([string]$_).TrimStart('#'), 16) })
+    $steps = foreach ($c in $cols) {
+        switch ([string]$lp.Trans) {
+            'jump'    { "50,1,$c,$bri"; "$([math]::Max(50, $T - 50)),7,0,0" }
+            'breathe' { $h = [math]::Max(50, [int]($T / 2)); "$h,1,$c,$bri"; "$h,1,$c,1" }
+            'dim' {
+                $tr = [math]::Max(50, [int][math]::Min(2000, $T * 0.4))
+                if ($cols.Count -le 8) { "$tr,1,$c,$bri"; "$([math]::Max(50, $T - 2 * $tr)),7,0,0"; "$tr,1,$c,1" }
+                else { "$tr,1,$c,$bri"; "$([math]::Max(50, $T - $tr)),1,$c,1" }
+            }
+            default { "$([math]::Max(50, $T)),1,$c,$bri" }
+        }
+    }
+    @($steps) -join ','
+}
+function Set-BulbOnState([bool]$on) {
+    $script:bulbSt.On = $on
+    $script:bulbSync = $true
+    try { (G 'BulbPower').IsChecked = $on } finally { $script:bulbSync = $false }
+}
+# colors and loops light a bulb that was off, as Mi Home does
+function Confirm-BulbOn {
+    if ($script:bulbSt.On) { return }
+    Send-Bulb 'set_power' '["on","smooth",300]'
+    Set-BulbOnState $true
+}
+function Start-BulbFlow($lp) {
+    $script:bulbTouched = [DateTime]::Now
+    Confirm-BulbOn
+    Send-Bulb 'start_cf' ('[0,1,"{0}"]' -f (New-BulbFlow $lp ([int]$script:settings.bulbBri)))
+    $script:settings.bulbFlow = [string]$lp.Name; Save-Bulb
+    Show-LedLoops; Update-BulbLook
+}
+function Stop-BulbFlow([switch]$Send) {
+    if (-not $script:settings.bulbFlow) { return }
+    if ($Send) { Send-Bulb 'stop_cf' '[]' }
+    $script:settings.bulbFlow = ''; Save-Bulb
+    Show-LedLoops; Update-BulbLook
+}
+# slider drags send once they rest, like the strip's
+$script:bulbPending = @{}
+$script:bulbDeb = New-Object System.Windows.Threading.DispatcherTimer
+$script:bulbDeb.Interval = [TimeSpan]::FromMilliseconds(250)
+$script:bulbDeb.Add_Tick({
+    $script:bulbDeb.Stop()
+    $p = $script:bulbPending; $script:bulbPending = @{}
+    if ($p.ContainsKey('rgb')) { Send-Bulb 'set_rgb' ('[{0},"smooth",300]' -f $p.rgb) }
+    if ($p.ContainsKey('ct')) { Send-Bulb 'set_ct_abx' ('[{0},"smooth",300]' -f $p.ct) }
+    if ($p.ContainsKey('bri')) {
+        # a playing loop carries its brightness in every step: start it again at the new one
+        $lp = $(if ($script:settings.bulbFlow) { Get-LedLoop ([string]$script:settings.bulbFlow) })
+        if ($lp) { Send-Bulb 'start_cf' ('[0,1,"{0}"]' -f (New-BulbFlow $lp $p.bri)) } else { Send-Bulb 'set_bright' ('[{0},"smooth",300]' -f $p.bri) }
+    }
+})
+function Defer-Bulb([string]$key, $value) { $script:bulbTouched = [DateTime]::Now; $script:bulbPending[$key] = $value; $script:bulbDeb.Stop(); $script:bulbDeb.Start() }
+function Set-BulbRgb([string]$hex, [switch]$Now) {
+    Stop-BulbFlow -Send
+    Confirm-BulbOn
+    $v = [Convert]::ToInt32($hex.TrimStart('#'), 16)
+    $script:bulbSt.Rgb = $v; $script:bulbSt.Mode = 1
+    if ($Now) { $script:bulbTouched = [DateTime]::Now; $script:bulbPending.Remove('rgb'); Send-Bulb 'set_rgb' ('[{0},"smooth",300]' -f $v) }
+    else { Defer-Bulb 'rgb' $v }
+    Update-BulbLook
+}
+function Update-BulbLook {
+    $st = $script:bulbSt
+    $lp = $(if ($script:settings.bulbFlow) { Get-LedLoop ([string]$script:settings.bulbFlow) })
+    if (-not $st.On) { $br = $script:app.FindResource('TextTertiaryBrush'); $txt = 'Off' }
+    elseif ($lp) { $br = New-LedGradient @($lp.Colors); $txt = 'Loop{0}{1}{0}{2}%' -f $script:ledSep, $lp.Name, $script:settings.bulbBri }
+    elseif ($st.Mode -eq 2) { $br = Get-GBrush (ConvertFrom-BulbCt $st.Ct); $txt = 'White {0} K{1}{2}%' -f $st.Ct, $script:ledSep, $st.Bri }
+    else { $hex = '#{0:X6}' -f $st.Rgb; $br = Get-GBrush $hex; $txt = '{0}{1}{2}%' -f $hex, $script:ledSep, $st.Bri }
+    (G 'BulbGlyph').Foreground = $br
+    (G 'BulbNow').Text = $txt
+}
+# a fresh status read from the bulb (it may have been changed from the phone)
+function Read-BulbProps([string]$p) {
+    try { $r = @(($p | ConvertFrom-Json).result) } catch { return }
+    if ($r.Count -lt 6) { return }
+    if (([DateTime]::Now - $script:bulbTouched).TotalSeconds -lt 3) { return }
+    $st = $script:bulbSt
+    $st.On = [string]$r[0] -eq 'on'; $st.Bri = [int]$r[1]; $st.Rgb = [int]$r[2]; $st.Ct = [int]$r[3]; $st.Mode = [int]$r[4]
+    $flowing = [string]$r[5] -eq '1'
+    $script:bulbSync = $true
+    try {
+        (G 'BulbPower').IsChecked = $st.On
+        if (-not $flowing) {
+            (G 'BulbBri').Value = $st.Bri; (G 'BulbBriV').Text = '{0}%' -f $st.Bri
+            $script:settings.bulbBri = $st.Bri
+            if ($st.Mode -eq 2) { (G 'BulbCt').Value = $st.Ct }
+            else { (G 'BulbHue').Value = (ConvertTo-LedHsv ('#{0:X6}' -f $st.Rgb))[0] }
+        }
+    } finally { $script:bulbSync = $false }
+    # the loop ended elsewhere (Mi Home, the wall switch)
+    if (-not $flowing -and $script:settings.bulbFlow) { $script:settings.bulbFlow = ''; Save-Bulb; Show-LedLoops }
+    Update-BulbLook
+}
+function Update-BulbStatus {
+    if (-not $script:bulbEnabled) { return }
+    if (-not ('VentoNative.Bulb' -as [type])) {
+        Start-BulbCompile
+        if ($sync.BulbErr) { (G 'BulbState').Text = 'Bulb support failed to load' }
+        return
+    }
+    if (-not $script:bulbStarted) {
+        $script:bulbStarted = $true
+        [VentoNative.Bulb]::Start([string]$script:settings.bulbIp, $script:bulbToken, [long]$script:settings.bulbDid)
+        [VentoNative.Bulb]::Refresh()
+    }
+    # every 3 s while the page is open, so changes from the phone show up
+    $script:bulbTick++
+    if ((G 'PageLights').Visibility -eq 'Visible' -and $script:bulbTick % 6 -eq 0) { [VentoNative.Bulb]::Refresh() }
+    $ip = [string][VentoNative.Bulb]::Ip
+    if ($ip -and $ip -ne [string]$script:settings.bulbIp) { $script:settings.bulbIp = $ip; Save-Bulb }
+    $state = [string][VentoNative.Bulb]::State
+    (G 'BulbState').Text = $(switch -Wildcard ($state) {
+        'ok' { 'Connected{0}{1}' -f $script:ledSep, $ip }
+        'idle' { 'Looking for the bulb...' }
+        'noreply' { 'Not answering: is it switched on at the wall?' }
+        default { $state.Substring(0, 1).ToUpper() + $state.Substring(1) } })
+    (G 'BulbDot').Fill = $(switch -Wildcard ($state) {
+        'ok' { Get-GBrush '#6CCB5F' }
+        'idle' { Get-GBrush '#FCE100' }
+        'error*' { Get-GBrush '#FCE100' }
+        default { Get-GBrush '#FF99A4' } })
+    # a refused command (error) still means the bulb is there
+    $on = $state -ne 'noreply' -and $state -ne 'idle'
+    $ctl = G 'BulbControls'; $ctl.IsEnabled = $on; $ctl.Opacity = $(if ($on) { 1 } else { 0.45 })
+    $p = [string][VentoNative.Bulb]::Props
+    if ($p -and $p -ne $script:bulbLastProps) { $script:bulbLastProps = $p; Read-BulbProps $p }
+}
+foreach ($hex in $script:ledSwatchHex) {
+    $rb = New-Object System.Windows.Controls.RadioButton
+    $rb.Style = $script:app.FindResource('Swatch'); $rb.GroupName = 'BulbSw'; $rb.Background = Get-GBrush $hex; $rb.Tag = $hex; $rb.ToolTip = $hex
+    $rb.Add_Click({ param($sd, $e)
+        $script:bulbSync = $true
+        try { (G 'BulbHue').Value = (ConvertTo-LedHsv ([string]$sd.Tag))[0] } finally { $script:bulbSync = $false }
+        Set-BulbRgb ([string]$sd.Tag) -Now
+    })
+    [void](G 'BulbSwatches').Children.Add($rb)
+}
+(G 'BulbHue').Add_ValueChanged({ param($sd, $e)
+    $hex = ConvertFrom-LedHsv $sd.Value 100
+    (G 'BulbHuePrev').Background = Get-GBrush $hex
+    if (-not $script:bulbSync) { Set-BulbRgb $hex }
+})
+(G 'BulbCt').Add_ValueChanged({ param($sd, $e)
+    $k = [int]$sd.Value
+    (G 'BulbCtV').Text = '{0} K' -f $k
+    if ($script:bulbSync) { return }
+    Stop-BulbFlow -Send
+    Confirm-BulbOn
+    $script:bulbSt.Ct = $k; $script:bulbSt.Mode = 2
+    Defer-Bulb 'ct' $k
+    Update-BulbLook
+})
+(G 'BulbBri').Add_ValueChanged({ param($sd, $e)
+    $v = [int]$sd.Value
+    (G 'BulbBriV').Text = '{0}%' -f $v
+    if ($script:bulbSync) { return }
+    $script:settings.bulbBri = $v; $script:bulbSt.Bri = $v; Save-Bulb
+    Confirm-BulbOn
+    Defer-Bulb 'bri' $v
+    Update-BulbLook
+})
+(G 'BulbPower').Add_Click({
+    if ($script:bulbSync) { return }
+    $on = [bool](G 'BulbPower').IsChecked
+    $script:bulbTouched = [DateTime]::Now
+    $script:bulbSt.On = $on
+    Send-Bulb 'set_power' ('["{0}","smooth",300]' -f $(if ($on) { 'on' } else { 'off' }))
+    # off ends a loop on the bulb
+    if (-not $on -and $script:settings.bulbFlow) { $script:settings.bulbFlow = ''; Save-Bulb; Show-LedLoops }
+    Update-BulbLook
 })
 
 # --- page load / periodic refresh ---
@@ -6713,6 +7134,19 @@ function Update-GlassLights {
         (G 'LedSpeed').Value = [int]$s.ledSpeed; (G 'LedSpeedV').Text = '{0}' -f [int]$s.ledSpeed
         (G 'LedLoopSecV').Text = '{0} s' -f (Format-LedSec (G 'LedLoopSec').Value)
     } finally { $script:ledSync = $false }
+    if ($script:bulbEnabled) {
+        (G 'BulbPanel').Visibility = 'Visible'
+        (G 'PageLightsNote').Text = 'Your LED strip over Bluetooth and your Mi bulb over Wi-Fi. While Vento holds the strip its phone app can''t connect; the bulb works from both at once.'
+        (G 'LedLoopsNote').Text = 'Only the colors you pick, in your order. On the strip Vento plays them and stays connected; the bulb plays them by itself, even after Vento closes.'
+        $script:bulbSync = $true
+        try {
+            (G 'BulbBri').Value = [int]$s.bulbBri; (G 'BulbBriV').Text = '{0}%' -f [int]$s.bulbBri
+            (G 'BulbHuePrev').Background = Get-GBrush (ConvertFrom-LedHsv (G 'BulbHue').Value 100)
+        } finally { $script:bulbSync = $false }
+        Update-BulbLook
+        Update-BulbStatus
+        if ('VentoNative.Bulb' -as [type]) { [VentoNative.Bulb]::Refresh() }
+    }
     Update-LedFxChecks
     Show-LedLoops
     Update-LedPreview
@@ -6723,7 +7157,8 @@ if ($script:ledEnabled) {
     $script:searchMap['Lights'] = 'lights led strip leds rgb lighting effects loop bluetooth'
     $script:ledStatusTimer = New-Object System.Windows.Threading.DispatcherTimer
     $script:ledStatusTimer.Interval = [TimeSpan]::FromMilliseconds(500)
-    $script:ledStatusTimer.Add_Tick({ try { Update-LedStatus } catch { } })
+    $script:ledStatusTimer.Add_Tick({ try { Update-LedStatus } catch { }; try { Update-BulbStatus } catch { } })
+    if ($script:bulbEnabled) { $script:searchMap['Lights'] += ' bulb mi xiaomi yeelight wifi' }
     $script:ledStatusTimer.Start()
     (G 'NavLights').Add_Checked({ try { Update-GlassLights } catch { } })
     if ($script:settings.ledAutoConn) { Connect-Led }
