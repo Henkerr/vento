@@ -18,8 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # assets/vento.ico and the logo PNGs are committed (1.8 logo);
-      # build\make-icon.ps1 would overwrite them with the old swirl.
+      # assets/vento.ico and the logo PNGs are committed (1.8 logo).
       - name: Build launcher
         shell: powershell
         run: |

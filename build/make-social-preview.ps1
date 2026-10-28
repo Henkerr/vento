@@ -1,6 +1,5 @@
 # Generates assets/social-preview.png - the 1280x640 card GitHub shows when a
-# link to the repo is pasted somewhere, and the og:image for docs/index.html.
-# Same palette as the project page: near-black card, blue glow, blue accent.
+# link to the repo is pasted somewhere. Near-black card, blue glow, blue accent.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
@@ -8,7 +7,7 @@ $root   = Split-Path -Parent $PSScriptRoot
 $assets = Join-Path $root 'assets'
 $logo   = Join-Path $assets 'logo.png'
 $out    = Join-Path $assets 'social-preview.png'
-if (-not (Test-Path $logo)) { throw "assets/logo.png is missing - run build\make-icon.ps1 first." }
+if (-not (Test-Path $logo)) { throw "assets/logo.png is missing." }
 
 $W = 1280; $H = 640
 $bg     = [System.Drawing.Color]::FromArgb(0x0A, 0x0B, 0x0D)

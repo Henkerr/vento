@@ -126,7 +126,6 @@ see below), then accept the admin prompt.
 No SDK needed — everything uses tools already on Windows (plus Inno Setup for the installer):
 
 ```powershell
-build\make-icon.ps1     # regenerates assets\vento.ico + assets\logo.png
 build\build-exe.ps1     # compiles Vento.exe (launcher with icon + UAC manifest)
 ISCC.exe installer\vento.iss   # builds dist\VentoSetup.exe (Inno Setup 6)
 ```
