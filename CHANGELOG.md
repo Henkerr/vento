@@ -6,6 +6,13 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.6 — 2026-10-28
+
+Lights page: smoother color loops, and a clear message (instead of a timeout) when another device
+holds the strip. Nothing changes for anyone else.
+
+---
+
 ## 1.8.5 — 2026-10-28
 
 Lights page: the color loop editor gets its own color picker, and a strip that stopped advertising

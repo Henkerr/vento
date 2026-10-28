@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Lightweight fan monitoring & control")]
 [assembly: AssemblyCompany("Blakfy")]
 [assembly: AssemblyCopyright("MIT License")]
-[assembly: AssemblyVersion("1.8.5.0")]
-[assembly: AssemblyFileVersion("1.8.5.0")]
+[assembly: AssemblyVersion("1.8.6.0")]
+[assembly: AssemblyFileVersion("1.8.6.0")]
 
 static class Program
 {
