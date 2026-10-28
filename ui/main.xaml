@@ -1405,6 +1405,7 @@
                       <Border Grid.Column="1" Style="{StaticResource SegHost}" HorizontalAlignment="Left">
                         <StackPanel Orientation="Horizontal">
                           <RadioButton x:Name="LedTrFade" GroupName="LedTr" Style="{StaticResource SegItem}" Content="Fade" Tag="fade" IsChecked="True"/>
+                          <RadioButton x:Name="LedTrDim" GroupName="LedTr" Style="{StaticResource SegItem}" Content="Dim" Tag="dim"/>
                           <RadioButton x:Name="LedTrJump" GroupName="LedTr" Style="{StaticResource SegItem}" Content="Jump" Tag="jump"/>
                           <RadioButton x:Name="LedTrBreathe" GroupName="LedTr" Style="{StaticResource SegItem}" Content="Breathe" Tag="breathe"/>
                         </StackPanel>

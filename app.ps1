@@ -710,7 +710,7 @@ function Import-Settings {
             $cols = @(@($h.Colors) | Where-Object { [string]$_ -match '^#[0-9A-Fa-f]{6}$' } | ForEach-Object { ([string]$_).ToUpperInvariant() })
             if ($cols.Count -lt 1) { continue }
             $tr = [string]$h.Trans
-            if (@('fade', 'jump', 'breathe') -notcontains $tr) { $tr = 'fade' }
+            if (@('fade', 'dim', 'jump', 'breathe') -notcontains $tr) { $tr = 'fade' }
             $half = 6; try { $half = [int](Limit $h.Half 1 60) } catch { }
             $lnorm += , @{ Name = $nm; Colors = @($cols); Trans = $tr; Half = $half }
         }
@@ -5823,7 +5823,8 @@ namespace VentoNative {
     // --- color loops play here, on their own thread and a 1 ms clock, at a
     // steady 30 frames a second (measured smooth on the strip; the UI timer
     // was too uneven). Colors are 0xRRGGBB; mode 0 flows from color to color,
-    // 1 jumps, 2 holds each color and breathes the brightness.
+    // 1 jumps, 2 holds each color and breathes the brightness, 3 holds each
+    // color and dims through dark into the next (no color in between).
     public const int Fps = 30;
     public static volatile int PlayBri = 100;
     public static volatile int Current = -1;
@@ -5856,7 +5857,14 @@ namespace VentoNative {
           double pos = sw.Elapsed.TotalSeconds / s_sec; int i = (int)(Math.Floor(pos) % n); double u = pos - Math.Floor(pos);
           int c = s_cols[i], b = -1;
           if (s_mode == 0 && n > 1) c = Mix(c, s_cols[(i + 1) % n], u);
-          else if (s_mode == 2) b = (int)Math.Max(1, Math.Round(PlayBri * (0.08 + 0.92 * Math.Sin(Math.PI * u))));
+          else if (s_mode == 2) b = Raw((int)Math.Max(1, Math.Round(PlayBri * (0.08 + 0.92 * Math.Sin(Math.PI * u)))));
+          else if (s_mode == 3) {
+            // dim out over the end of a color and back up over the start of the next
+            double tr = Math.Min(0.45, s_sec * 0.25) / s_sec, k2 = 1;
+            if (u < tr) k2 = u / tr; else if (u > 1 - tr) k2 = (1 - u) / tr;
+            k2 = k2 * k2 * (3 - 2 * k2);
+            b = (int)Math.Round(100 + (Raw(PlayBri) - 100) * k2);
+          }
           byte[] f = HsvFrame(c);
           int key = (f[3] << 24) | (f[4] << 16) | (f[5] << 8) | f[6];
           if (key != lastC) { Send(f); lastC = key; }
@@ -5888,9 +5896,10 @@ namespace VentoNative {
       int hi = (int)Math.Round(h) % 360, si = max > 0 ? (int)Math.Round(d / max * 1000) : 0;
       return new byte[] { 0xBC, 0x04, 6, (byte)(hi >> 8), (byte)hi, (byte)(si >> 8), (byte)si, 0, 0, 0x55 };
     }
-    // brightness percent 1-100 to the strip's 100-1000
-    static byte[] BriFrame(int pct) {
-      int v = 100 + (int)Math.Round((Math.Min(100, Math.Max(1, pct)) - 1) * 900 / 99.0);
+    // brightness percent 1-100 to the strip's 100-1000; frames carry the raw value
+    static int Raw(int pct) { return 100 + (int)Math.Round((Math.Min(100, Math.Max(1, pct)) - 1) * 900 / 99.0); }
+    static byte[] BriFrame(int v) {
+      v = Math.Min(1000, Math.Max(100, v));
       return new byte[] { 0xBC, 0x05, 6, (byte)(v >> 8), (byte)v, 0, 0, 0, 0, 0x55 };
     }
 
@@ -6453,8 +6462,8 @@ function Set-LedColor([int]$h, [int]$s, [switch]$Now) {
     (G 'LedBriV').Text = '{0}%' -f $v
     if ($script:ledSync) { return }
     $script:settings.ledBri = $v; $script:saveTimer.Stop(); $script:saveTimer.Start()
-    # a breathing loop owns the brightness; it breathes up to the new value instead
-    if ($script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Trans -eq 'breathe' -and ('VentoNative.Led' -as [type])) { [VentoNative.Led]::PlayBri = $v }
+    # breathing and dimming loops own the brightness; they rise to the new value instead
+    if ($script:ledLoopRun -and [string]$script:ledLoopRun.Loop.Trans -in 'breathe', 'dim' -and ('VentoNative.Led' -as [type])) { [VentoNative.Led]::PlayBri = $v }
     else { Defer-Led 'bri' $v }
     Update-LedPreview
 })
@@ -6543,7 +6552,7 @@ function Start-LedLoop($lp) {
     $script:ledLoopRun = @{ Loop = $lp; Start = [DateTime]::Now }
     if ('VentoNative.Led' -as [type]) {
         $rgb = [int[]]@(@($lp.Colors) | ForEach-Object { [Convert]::ToInt32(([string]$_).TrimStart('#'), 16) })
-        $mode = switch ([string]$lp.Trans) { 'jump' { 1 } 'breathe' { 2 } default { 0 } }
+        $mode = switch ([string]$lp.Trans) { 'jump' { 1 } 'breathe' { 2 } 'dim' { 3 } default { 0 } }
         [VentoNative.Led]::Play($rgb, [double]$lp.Half * 0.5, $mode, [int]$script:settings.ledBri)
     }
     $script:settings.ledKind = 'loop'; $script:settings.ledLoop = [string]$lp.Name
@@ -6558,7 +6567,7 @@ function Stop-LedLoop {
     $script:ledLoopRun = $null; $script:ledLoopTimer.Stop()
     if ('VentoNative.Led' -as [type]) { [VentoNative.Led]::StopPlay() }
     # breathing leaves the brightness wherever it was; put the slider's value back
-    if ([string]$was.Loop.Trans -eq 'breathe') { [void](Send-LedBri ([int]$script:settings.ledBri)) }
+    if ([string]$was.Loop.Trans -in 'breathe', 'dim') { [void](Send-LedBri ([int]$script:settings.ledBri)) }
     Show-LedLoops
 }
 function Show-LedLoops {
@@ -6572,11 +6581,11 @@ function Show-LedLoops {
         foreach ($w in '120', '*', 'Auto') { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $w; [void]$g.ColumnDefinitions.Add($cd) }
         $bar = New-Object System.Windows.Controls.Border
         $bar.Height = 10; $bar.CornerRadius = 5; $bar.VerticalAlignment = 'Center'
-        $bar.Background = New-LedGradient @($lp.Colors) ([string]$lp.Trans -eq 'jump')
+        $bar.Background = New-LedGradient @($lp.Colors) ([string]$lp.Trans -in 'jump', 'dim')
         $txt = New-Object System.Windows.Controls.StackPanel; $txt.Margin = '16,0'; $txt.VerticalAlignment = 'Center'
         [System.Windows.Controls.Grid]::SetColumn($txt, 1)
         $t1 = New-Object System.Windows.Controls.TextBlock; $t1.Text = $lp.Name; $t1.Style = $script:app.FindResource('Body')
-        $trName = @{ fade = 'Fade'; jump = 'Jump'; breathe = 'Breathe' }[[string]$lp.Trans]
+        $trName = @{ fade = 'Fade'; dim = 'Dim'; jump = 'Jump'; breathe = 'Breathe' }[[string]$lp.Trans]
         $t2 = New-Object System.Windows.Controls.TextBlock; $t2.Style = $script:app.FindResource('Caption')
         $t2.Text = '{0} colors{1}{2}{1}{3} s each{4}' -f @($lp.Colors).Count, $script:ledSep, $trName, (Format-LedSec $lp.Half), $(if ($playing) { $script:ledSep + 'Playing' } else { '' })
         [void]$txt.Children.Add($t1); [void]$txt.Children.Add($t2)
@@ -6651,7 +6660,7 @@ foreach ($hex in $script:ledSwatchHex) {
 function Open-LedLoopEditor($lp) {
     if ($lp) { $script:ledEdit = @{ Orig = [string]$lp.Name; Colors = @($lp.Colors); Trans = [string]$lp.Trans; Half = [int]$lp.Half }; (G 'LedLoopName').Text = $lp.Name }
     else { $script:ledEdit = @{ Orig = ''; Colors = @(); Trans = 'fade'; Half = 6 }; (G 'LedLoopName').Text = 'My loop' }
-    foreach ($t in 'Fade', 'Jump', 'Breathe') { $r = G "LedTr$t"; $r.IsChecked = ([string]$r.Tag -eq $script:ledEdit.Trans) }
+    foreach ($t in 'Fade', 'Dim', 'Jump', 'Breathe') { $r = G "LedTr$t"; $r.IsChecked = ([string]$r.Tag -eq $script:ledEdit.Trans) }
     (G 'LedLoopSec').Value = $script:ledEdit.Half
     (G 'LedLoopErr').Text = ''
     Show-LedEditColors
@@ -6668,7 +6677,7 @@ function Open-LedLoopEditor($lp) {
     if (-not $name) { $err.Text = 'Give the loop a name.'; return }
     if (@($e.Colors).Count -lt 2) { $err.Text = 'Add at least two colors.'; return }
     if ($name -ne $e.Orig -and (Get-LedLoop $name)) { $err.Text = 'A loop with this name already exists.'; return }
-    $tr = 'fade'; foreach ($t in 'Fade', 'Jump', 'Breathe') { if ((G "LedTr$t").IsChecked) { $tr = [string](G "LedTr$t").Tag } }
+    $tr = 'fade'; foreach ($t in 'Fade', 'Dim', 'Jump', 'Breathe') { if ((G "LedTr$t").IsChecked) { $tr = [string](G "LedTr$t").Tag } }
     $new = @{ Name = $name; Colors = @($e.Colors); Trans = $tr; Half = [int](G 'LedLoopSec').Value }
     $list = @()
     $placed = $false
