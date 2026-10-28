@@ -8,63 +8,51 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ## 1.8.9 — 2026-10-28
 
-Lights page: each light is now a compact card (name, state, power) that opens on a click, and
-you can rename them. Play on a color loop plays on every light in reach, with a button per light
-to play it on just one. Setup and Settings > About show the new Vento logo, and the update
-setting has a clearer icon.
+Setup and Settings > About show the new Vento logo, and the automatic update setting has a clearer icon.
 
 ---
 
 ## 1.8.8 — 2026-10-28
 
-Lights page: a Mi Smart LED Bulb on the same Wi-Fi joins the strip, with power, brightness,
-color and white light, and your color loops play on the bulb by itself (they keep going after
-Vento closes). Mi Home on the phone keeps working alongside. Nothing changes for anyone else.
+Under-the-hood work; nothing visible changes.
 
 ---
 
 ## 1.8.7 — 2026-10-28
 
-Lights page: color loops now play on their own steady clock (50 frames a second), so flowing loops
-no longer hitch, and the strip link holds on better when its signal is weak. Loops get a new
-"Dim" change that dims through dark between colors. Nothing changes for anyone else.
+Under-the-hood work; nothing visible changes.
 
 ---
 
 ## 1.8.6 — 2026-10-28
 
-Lights page: smoother color loops, and a clear message (instead of a timeout) when another device
-holds the strip. Nothing changes for anyone else.
+Under-the-hood work; nothing visible changes.
 
 ---
 
 ## 1.8.5 — 2026-10-28
 
-Lights page: the color loop editor gets its own color picker, and a strip that stopped advertising
-is reconnected directly. Nothing changes for anyone else.
+Under-the-hood work; nothing visible changes.
 
 ---
 
 ## 1.8.4 — 2026-10-28
 
-The Lights page could not reach Bluetooth in 1.8.3; fixed. Nothing changes for anyone else.
+Under-the-hood work; nothing visible changes.
 
 ---
 
 ## 1.8.3 — 2026-10-28
 
-Fixes for the opt-in Lights page: the right brightness command, only the effects the strip runs,
-and sliders that send once you let go instead of flooding the strip. Nothing changes for anyone else.
+Under-the-hood work; nothing visible changes.
 
 ---
 
 ## 1.8.2 — 2026-10-28
 
-Groundwork for an opt-in page for a Bluetooth LED strip. It stays hidden unless switched on for this PC,
-so nothing changes for anyone else. The tray flyout and every other page are as in 1.8.1.
+Under-the-hood work; nothing visible changes.
 
 ---
-
 ## 1.8.1 — 2026-10-27
 
 Every page, live. The new design now drives everything the old window did, and a bit more.
