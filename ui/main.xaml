@@ -1383,8 +1383,20 @@
                       <Grid.ColumnDefinitions><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                       <TextBlock Text="Colors" Style="{StaticResource Body}" VerticalAlignment="Top" Margin="0,6,0,0"/>
                       <StackPanel Grid.Column="1">
-                        <WrapPanel x:Name="LedLoopColors"/>
-                        <TextBlock Text="Pick a color above (swatch or hue), then add it. Click a color here to remove it." Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                        <WrapPanel x:Name="LedLoopColors" MinHeight="34"/>
+                        <TextBlock x:Name="LedLoopHint" Text="Click a color below to add it; click one here to take it out." Style="{StaticResource Caption}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                        <!-- the loop's own picker: a swatch adds at once, the hue row adds any other color -->
+                        <WrapPanel x:Name="LedLoopPalette" Margin="-4,10,0,0"/>
+                        <Grid Margin="0,8,0,0">
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                          <Slider x:Name="LedLoopHue" Style="{StaticResource HueSlider}" Minimum="0" Maximum="359" Value="200" IsSnapToTickEnabled="True" TickFrequency="1"/>
+                          <Button x:Name="LedLoopAddHue" Grid.Column="1" Style="{StaticResource FluentButton}" MinHeight="30" Padding="10,0" Margin="12,0,0,0" FontSize="13">
+                            <StackPanel Orientation="Horizontal">
+                              <Ellipse x:Name="LedLoopHueDot" Width="14" Height="14" VerticalAlignment="Center"/>
+                              <TextBlock Text="Add" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                          </Button>
+                        </Grid>
                       </StackPanel>
                     </Grid>
                     <Grid Margin="0,12,0,0">

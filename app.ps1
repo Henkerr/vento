@@ -5838,16 +5838,23 @@ namespace VentoNative {
       if (d.ConnectionStatus == BluetoothConnectionStatus.Disconnected) lock (Gate) { s_lost = true; Monitor.PulseAll(Gate); }
     }
     static bool s_lost;
+    static BluetoothAddressType s_type = BluetoothAddressType.Unspecified;
 
     static bool Open(ulong addr) {
       int t0 = Environment.TickCount;
       try {
         // hear the strip first: its advertisement carries the address type
         // (it uses a random address), which a bare connect by address guesses wrong
-        BluetoothAddressType at = Listen(addr, 15000);
-        if (at == BluetoothAddressType.Unspecified) throw new Exception("Strip not found. Is it powered, and is the phone app closed?");
+        // A strip that is still linked (a half-open connection, or one Windows
+        // kept) stops advertising, so the type learned once is reused and a
+        // random address is assumed before the first one: either way the
+        // connect below can pick up a link that already exists.
+        BluetoothAddressType at = Listen(addr, s_type == BluetoothAddressType.Unspecified ? 12000 : 4000);
+        if (at == BluetoothAddressType.Unspecified) at = s_type != BluetoothAddressType.Unspecified ? s_type : BluetoothAddressType.Random;
+        else s_type = at;
         var dev = Wait(BluetoothLEDevice.FromBluetoothAddressAsync(addr, at));
         if (dev == null) throw new Exception("Strip not found. Is it powered, and is the phone app closed?");
+        if (dev.ConnectionStatus == BluetoothConnectionStatus.Connected) s_type = at;
         s_dev = dev;
         GattDeviceServicesResult sr = null;
         for (int i = 0; i < 3; i++) {
@@ -6534,18 +6541,31 @@ function Show-LedEditColors {
         })
         [void]$wp.Children.Add($bt); $i++
     }
-    if (@($script:ledEdit.Colors).Count -lt 12) {
-        $add = New-Object System.Windows.Controls.Button
-        $add.Style = $script:app.FindResource('FluentButton'); $add.MinHeight = 34; $add.Padding = '10,0'; $add.Margin = '0,0,6,6'; $add.FontSize = 13
-        $cur = ConvertFrom-LedHsv (G 'LedHue').Value (G 'LedSat').Value
-        $sp = New-Object System.Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
-        $dot = New-Object System.Windows.Shapes.Ellipse; $dot.Width = 14; $dot.Height = 14; $dot.Fill = Get-GBrush $cur; $dot.VerticalAlignment = 'Center'
-        $tx = New-Object System.Windows.Controls.TextBlock; $tx.Text = 'Add this color'; $tx.Margin = '8,0,0,0'; $tx.VerticalAlignment = 'Center'
-        [void]$sp.Children.Add($dot); [void]$sp.Children.Add($tx); $add.Content = $sp
-        $add.Add_Click({ $script:ledEdit.Colors = @($script:ledEdit.Colors) + @(ConvertFrom-LedHsv (G 'LedHue').Value (G 'LedSat').Value); Show-LedEditColors })
-        [void]$wp.Children.Add($add)
-    }
+    $n = @($script:ledEdit.Colors).Count
+    (G 'LedLoopHint').Text = $(if ($n -eq 0) { 'Click colors below to add them, in the order they should play.' }
+        elseif ($n -ge 12) { 'That is the most a loop holds (12). Click one here to take it out.' }
+        else { 'Click a color below to add it; click one here to take it out.' })
+    $full = $n -ge 12
+    foreach ($c in (G 'LedLoopPalette').Children) { $c.IsEnabled = -not $full }
+    (G 'LedLoopAddHue').IsEnabled = -not $full
 }
+function Add-LedEditColor([string]$hex) {
+    if (-not $script:ledEdit -or @($script:ledEdit.Colors).Count -ge 12) { return }
+    $script:ledEdit.Colors = @($script:ledEdit.Colors) + @($hex)
+    (G 'LedLoopErr').Text = ''
+    Show-LedEditColors
+}
+foreach ($hex in $script:ledSwatchHex) {
+    $bt = New-Object System.Windows.Controls.Button
+    $bt.Style = $script:app.FindResource('IconButton'); $bt.Width = 34; $bt.Height = 34; $bt.Margin = '4,0,0,4'; $bt.Tag = $hex; $bt.ToolTip = "Add $hex"
+    $dot = New-Object System.Windows.Shapes.Ellipse; $dot.Width = 22; $dot.Height = 22; $dot.Fill = Get-GBrush $hex; $dot.Stroke = Get-GBrush '#FFFFFF' 0x30
+    $bt.Content = $dot
+    $bt.Add_Click({ param($sd, $e) Add-LedEditColor ([string]$sd.Tag) })
+    [void](G 'LedLoopPalette').Children.Add($bt)
+}
+(G 'LedLoopHue').Add_ValueChanged({ param($sd, $e) (G 'LedLoopHueDot').Fill = Get-GBrush (ConvertFrom-LedHsv $sd.Value 100) })
+(G 'LedLoopHueDot').Fill = Get-GBrush (ConvertFrom-LedHsv (G 'LedLoopHue').Value 100)
+(G 'LedLoopAddHue').Add_Click({ Add-LedEditColor (ConvertFrom-LedHsv (G 'LedLoopHue').Value 100) })
 function Open-LedLoopEditor($lp) {
     if ($lp) { $script:ledEdit = @{ Orig = [string]$lp.Name; Colors = @($lp.Colors); Trans = [string]$lp.Trans; Half = [int]$lp.Half }; (G 'LedLoopName').Text = $lp.Name }
     else { $script:ledEdit = @{ Orig = ''; Colors = @(); Trans = 'fade'; Half = 6 }; (G 'LedLoopName').Text = 'My loop' }
