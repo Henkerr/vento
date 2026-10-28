@@ -6,6 +6,14 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.8.7 — 2026-10-28
+
+Lights page: color loops now play on their own steady clock (50 frames a second), so flowing loops
+no longer hitch, and the strip link holds on better when its signal is weak. Loops get a new
+"Dim" change that dims through dark between colors. Nothing changes for anyone else.
+
+---
+
 ## 1.8.6 — 2026-10-28
 
 Lights page: smoother color loops, and a clear message (instead of a timeout) when another device
