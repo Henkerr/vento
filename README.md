@@ -26,8 +26,6 @@ Vento reads CPU, GPU, SSD and motherboard temperatures plus fan speeds through
 measures frame rate the way PresentMon does — a live ETW trace of the display present
 stream — so FPS works on any GPU without a vendor SDK.
 
-<p align="center"><img src="assets/screenshots/dashboard.png" width="440" alt="Vento dashboard"></p>
-
 ## Fan control
 
 - **Live dashboard** — CPU, GPU, SSD (hottest drive) and motherboard temperatures with
@@ -50,8 +48,6 @@ stream — so FPS works on any GPU without a vendor SDK.
 
 ## In-game overlay
 
-<p align="center"><img src="assets/screenshots/overlay.png" width="620" alt="Vento overlay with FPS"></p>
-
 - **A click-through, always-on-top readout** with seven layouts (Blade, Strip, Hero, Pills,
   Ghost, Micro, Thermo Edge) and six themes that walk their own cool/warm/hot accents with
   the thermal state, plus per-metric custom colors.
@@ -66,8 +62,6 @@ stream — so FPS works on any GPU without a vendor SDK.
   games; true exclusive fullscreen hides any overlay.
 
 ## Display control (DDC/CI)
-
-<p align="center"><img src="assets/screenshots/displays.png" width="440" alt="Vento display control panel"></p>
 
 - **A MONITORS panel** that drives every connected display over the same channel its own
   buttons use — brightness, contrast, color presets, input source, RGB gain, sharpness,
