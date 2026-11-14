@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.8.9'
+$script:AppVersion = '1.9.0'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -354,6 +354,153 @@ public static class Fps {
 '@
 } catch { }
 
+# Local data channel for companion apps (TabDeck tablet panel). A tiny HTTP
+# server on 127.0.0.1 only: GET /state returns the latest snapshot the UI tick
+# published, POST /command queues a JSON command the UI tick applies through
+# the same entry points as the tray and hotkeys. Every request must carry the
+# X-Vento-Token header; anything else is answered 401 and dropped.
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+namespace VentoNative {
+public static class Api {
+  static TcpListener listener;
+  static volatile bool running;
+  static string token = "";
+  static volatile string state = "{}";
+  static long lastRequest;
+  static readonly ConcurrentQueue<string> commands = new ConcurrentQueue<string>();
+  public static string Error = "";
+
+  public static bool Start(int port, string tok) {
+    if (running) return true;
+    if (tok == null || tok.Length < 32) { Error = "no token"; return false; }
+    try {
+      token = tok;
+      listener = new TcpListener(IPAddress.Loopback, port);
+      listener.Start();
+      running = true;
+      Thread t = new Thread(Loop);
+      t.IsBackground = true;
+      t.Name = "Vento-Api";
+      t.Start();
+      return true;
+    } catch (Exception e) { Error = e.Message; running = false; return false; }
+  }
+
+  public static void Stop() {
+    running = false;
+    try { if (listener != null) listener.Stop(); } catch { }
+  }
+
+  public static void SetState(string json) { state = json; }
+
+  public static string NextCommand() {
+    string c;
+    return commands.TryDequeue(out c) ? c : null;
+  }
+
+  public static double SecondsSinceRequest() {
+    long t = Interlocked.Read(ref lastRequest);
+    return t == 0 ? 1e9 : (DateTime.UtcNow.Ticks - t) / 1e7;
+  }
+
+  static void Loop() {
+    while (running) {
+      TcpClient c;
+      try { c = listener.AcceptTcpClient(); }
+      catch { if (!running) return; Thread.Sleep(50); continue; }
+      ThreadPool.QueueUserWorkItem(Handle, c);
+    }
+  }
+
+  // constant-time compare: the token must not leak through response timing
+  static bool Same(string a, string b) {
+    if (a == null || b == null || a.Length != b.Length || b.Length == 0) return false;
+    int d = 0;
+    for (int i = 0; i < a.Length; i++) d |= a[i] ^ b[i];
+    return d == 0;
+  }
+
+  static int HeaderEnd(byte[] b, int n) {
+    for (int i = 3; i < n; i++) if (b[i - 3] == 13 && b[i - 2] == 10 && b[i - 1] == 13 && b[i] == 10) return i - 3;
+    return -1;
+  }
+
+  static void Reply(NetworkStream ns, int code, string body) {
+    byte[] b = Encoding.UTF8.GetBytes(body);
+    string status = code == 200 ? "OK" : code == 202 ? "Accepted" : code == 401 ? "Unauthorized" : code == 404 ? "Not Found" : "Bad Request";
+    string h = "HTTP/1.1 " + code + " " + status + "\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " + b.Length +
+               "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+    byte[] hb = Encoding.ASCII.GetBytes(h);
+    ns.Write(hb, 0, hb.Length);
+    ns.Write(b, 0, b.Length);
+  }
+
+  static void Handle(object o) {
+    TcpClient c = (TcpClient)o;
+    try {
+      c.ReceiveTimeout = 3000;
+      c.SendTimeout = 3000;
+      NetworkStream ns = c.GetStream();
+      byte[] buf = new byte[8192];
+      int n = 0, end = -1;
+      while (n < buf.Length) {
+        int r = ns.Read(buf, n, buf.Length - n);
+        if (r <= 0) break;
+        n += r;
+        end = HeaderEnd(buf, n);
+        if (end >= 0) break;
+      }
+      if (end < 0) { Reply(ns, 400, "{\"error\":\"bad request\"}"); return; }
+      string[] lines = Encoding.ASCII.GetString(buf, 0, end).Split(new string[] { "\r\n" }, StringSplitOptions.None);
+      string[] rq = lines[0].Split(' ');
+      if (rq.Length < 2) { Reply(ns, 400, "{\"error\":\"bad request\"}"); return; }
+      string tok = null;
+      int len = 0;
+      for (int i = 1; i < lines.Length; i++) {
+        int k = lines[i].IndexOf(':');
+        if (k <= 0) continue;
+        string name = lines[i].Substring(0, k).Trim().ToLowerInvariant();
+        string val = lines[i].Substring(k + 1).Trim();
+        if (name == "x-vento-token") tok = val;
+        else if (name == "content-length") int.TryParse(val, out len);
+      }
+      if (!Same(tok, token)) { Reply(ns, 401, "{\"error\":\"token\"}"); return; }
+      Interlocked.Exchange(ref lastRequest, DateTime.UtcNow.Ticks);
+      if (rq[0] == "GET" && rq[1] == "/state") { Reply(ns, 200, state); return; }
+      if (rq[0] == "POST" && rq[1] == "/command") {
+        if (len <= 0 || len > 4096) { Reply(ns, 400, "{\"error\":\"body\"}"); return; }
+        byte[] body = new byte[len];
+        int have = Math.Min(len, n - (end + 4));
+        Array.Copy(buf, end + 4, body, 0, have);
+        while (have < len) {
+          int r = ns.Read(body, have, len - have);
+          if (r <= 0) break;
+          have += r;
+        }
+        if (have < len) { Reply(ns, 400, "{\"error\":\"body\"}"); return; }
+        if (commands.Count < 64) commands.Enqueue(Encoding.UTF8.GetString(body));
+        Reply(ns, 202, "{\"ok\":true}");
+        return;
+      }
+      Reply(ns, 404, "{\"error\":\"not found\"}");
+    } catch { }
+    finally { try { c.Close(); } catch { } }
+  }
+}
+}
+'@
+} catch {
+    # a compile error must not stay invisible: the feature would just never work
+    try { "VentoNative.Api did not compile: $($_.Exception.Message)" | Out-File -FilePath (Join-Path $script:AppRoot 'error.log') -Encoding utf8 -Append } catch { }
+}
+
 # --- Single instance -------------------------------------------------
 $created = $false
 $script:mutex = New-Object System.Threading.Mutex($true, 'Global\VentoSingleInstance', [ref]$created)
@@ -537,6 +684,13 @@ function Get-DefaultSettings {
             @{ Name = 'MOVIE';  Color = '#FF7A8A'; Fan = 'quiet';       Overlay = 'off'; Display = 'CINEMA'; Builtin = $true },
             @{ Name = 'WORK';   Color = '#FFC46F'; Fan = 'normal';      Overlay = 'off'; Display = 'DAY';    Builtin = $true }
         )
+        # Local data channel for companion apps (the TabDeck tablet panel):
+        # HTTP on 127.0.0.1 only, and every request must carry the access
+        # token, so neither the network nor a web page can reach it. The token
+        # is not in this file: it lives DPAPI-protected under HKCU\Software\Vento.
+        # Off = no listener.
+        apiEnabled       = $true
+        apiPort          = 47219
     }
 }
 
@@ -741,6 +895,11 @@ function Import-Settings {
     # Settings files written before the GitHub username was final point the
     # updater at a repo that never existed - migrate them.
     if ([string]$s.updateRepo -eq 'blakfy/vento') { $s.updateRepo = 'Henkerr/vento' }
+    # Local API: parsed without Limit so a junk value can't throw here.
+    $s.apiEnabled = [bool]$s.apiEnabled
+    $apiPort = 0
+    if (-not [int]::TryParse([string]$s.apiPort, [ref]$apiPort) -or $apiPort -lt 1024 -or $apiPort -gt 65535) { $apiPort = 47219 }
+    $s.apiPort = $apiPort
     try { [void][System.Windows.Media.ColorConverter]::ConvertFromString([string]$s.accentColor) }
     catch { $s.accentColor = '#4C8DFF' }
     return $s
@@ -11357,6 +11516,153 @@ function Stop-FpsTracer {
     if ($script:fpsOn -and ('VentoNative.Fps' -as [type])) { try { [VentoNative.Fps]::Stop() } catch { } }
     $script:fpsOn = $false
 }
+
+# --- Local API (companion apps: the TabDeck tablet panel) ------------
+# The listener lives in VentoNative.Api; this side publishes a snapshot and
+# applies queued commands, both on the UI thread from the main tick.
+$script:apiOn = $false
+$script:apiTick = 0
+# The access token is a secret: DPAPI-protected (CurrentUser) in HKCU, never in
+# settings.json (that file sits in Program Files where every account can read
+# it). Companion apps running as the same user unprotect it the same way; the
+# port is published next to it so they need nothing else.
+$script:apiRegPath = 'HKCU:\Software\Vento'
+function Get-VentoApiToken {
+    Add-Type -AssemblyName System.Security
+    try {
+        $b64 = [string](Get-ItemProperty -Path $script:apiRegPath -Name ApiToken -ErrorAction Stop).ApiToken
+        $plain = [System.Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($b64), $null, 'CurrentUser')
+        $tok = [System.Text.Encoding]::ASCII.GetString($plain)
+        if ($tok -match '^[A-Za-z0-9]{32,64}$') { return $tok }
+    } catch { }
+    $chars = [char[]]'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+    $bytes = New-Object byte[] 40
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    $tok = -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
+    $prot = [System.Security.Cryptography.ProtectedData]::Protect([System.Text.Encoding]::ASCII.GetBytes($tok), $null, 'CurrentUser')
+    if (-not (Test-Path $script:apiRegPath)) { [void](New-Item -Path $script:apiRegPath -Force) }
+    Set-ItemProperty -Path $script:apiRegPath -Name ApiToken -Value ([Convert]::ToBase64String($prot))
+    return $tok
+}
+function Start-VentoApi {
+    if (-not [bool]$script:settings.apiEnabled) { return }
+    if (-not ('VentoNative.Api' -as [type])) { return }
+    $tok = Get-VentoApiToken
+    $script:apiOn = [VentoNative.Api]::Start([int]$script:settings.apiPort, $tok)
+    try {
+        if ($script:apiOn) { Set-ItemProperty -Path $script:apiRegPath -Name ApiPort -Value ([int]$script:settings.apiPort) }
+        else { "Local API did not start: $([VentoNative.Api]::Error)" | Out-File -FilePath (Join-Path $script:AppRoot 'error.log') -Encoding utf8 -Append }
+    } catch { }
+}
+function Stop-VentoApi {
+    if ('VentoNative.Api' -as [type]) { try { [VentoNative.Api]::Stop() } catch { } }
+    $script:apiOn = $false
+}
+function Get-VentoApiState {
+    $d = $sync.Data
+    # FPS needs the ETW tracer; start it only while a companion is actually polling.
+    if ([VentoNative.Api]::SecondsSinceRequest() -lt 10) { Ensure-FpsTracer }
+    $fps = $null
+    if ($script:fpsOn) { try { $f = [VentoNative.Fps]::Current($PID); if ($f -gt 0) { $fps = [int]$f } } catch { } }
+    $pods = $null
+    $pd = $script:pods
+    if ($pd -and $pd.Seen) {
+        $pods = [ordered]@{
+            l = $pd.L; r = $pd.R; case = $pd.Case
+            chgL = [bool]$pd.ChgL; chgR = [bool]$pd.ChgR; chgCase = [bool]$pd.ChgCase
+            age = [int]([DateTime]::Now - $pd.Seen).TotalSeconds
+        }
+    }
+    # Hero sensor, picked exactly like Update-GlassHero: the one closest to (or
+    # furthest over) its target, unless the user pinned one.
+    $hero = $null
+    $pin = $(switch ([string]$script:settings.heroSensor) { 'cpu' { 'CPU' } 'gpu' { 'GPU' } 'ssd' { 'SSD' } 'board' { 'BOARD' } default { $null } })
+    $margin = -99.0
+    foreach ($probe in @(
+        @($d.CpuTemp, $script:settings.warnCpu, 'CPU'), @($d.GpuTemp, $script:settings.warnGpu, 'GPU'),
+        @($d.SsdTemp, $script:settings.warnSsd, 'SSD'), @($d.MbTemp, $script:settings.warnMb, 'BOARD'))) {
+        if ($pin -and $probe[2] -ne $pin) { continue }
+        if ($null -ne $probe[0]) {
+            $m = [double]$probe[0] - $probe[1]
+            if ($m -gt $margin) { $margin = $m; $hero = [ordered]@{ name = $probe[2]; temp = [double]$probe[0]; target = [double]$probe[1] } }
+        }
+    }
+    if ($hero) {
+        $hero.margin = [math]::Round($margin, 1)
+        # last ten minutes, thinned to at most 60 points
+        $hist = Get-Variable -Scope Script -Name $script:glassHist[$hero.name] -ValueOnly -ErrorAction SilentlyContinue
+        $pts = @()
+        if ($hist -and $hist.Count -ge 2) {
+            $step = [math]::Max(1, [math]::Ceiling($hist.Count / 60))
+            for ($i = 0; $i -lt $hist.Count; $i += $step) { $pts += [math]::Round($hist[$i], 1) }
+        }
+        $hero.hist = @($pts)
+    }
+    # What each fan is being asked for, as on the Home page's Fans card.
+    $mode = [string]$d.ActiveMode
+    $caseDuty = $(switch ($mode) {
+        'quiet' { [int]$script:settings.quietCase } 'normal' { [int]$script:settings.normalCase } 'performance' { [int]$script:settings.perfCase }
+        'curve' { $d.CurveTarget } default { $null } })
+    $duty = [ordered]@{
+        case = $(if ($d.BoostActive) { [int]$script:settings.boostCase } else { $caseDuty })
+        caseKind = $(if ($d.BoostActive) { 'boost' } elseif ($mode -eq 'curve') { 'curve' } elseif ($mode -eq 'auto') { 'auto' } else { 'set' })
+        cpu = $(if ($mode -eq 'performance') { [int]$script:settings.perfCpu } else { $null })
+    }
+    $devices = @(Get-DevSorted | ForEach-Object { [ordered]@{ name = [string]$_.Name; battery = $_.Battery; apple = [bool]$_.Apple } })
+    $profiles = @(Get-VentoProfiles | ForEach-Object { [ordered]@{ name = [string]$_.Name; color = [string]$_.Color; fan = [string]$_.Fan; display = [string]$_.Display } })
+    $displays = @(Get-MonProfiles | ForEach-Object { [ordered]@{ name = [string]$_.Name; color = [string]$_.Color } })
+    [ordered]@{
+        app = 'Vento'; version = $script:AppVersion
+        mode = [string]$d.ActiveMode; userMode = [string]$script:settings.lastMode
+        boost = [bool]$d.BoostActive; game = [bool]$d.GameDetected; warning = [string]$d.Warning
+        cpu = [ordered]@{ name = [string]$d.CpuName; temp = $d.CpuTemp; fan = $d.CpuFan }
+        gpu = [ordered]@{ name = [string]$d.GpuName; temp = $d.GpuTemp; load = $d.GpuLoad; fan1 = $d.GpuFan1; fan2 = $d.GpuFan2 }
+        ssd = [ordered]@{ name = [string]$d.SsdName; temp = $d.SsdTemp }
+        board = [ordered]@{ name = [string]$d.MbName; temp = $d.MbTemp }
+        ram = [ordered]@{ load = $d.RamLoad; temp = $d.RamTemp }
+        caseFan = $d.CaseFan; curveTarget = $d.CurveTarget
+        fps = $fps
+        hero = $hero; duty = $duty; devices = $devices
+        profile = [string]$script:settings.ventoProfile; profiles = $profiles
+        display = [string]$script:settings.monProfile; displays = $displays
+        pods = $pods
+    }
+}
+function Update-VentoApi {
+    if (-not $script:apiOn) { return }
+    # Commands go through the same entry points as the tray and the hotkeys.
+    for ($i = 0; $i -lt 8; $i++) {
+        $raw = [VentoNative.Api]::NextCommand()
+        if (-not $raw) { break }
+        try {
+            $c = $raw | ConvertFrom-Json
+            switch ([string]$c.cmd) {
+                'mode' {
+                    if (@('quiet','normal','performance','curve','auto') -contains [string]$c.mode) { Set-UserMode ([string]$c.mode) }
+                }
+                'profile' {
+                    if (Get-VentoProfile ([string]$c.name)) { Apply-VentoProfile ([string]$c.name) }
+                }
+                'display' {
+                    $mp = Get-MonProfile ([string]$c.name)
+                    if ($mp) {
+                        # every display, like the Displays page's preset row
+                        $prev = [string]$script:settings.monProfileScope
+                        $script:settings.monProfileScope = 'all'
+                        try { Apply-MonProfile $mp } catch { } finally { $script:settings.monProfileScope = $prev }
+                        try { Show-GlassDisplays } catch { }
+                    }
+                }
+            }
+        } catch { }
+    }
+    # Publish about once a second, and only while someone is polling.
+    $script:apiTick++
+    if (($script:apiTick % 2) -eq 0 -and [VentoNative.Api]::SecondsSinceRequest() -lt 30) {
+        try { [VentoNative.Api]::SetState((Get-VentoApiState | ConvertTo-Json -Compress -Depth 6)) } catch { }
+    }
+}
 function Hide-Osd { if ($script:osd -and $script:osd.IsVisible) { $script:osd.Hide() } }
 function Close-Osd { if ($script:osd) { try { Set-OsdEdit $false } catch { }; try { $script:osd.Close() } catch { }; $script:osd = $null } }
 
@@ -11720,6 +12026,7 @@ $script:timer.Interval = [TimeSpan]::FromMilliseconds(500)
 $script:timer.Add_Tick({
     # a second launch asked us to come forward
     if ($script:showMe.WaitOne(0)) { Show-Main }
+    try { Update-VentoApi } catch { }
     if ($sync.Status -eq 'error') {
         $script:timer.Stop()
         [void][System.Windows.MessageBox]::Show($script:L.SensorFail, 'Vento', 'OK', 'Error')
@@ -12059,6 +12366,7 @@ $script:timer.Add_Tick({
     $script:notify.Text = $tip
 })
 $script:timer.Start()
+try { Start-VentoApi } catch { }
 
 # --- Run -------------------------------------------------------------
 if (-not $script:settings.startMinimized) { $script:shell.Show() }
@@ -12102,6 +12410,7 @@ finally {
     if ($script:psDdc) { try { $script:psDdc.Dispose() } catch { } }
     if ($script:ddcRunspace) { try { $script:ddcRunspace.Dispose() } catch { } }
     Stop-FpsTracer   # tears down the real-time ETW session so it doesn't outlive the app
+    Stop-VentoApi
     if ('VentoNative.Pods' -as [type]) { try { [VentoNative.Pods]::Stop() } catch { } }
     if ($script:psPods) { try { $script:psPods.Dispose() } catch { } }
     if ($script:podsRunspace) { try { $script:podsRunspace.Dispose() } catch { } }

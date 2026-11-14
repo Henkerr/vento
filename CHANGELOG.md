@@ -6,6 +6,12 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.9.0 — 2026-11-14
+
+Companion apps on the same PC can now read Vento's temperatures and fans and switch the fan mode, profile and display preset. The channel only listens on this computer (127.0.0.1) and asks for an access key that Windows keeps encrypted for your account.
+
+---
+
 ## 1.8.9 — 2026-10-28
 
 Setup and Settings > About show the new Vento logo, and the automatic update setting has a clearer icon.
