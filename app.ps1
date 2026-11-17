@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:AppName    = 'Vento'
-$script:AppVersion = '1.9.0'
+$script:AppVersion = '1.9.1'
 
 # App folder ($PSScriptRoot can be empty in exotic hosts)
 $script:AppRoot = $PSScriptRoot
@@ -11626,7 +11626,51 @@ function Get-VentoApiState {
         hero = $hero; duty = $duty; devices = $devices
         profile = [string]$script:settings.ventoProfile; profiles = $profiles
         display = [string]$script:settings.monProfile; displays = $displays
+        monitors = (Get-ApiMonitors)
         pods = $pods
+    }
+}
+# Displays for companion apps. The DDC worker only runs once something needs
+# it, so a polling companion starts it (at most once a minute while the list
+# stays empty).
+$script:apiDdcAsked = [datetime]::MinValue
+$script:apiInput = $null
+function Request-ApiDdc {
+    if (@($sync.Ddc.Monitors).Count -gt 0) { return }
+    if (([datetime]::Now - $script:apiDdcAsked).TotalSeconds -lt 60) { return }
+    $script:apiDdcAsked = [datetime]::Now
+    if (-not $script:psDdc) { Start-DdcWorker }
+    if ($script:psDdc -and -not $sync.Ddc.Busy) { $sync.DdcQueue.Enqueue(@{ Cmd = 'Enum' }) }
+}
+function Get-ApiMonitors {
+    Request-ApiDdc
+    $mons = @($sync.Ddc.Monitors); $list = @()
+    for ($i = 0; $i -lt $mons.Count; $i++) {
+        if (-not $mons[$i].Ok) { continue }
+        $list += ,([ordered]@{ name = [string]$mons[$i].Desc; input = $mons[$i].InCur; inputs = @($mons[$i].Inputs) })
+    }
+    return ,$list
+}
+# An input switch asked for by a companion. The companion is the confirming
+# device here (it stays reachable whatever the display shows), so the
+# 12 s self-revert of the Displays page does not apply.
+function Invoke-ApiInput {
+    $r = $script:apiInput
+    if (-not $r) { return }
+    $mons = @($sync.Ddc.Monitors)
+    if ($mons.Count -eq 0) {
+        if (([datetime]::Now - $r.At).TotalSeconds -gt 15) { $script:apiInput = $null }
+        return
+    }
+    $script:apiInput = $null
+    for ($i = 0; $i -lt $mons.Count; $i++) {
+        if (-not $mons[$i].Ok -or [string]$mons[$i].Desc -ne $r.Name) { continue }
+        if (@($mons[$i].Inputs) -notcontains $r.Code) { return }
+        if ($script:gRevert -and $script:gRevert.Mon -eq $i) { Stop-GMonRevert $false }
+        $mons[$i].InCur = $r.Code
+        Queue-DdcSet 'SetVcp' $i $r.Code 0x60
+        try { Show-GlassDisplays } catch { }
+        return
     }
 }
 function Update-VentoApi {
@@ -11654,9 +11698,17 @@ function Update-VentoApi {
                         try { Show-GlassDisplays } catch { }
                     }
                 }
+                'input' {
+                    $nm = [string]$c.monitor; $code = 0
+                    if ($nm -and [int]::TryParse([string]$c.code, [ref]$code) -and $code -gt 0 -and $code -lt 256) {
+                        $script:apiInput = @{ Name = $nm; Code = $code; At = [datetime]::Now }
+                        Request-ApiDdc
+                    }
+                }
             }
         } catch { }
     }
+    try { Invoke-ApiInput } catch { $script:apiInput = $null }
     # Publish about once a second, and only while someone is polling.
     $script:apiTick++
     if (($script:apiTick % 2) -eq 0 -and [VentoNative.Api]::SecondsSinceRequest() -lt 30) {

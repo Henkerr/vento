@@ -6,6 +6,12 @@ Downloads for every release are on the [releases page](https://github.com/Henker
 
 ---
 
+## 1.9.1 — 2026-11-17
+
+Companion apps can now see each display's input and switch it, so a tablet button can flip a monitor between the PC and a console. A switch made this way skips the 12-second safety revert, since the companion stays reachable whatever the display shows.
+
+---
+
 ## 1.9.0 — 2026-11-14
 
 Companion apps on the same PC can now read Vento's temperatures and fans and switch the fan mode, profile and display preset. The channel only listens on this computer (127.0.0.1) and asks for an access key that Windows keeps encrypted for your account.
